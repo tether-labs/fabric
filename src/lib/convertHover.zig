@@ -9,6 +9,7 @@ const Hover = Types.Hover;
 const Sizing = Types.Sizing;
 const FlexType = Types.FlexType;
 const Pos = Types.Pos;
+const Background = Types.Background;
 const Transform = Types.Transform;
 const RenderCommand = Types.RenderCommand;
 const println = @import("Fabric.zig").println;
@@ -83,15 +84,16 @@ fn flexTypeToCSS(flex_type: FlexType, writer: anytype) !void {
     }
 }
 
-fn colorToCSS(color: [4]u8, writer: anytype) !void {
-    const alpha = @as(f32, @floatFromInt(color[3])) / 255.0;
+// Helper function to convert color array to CSS rgba
+fn colorToCSS(color: Background, writer: anytype) !void {
+    const alpha = @as(f32, @floatFromInt(color.a)) / 255.0;
     try writer.print("rgba({d}, {d}, {d}, {d})", .{
-        color[0],
-        color[1],
-        color[2],
+        color.r,
+        color.g,
+        color.b,
         alpha,
     });
-}
+} 
 
 // Function to convert TransformType to CSS
 fn transformToCSS(transform: Transform, writer: anytype) !void {

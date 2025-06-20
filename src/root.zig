@@ -18,6 +18,7 @@ pub const Page = lib.Page;
 pub const Layout = lib.Layout;
 pub const println = lib.println;
 pub const transparentizeRGBA = lib.transparentizeRGBA;
+pub const transparentizeHex = lib.transparentize;
 pub const hexToRgba = lib.hexToRgba;
 pub const Event = lib.Event;
 pub const fmtln = lib.fmtln;

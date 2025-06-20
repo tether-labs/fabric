@@ -145,7 +145,7 @@ pub fn Signal(comptime T: type) type {
         _closure: *SignalClosure = undefined,
         _sub_index: usize = 0,
 
-        pub fn initv2(sig: *Signal(T).Self, value: T) void {
+        pub fn init(sig: *Signal(T).Self, value: T) void {
             const allocator_ptr = &Fabric.allocator_global;
             const new_set = Set(Subscriber).init(allocator_ptr);
             const effects = std.ArrayList(*Node).init(allocator_ptr.*);
@@ -176,7 +176,7 @@ pub fn Signal(comptime T: type) type {
             return;
         }
 
-        pub fn init(value: T, _: *std.mem.Allocator) *Signal(T).Self {
+        pub fn initv2(value: T, _: *std.mem.Allocator) *Signal(T).Self {
             const allocator_ptr = &Fabric.allocator_global;
             const new_set = Set(Subscriber).init(allocator_ptr);
             const effects = std.ArrayList(*Node).init(allocator_ptr.*);
@@ -240,6 +240,37 @@ pub fn Signal(comptime T: type) type {
                 self.notifyEffects();
                 self.notifyComponents();
             }
+        }
+
+        /// append the current signal value
+        /// must be int u32, i32, or f32 type
+        /// Then calls notify, notifyEffects, notifyComponents
+        pub fn updateElement(self: *Self, index: usize, element: @typeInfo(T).array.child) void {
+            // if (@TypeOf(self._value) != std.ArrayList(@typeInfo(T).@"struct")) {
+            //     return;
+            // }
+
+            self._value[index] = element;
+
+            // If we're in a batching context, only set the pending value
+            if (self._is_batching) {
+                self._has_pending_update = true;
+                self._pending_value = self._value;
+                // Still notify subscribers but not components
+                // self.notify();
+                self.notifyEffects();
+            } else {
+                self.notify();
+                self.notifyEffects();
+                self.notifyComponents();
+            }
+        }
+
+        /// append the current signal value
+        /// must be int u32, i32, or f32 type
+        /// Then calls notify, notifyEffects, notifyComponents
+        pub fn getElement(self: *Self, index: usize) @typeInfo(T).array.child {
+            return self._value[index];
         }
 
         /// append the current signal value

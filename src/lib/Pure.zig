@@ -232,14 +232,7 @@ pub inline fn Text(text: []const u8, style: Style) void {
         .elem_type = .Text,
         .text = text,
     };
-    // const dimensions = measureText(text, &elem_decl.style);
-    // Make sure this is the right order of ops
-    // elem_decl.style.width = dimensions.width;
-    // elem_decl.style.height = dimensions.height;
     elem_decl.style.width.type = .elastic;
-    elem_decl.style.background = .{ 0, 0, 0, 0 };
-    // println("Min: {}\n", .{elem_decl.style.width.size.minmax.min});
-    // println("Max: {}\n", .{elem_decl.style.width.size.minmax.max});
     _ = Fabric.current_ctx.open(elem_decl) catch |err| {
         println("{any}\n", .{err});
     };

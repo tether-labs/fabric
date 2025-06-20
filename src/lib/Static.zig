@@ -508,21 +508,27 @@ fn callsiteId() u64 {
     const loc = @src().line;
     return loc;
 }
+
+pub const BtnProps = struct {
+    onPress: ?*const fn () void = null,
+    onRelease: ?*const fn () void = null,
+};
+
+const _local = struct {
+    fn CloseElement(_: void) void {
+        _ = Fabric.current_ctx.close();
+        return;
+    }
+    fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
+        _ = Fabric.current_ctx.configure(elem_decl);
+        return CloseElement;
+    }
+};
+
 pub inline fn Button(
-    func: *const fn () void,
+    btnProps: BtnProps,
     style: Style,
 ) fn (void) void {
-    const local = struct {
-        fn CloseElement(_: void) void {
-            _ = Fabric.current_ctx.close();
-            return;
-        }
-        fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
-            _ = Fabric.current_ctx.configure(elem_decl);
-            return CloseElement;
-        }
-    };
-
     const elem_decl = ElementDecl{
         .style = style,
         .dynamic = .static,
@@ -533,12 +539,14 @@ pub inline fn Button(
         unreachable;
     };
 
-    Fabric.registry.put(ui_node.uuid, func) catch |err| {
-        println("Button Function Registry {any}\n", .{err});
-    };
+    if (btnProps.onPress) |onPress| {
+        Fabric.registry.put(ui_node.uuid, onPress) catch |err| {
+            println("Button Function Registry {any}\n", .{err});
+        };
+    }
 
-    _ = local.ConfigureElement(elem_decl);
-    return local.CloseElement;
+    _ = _local.ConfigureElement(elem_decl);
+    return _local.CloseElement;
 }
 
 pub inline fn Select(style: Style) fn (void) void {

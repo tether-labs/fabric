@@ -22,6 +22,7 @@ const ListStyle = Types.ListStyle;
 const Transition = Types.Transition;
 const Outline = Types.Outline;
 const Cursor = Types.Cursor;
+const Background = Types.Background;
 const RenderCommand = Types.RenderCommand;
 const Fabric = @import("Fabric.zig");
 const println = @import("Fabric.zig").println;
@@ -74,10 +75,10 @@ fn floatTypeToCSS(float_type: FloatType) []const u8 {
 fn sizingTypeToCSS(sizing: Sizing, writer: anytype) !void {
     switch (sizing.type) {
         .fit => try writer.writeAll("fit-content"),
-        .percent => try writer.print("{d}%", .{sizing.size.minmax.min * 100}),
+        .percent => try writer.print("{d}%", .{sizing.size.minmax.min}),
         .fixed => try writer.print("{d}px", .{sizing.size.minmax.min}),
         .elastic => try writer.writeAll("auto"), // Could also use min/max width/height in separate properties
-        .elastic_percent => try writer.print("{d}%", .{sizing.size.percent.min * 100}),
+        .elastic_percent => try writer.print("{d}%", .{sizing.size.percent.min}),
         .none, .grow => {},
     }
 }
@@ -92,12 +93,12 @@ fn posTypeToCSS(pos: Pos, writer: anytype) !void {
 }
 
 // Helper function to convert color array to CSS rgba
-fn colorToCSS(color: [4]u8, writer: anytype) !void {
-    const alpha = @as(f32, @floatFromInt(color[3])) / 255.0;
+fn colorToCSS(color: Background, writer: anytype) !void {
+    const alpha = @as(f32, @floatFromInt(color.a)) / 255.0;
     try writer.print("rgba({d}, {d}, {d}, {d})", .{
-        color[0],
-        color[1],
-        color[2],
+        color.r,
+        color.g,
+        color.b,
         alpha,
     });
 }
@@ -388,46 +389,40 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         writer.print("  font-weight: {d};\n", .{sf}) catch {};
     }
 
-    if (style.float_type) |ft| {
-        writer.print("  float: {s};\n", .{floatTypeToCSS(ft)}) catch {};
-    }
 
     if (style.font_family.len > 0) {
         writer.print("  font-family: {s};\n", .{style.font_family}) catch {};
     }
-    // Border properties
-    // if (style.border_thickness.top > 0 or
-    //     style.border_thickness.right > 0 or
-    //     style.border_thickness.bottom > 0 or
-    //     style.border_thickness.left > 0)
-    // {
-    writer.print("  border-width: {d}px {d}px {d}px {d}px;\n", .{
-        style.border_thickness.top,
-        style.border_thickness.right,
-        style.border_thickness.bottom,
-        style.border_thickness.left,
-    }) catch {};
+    if (style.border_thickness) |border_thickness| {
+        writer.print("  border-width: {d}px {d}px {d}px {d}px;\n", .{
+            border_thickness.top,
+            border_thickness.right,
+            border_thickness.bottom,
+            border_thickness.left,
+        }) catch {};
 
-    writer.writeAll("  border-style: solid;\n") catch {};
-
-    if (style.border_color) |border_color| {
-        writer.writeAll("  border-color: ") catch {};
-        colorToCSS(border_color, writer) catch {};
-        writer.writeAll(";\n") catch {};
+        if (style.border_color) |border_color| {
+            writer.writeAll("  border-color: ") catch {};
+            colorToCSS(border_color, writer) catch {};
+            writer.writeAll(";\n") catch {};
+        }
+        writer.writeAll("  border-style: solid;\n") catch {};
     }
 
     // Border radius
-    if (style.border_radius.top_left > 0 or
-        style.border_radius.top_right > 0 or
-        style.border_radius.bottom_right > 0 or
-        style.border_radius.bottom_left > 0)
-    {
-        writer.print("  border-radius: {d}px {d}px {d}px {d}px;\n", .{
-            style.border_radius.top_left,
-            style.border_radius.top_right,
-            style.border_radius.bottom_right,
-            style.border_radius.bottom_left,
-        }) catch {};
+    if (style.border_radius) |border_radius| {
+        if (border_radius.top_left > 0 or
+            border_radius.top_right > 0 or
+            border_radius.bottom_right > 0 or
+            border_radius.bottom_left > 0)
+        {
+            writer.print("  border-radius: {d}px {d}px {d}px {d}px;\n", .{
+                border_radius.top_left,
+                border_radius.top_right,
+                border_radius.bottom_right,
+                border_radius.bottom_left,
+            }) catch {};
+        }
     }
 
     // Text color
@@ -499,11 +494,6 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         flexWrapToCSS(fw, writer) catch {};
         writer.writeAll(";\n") catch {};
     }
-    if (style.box_sizing) |bs| {
-        writer.writeAll("  box-sizing: ") catch {};
-        boxSizingToCSS(bs, writer) catch {};
-        writer.writeAll(";\n") catch {};
-    }
 
     if (style.animation) |an| {
         writer.writeAll("  animation: ") catch {};
@@ -544,10 +534,6 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         }
     }
 
-    if (style.flex_shrink) |fs| {
-        writer.print("  flex-shrink: {d};\n", .{fs}) catch {};
-    }
-
     if (style.list_style) |ls| {
         writer.writeAll("  list-style: ") catch {};
         listStyleToCSS(ls, writer) catch {};
@@ -572,21 +558,10 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         writer.writeAll("  scrollbar-width: none;\n") catch {};
         show_scrollbar = false;
     }
-    if (style.accent_color) |ac| {
-        writer.writeAll("  accent-color: ") catch {};
-        colorToCSS(ac, writer) catch {};
-        writer.writeAll(";\n") catch {};
-    }
 
     if (style.cursor) |c| {
         writer.writeAll("  cursor: ") catch {};
         cursorToCSS(c, writer) catch {};
-        writer.writeAll(";\n") catch {};
-    }
-
-    if (style.web_kit_appearance) |ap| {
-        writer.writeAll("  -webkit-appearance: ") catch {};
-        appearanceToCSS(ap, writer) catch {};
         writer.writeAll(";\n") catch {};
     }
 
@@ -605,10 +580,6 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
             else => {},
         }
         writer.writeAll(";\n") catch {};
-    }
-
-    if (style.backface_visibility) |bv| {
-        writer.print("  backface-visibility: {s};\n", .{bv}) catch {};
     }
 
     // // Transform
@@ -750,14 +721,13 @@ export fn getCheckMarkStylePtr(node_ptr: ?*UINode) [*]const u8 {
                 hbt.left,
             }) catch {};
 
-            writer.writeAll("  border-style: solid;\n") catch {};
-
             if (style.border_color) |border_color| {
                 writer.writeAll("  border-color: ") catch {};
                 colorToCSS(border_color, writer) catch {};
                 writer.writeAll(";\n") catch {};
             }
         }
+        writer.writeAll("  border-style: solid;\n") catch {};
     }
 
     // Border radius
@@ -1087,10 +1057,6 @@ export fn addEctClasses(node_ptr: ?*UINode) void {
             }
         }
 
-        if (style.flex_shrink) |fs| {
-            writer.print("  flex-shrink: {d};\n", .{fs}) catch {};
-        }
-
         if (style.list_style) |ls| {
             writer.writeAll("  list-style: ") catch {};
             listStyleToCSS(ls, writer) catch {};
@@ -1114,11 +1080,6 @@ export fn addEctClasses(node_ptr: ?*UINode) void {
         if (!style.show_scrollbar) {
             writer.writeAll("  scrollbar-width: none;\n") catch {};
             show_scrollbar = false;
-        }
-        if (style.accent_color) |ac| {
-            writer.writeAll("  accent-color: ") catch {};
-            colorToCSS(ac, writer) catch {};
-            writer.writeAll(";\n") catch {};
         }
 
         // Close CSS block

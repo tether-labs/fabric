@@ -2,6 +2,7 @@ const std = @import("std");
 const UIContext = @import("UITree.zig");
 const Fabric = @import("Fabric.zig");
 const Style = @import("types.zig").Style;
+const Background = @import("types.zig").Background;
 const UINode = @import("UITree.zig").UINode;
 const Self = @This();
 
@@ -46,7 +47,7 @@ pub fn nodesEqual(old_node: *UINode, new_node: *UINode) bool {
         const hovera = a.hover.?;
         const hoverb = b.hover.?;
         if (hovera.background != null) {
-            if (!compareFloat32Slice(hovera.background.?, hoverb.background.?)) return false;
+            if (!compareRgba(hovera.background.?, hoverb.background.?)) return false;
         }
     }
 
@@ -64,7 +65,7 @@ pub fn nodesEqual(old_node: *UINode, new_node: *UINode) bool {
     if (a.direction != b.direction) return false;
 
     if (a.background != null and b.background != null) {
-        if (!compareFloat32Slice(a.background.?, b.background.?)) return false;
+        if (!compareRgba(a.background.?, b.background.?)) return false;
     }
 
     if (a.width.size.minmax.min != b.width.size.minmax.min) return false;
@@ -75,16 +76,24 @@ pub fn nodesEqual(old_node: *UINode, new_node: *UINode) bool {
     if (a.letter_spacing != b.letter_spacing) return false;
     if (a.line_height != b.line_height) return false;
     if (a.font_weight != b.font_weight) return false;
-    if (a.border_radius.top_left != b.border_radius.top_left) return false;
-    if (a.border_radius.top_right != b.border_radius.top_right) return false;
-    if (a.border_radius.bottom_left != b.border_radius.bottom_left) return false;
-    if (a.border_radius.bottom_right != b.border_radius.bottom_right) return false;
-    if (a.border_thickness.top != b.border_thickness.top) return false;
-    if (a.border_thickness.left != b.border_thickness.left) return false;
-    if (a.border_thickness.right != b.border_thickness.right) return false;
-    if (a.border_thickness.bottom != b.border_thickness.bottom) return false;
-    if (!compareOptionalFloat32Slice(a.border_color, b.border_color)) return false;
-    if (!compareOptionalFloat32Slice(a.text_color, b.text_color)) return false;
+    if (a.border_radius != null and b.border_radius != null) {
+        if (a.border_radius.?.top_left != b.border_radius.?.top_left) return false;
+        if (a.border_radius.?.top_right != b.border_radius.?.top_right) return false;
+        if (a.border_radius.?.bottom_left != b.border_radius.?.bottom_left) return false;
+        if (a.border_radius.?.bottom_right != b.border_radius.?.bottom_right) return false;
+    }
+    if (a.border_thickness != null and b.border_thickness != null) {
+        if (a.border_thickness.?.top != b.border_thickness.?.top) return false;
+        if (a.border_thickness.?.left != b.border_thickness.?.left) return false;
+        if (a.border_thickness.?.right != b.border_thickness.?.right) return false;
+        if (a.border_thickness.?.bottom != b.border_thickness.?.bottom) return false;
+    }
+    if (a.border_color != null and b.border_color != null) {
+    if (!compareRgba(a.border_color.?, b.border_color.?)) return false;
+    }
+    if (a.text_color != null and b.text_color != null) {
+        if (!compareRgba(a.text_color.?, b.text_color.?)) return false;
+    }
     if (a.padding.top != b.padding.top) return false;
     if (a.padding.left != b.padding.left) return false;
     if (a.padding.bottom != b.padding.bottom) return false;
@@ -100,7 +109,6 @@ pub fn nodesEqual(old_node: *UINode, new_node: *UINode) bool {
     if (a.child_alignment.x != b.child_alignment.x) return false;
     if (a.child_alignment.y != b.child_alignment.y) return false;
     if (a.child_gap != b.child_gap) return false;
-    if (!compareOptionalUint32(a.flex_shrink, b.flex_shrink)) return false;
     if (!compareOptionalSlice(a.dialog_id, b.dialog_id)) return false;
     if (a.opacity != b.opacity) return false;
 
@@ -132,6 +140,14 @@ fn compareFloat32Slice(
     b: [4]u8,
 ) bool {
     if (a[0] == b[0] and a[1] == b[1] and a[2] == b[2] and a[3] == b[3]) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+fn compareRgba(a: Background, b: Background) bool {
+    if (a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a) {
         return true;
     } else {
         return false;

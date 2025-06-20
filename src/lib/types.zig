@@ -169,6 +169,47 @@ pub const Dimensions = struct {
     pub const fid = Dimensions{ .height = .fit, .width = .fit };
 };
 
+pub const Background = struct {
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 0,
+    pub fn hex(hex_str: []const u8) Background {
+        const rgba_arr = Fabric.hexToRgba(hex_str);
+        return Background{
+            .r = rgba_arr[0],
+            .g = rgba_arr[1],
+            .b = rgba_arr[2],
+            .a = rgba_arr[3],
+        };
+    }
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) Background {
+        return Background{
+            .r = r,
+            .g = g,
+            .b = b,
+            .a = a,
+        };
+    }
+    pub fn rgb(r: u8, g: u8, b: u8) Background {
+        return Background{
+            .r = r,
+            .g = g,
+            .b = b,
+            .a = 255,
+        };
+    }
+    pub fn transparentizeHex(hex_str: []const u8, alpha: u8) Background {
+        const rgba_arr = Fabric.transparentize(hex_str, alpha);
+        return Background{
+            .r = rgba_arr[0],
+            .g = rgba_arr[1],
+            .b = rgba_arr[2],
+            .a = rgba_arr[3],
+        };
+    }
+};
+
 pub const Padding = struct {
     top: u32 = 0,
     bottom: u32 = 0,
@@ -256,7 +297,7 @@ pub const Shadow = struct {
     left: f32 = 0,
     blur: f32 = 0,
     spread: f32 = 0,
-    color: [4]u8 = Color,
+    color: Background = .{},
 };
 
 // pub const Transform = struct {
@@ -393,12 +434,12 @@ pub const Hover = struct {
     font_weight: ?usize = null,
     border_radius: ?BorderRadius = null,
     border_thickness: ?Border = null,
-    border_color: ?[4]u8 = null,
-    text_color: ?[4]u8 = null,
+    border_color: ?Background = null,
+    text_color: ?Background = null,
     padding: ?Padding = null,
     child_alignment: ?struct { x: Alignment, y: Alignment } = null,
     child_gap: u16 = 0,
-    background: ?[4]u8 = null,
+    background: ?Background = null,
     shadow: Shadow = .{},
     transform: Transform = .{},
     opacity: f32 = 1,
@@ -417,12 +458,12 @@ pub const CheckMark = struct {
     font_weight: ?usize = null,
     border_radius: ?BorderRadius = null,
     border_thickness: ?Border = null,
-    border_color: ?[4]u8 = null,
-    text_color: ?[4]u8 = null,
+    border_color: ?Background = .{},
+    text_color: ?Background = null,
     padding: ?Padding = null,
     child_alignment: ?struct { x: Alignment, y: Alignment } = null,
     child_gap: u16 = 0,
-    background: ?[4]u8 = null,
+    background: ?Background = null,
     shadow: Shadow = .{},
     transform: Transform = .{},
     opacity: f32 = 1,
@@ -579,7 +620,7 @@ pub const ChildStyle = struct {
     display: ?FlexType = null,
     position: ?Position = null,
     direction: Direction = .row,
-    background: ?[4]u8 = null,
+    background: ?Background = null,
     width: ?Sizing = null,
     height: ?Sizing = null,
     font_size: ?i32 = null,
@@ -588,8 +629,8 @@ pub const ChildStyle = struct {
     font_weight: ?usize = null,
     border_radius: ?BorderRadius = null,
     border_thickness: ?Border = null,
-    border_color: ?[4]u8 = null,
-    text_color: ?[4]u8 = null,
+    border_color: ?Background = .{},
+    text_color: ?Background = null,
     padding: ?Padding = null,
     margin: ?Margin = null,
     overflow: ?Overflow = null,
@@ -664,203 +705,261 @@ pub const TransformOrigin = enum(u8) {
     left = 3,
 };
 
-pub var user_defaults: ?Style = null;
+/// Global user-defined default style that overrides system defaults
+var user_defaults: ?Style = null;
+
+/// Comprehensive styling struct that provides CSS-like properties for UI components.
+/// Supports layout, visual styling, typography, animations, and interactions.
+/// Uses a three-tier inheritance system: system defaults -> user defaults -> component styles.
+///
+/// # Usage Example:
+/// ```zig
+/// const button_style = Style.with(.{
+///     .background = .{ 70, 130, 180, 255 }, // Steel blue
+///     .border_radius = .all(8),
+///     .padding = .all(12),
+///     .font_weight = 600,
+/// });
+/// ```
 pub const Style = struct {
+    /// Unique identifier for the styled element
     id: ?[]const u8 = null,
+
+    /// CSS class-like identifier for grouping styles
     style_id: ?[]const u8 = null,
+
+    /// Display type (block, flex, inline, etc.)
     display: ?FlexType = null,
+
+    /// Positioning method (static, relative, absolute, fixed)
     position: ?Position = null,
+
+    /// Flex direction for child elements (row, column, row-reverse, column-reverse)
     direction: Direction = .row,
-    background: ?[4]u8 = .{ 0, 0, 0, 0 },
+
+    /// Background color as RGBA array [red, green, blue, alpha] (0-255 each)
+    /// Default: transparent black
+    background: ?Background = .{},
+
+    /// Width sizing configuration (fixed, percentage, auto, etc.)
     width: Sizing = .{},
+
+    /// Height sizing configuration (fixed, percentage, auto, etc.)
     height: Sizing = .{},
+
+    /// Font size in pixels
     font_size: ?i32 = null,
+
+    /// Letter spacing in pixels (can be negative for tighter spacing)
     letter_spacing: ?i32 = null,
+
+    /// Line height in pixels for text content
     line_height: ?i32 = null,
+
+    /// Font weight (100-900, where 400 is normal, 700 is bold)
     font_weight: ?usize = null,
-    border_radius: BorderRadius = BorderRadius.default(),
-    border_thickness: Border = Border.default(),
-    border_color: ?[4]u8 = null,
-    text_color: ?[4]u8 = .{ 255, 255, 255, 255 },
+
+    /// Border radius configuration for rounded corners
+    border_radius: ?BorderRadius = null,
+
+    /// Border thickness specification
+    border_thickness: ?Border = .default(),
+
+    /// Border color as RGBA array [red, green, blue, alpha]
+    border_color: ?Background = .{},
+
+    /// Text color as RGBA array [red, green, blue, alpha]
+    /// Default: solid black
+    text_color: ?Background = .{ .a = 255 },
+
+    /// Internal spacing configuration
     padding: Padding = .{},
+
+    /// External spacing configuration
     margin: Margin = .{},
+
+    /// Content overflow behavior (visible, hidden, scroll, auto)
     overflow: ?Overflow = null,
+
+    /// Horizontal overflow behavior
     overflow_x: ?Overflow = null,
+
+    /// Vertical overflow behavior
     overflow_y: ?Overflow = null,
+
+    /// Alignment configuration for child elements
+    /// x: horizontal alignment, y: vertical alignment
     child_alignment: struct { x: Alignment, y: Alignment } = .{
         .x = .center,
         .y = .center,
     },
+
+    /// Gap between child elements in pixels
     child_gap: u32 = 0,
-    flex_shrink: ?u32 = null,
-    font_family_file: []const u8 = "",
+
+    /// Font family name (e.g., "Arial", "Helvetica", "Montserrat")
     font_family: []const u8 = "",
+
+    /// Element opacity (0.0 = fully transparent, 1.0 = fully opaque)
     opacity: f32 = 1,
+
+    /// Text decoration (underline, strikethrough, etc.)
     text_decoration: ?TextDecoration = null,
+
+    /// Shadow configuration for drop shadows
     shadow: Shadow = .{},
+
+    /// White space handling (normal, nowrap, pre, pre-wrap)
     white_space: ?WhiteSpace = null,
+
+    /// Flex wrap behavior (nowrap, wrap, wrap-reverse)
     flex_wrap: ?FlexWrap = null,
+
+    /// Single keyframe for simple animations
     key_frame: ?KeyFrame = null,
+
+    /// Array of keyframes for complex animations
     key_frames: ?[]const KeyFrame = null,
+
+    /// Animation specifications (duration, timing, etc.)
     animation: ?Animation.Specs = null,
+
+    /// Animation name for exit/removal animations
     exit_animation: ?[]const u8 = null,
+
+    /// Z-index for layering control (higher values appear on top)
     z_index: ?f32 = null,
+
+    /// List styling for ul/ol elements
     list_style: ?ListStyle = null,
+
+    /// Blur effect intensity in pixels
     blur: ?u32 = null,
+
+    /// Outline configuration (different from border)
     outline: ?Outline = null,
+
+    /// Transition specifications for smooth property changes
     transition: ?Transition = null,
+
+    /// Whether to show scrollbars when content overflows
     show_scrollbar: bool = true,
+
+    /// Cursor type when hovering over element
     cursor: ?Cursor = null,
+
+    /// Hover state styling
     hover: ?Hover = null,
-    // active: ?Active = null,
+
+    /// Button identifier for click handling
     btn_id: u32 = 0,
+
+    /// Dialog identifier for modal/popup elements
     dialog_id: ?[]const u8 = null,
-    accent_color: ?[4]u8 = null,
+
+    /// Array of child-specific style overrides
     child_styles: ?[]const ChildStyle = null,
-    box_sizing: ?BoxSizing = null,
-    float_type: ?FloatType = null,
+
+    /// Element appearance override
     appearance: ?Appearance = null,
-    web_kit_appearance: ?Appearance = null,
+
+    /// Custom checkmark styling for checkboxes
     checkmark_style: ?CheckMark = null,
+
+    /// Hint to browser about which properties will change (optimization)
     will_change: ?TransitionProperty = null,
+
+    /// 2D/3D transformation configuration
     transform: ?Transform = null,
+
+    /// Origin point for transformations
     transform_origin: ?TransformOrigin = null,
+
+    /// Backface visibility for 3D transforms
     backface_visibility: ?[]const u8 = null,
 
-    // Default configuration using decl literal
-    pub const default: Style = .{
-        .id = null,
-        .style_id = null,
-        .display = null,
-        .position = null,
-        .direction = .row,
-        .background = .{ 0, 0, 0, 0 },
-        .width = .{},
-        .height = .{},
-        .font_size = null,
-        .letter_spacing = null,
-        .line_height = null,
-        .font_weight = null,
-        .border_radius = BorderRadius.default(),
-        .border_thickness = Border.default(),
-        .border_color = null,
-        .text_color = .{ 255, 255, 255, 255 },
-        .padding = .{},
-        .margin = .{},
-        .overflow = null,
-        .overflow_x = null,
-        .overflow_y = null,
-        .child_alignment = .{
-            .x = .center,
-            .y = .center,
-        },
-        .child_gap = 0,
-        .flex_shrink = null,
-        .font_family_file = "",
-        .font_family = "",
-        .opacity = 1,
-        .text_decoration = null,
-        .shadow = .{},
-        .white_space = null,
-        .flex_wrap = null,
-        .key_frame = null,
-        .key_frames = null,
-        .animation = null,
-        .exit_animation = null,
-        .z_index = null,
-        .list_style = null,
-        .blur = null,
-        .outline = null,
-        .transition = null,
-        .show_scrollbar = true,
-        .cursor = null,
-        .hover = null,
-        .btn_id = 0,
-        .dialog_id = null,
-        .accent_color = null,
-        .child_styles = null,
-        .box_sizing = null,
-        .float_type = null,
-        .appearance = null,
-        .web_kit_appearance = null,
-        .checkmark_style = null,
-        .will_change = null,
-        .transform = null,
-        .transform_origin = null,
-        .backface_visibility = null,
+    /// System default style configuration with sensible defaults.
+    /// Used as the base when no user defaults are set.
+    pub const default: Style = Style{};
+
+    /// Pre-configured opaque style with common visual properties.
+    /// Useful as a starting point for solid, bordered elements.
+    ///
+    /// # Properties:
+    /// - Font: Montserrat
+    /// - Border radius: 4px on all corners
+    /// - Border: 1px solid light gray (#DFDFDF)
+    pub const Opaque: Style = .{
+        .font_family = "Montserrat",
+        .border_radius = .all(4),
+        .border_color = .hex("#DFDFDF"),
+        .border_thickness = .default(),
     };
 
-    pub const opaque: Style = .{
-        .id = null,
-        .style_id = null,
-        .display = null,
-        .position = null,
+    pub const Container: Style = .{
+        .display = .flex,
         .direction = .row,
-        .background = .{ 0, 0, 0, 0 },
-        .width = .{},
-        .height = .{},
-        .font_size = null,
-        .letter_spacing = null,
-        .line_height = null,
-        .font_weight = null,
-        .border_radius = BorderRadius.default(),
-        .border_thickness = Border.default(),
-        .border_color = null,
-        .text_color = .{ 255, 255, 255, 255 },
-        .padding = .{},
-        .margin = .{},
-        .overflow = null,
-        .overflow_x = null,
-        .overflow_y = null,
-        .child_alignment = .{
-            .x = .center,
-            .y = .center,
-        },
-        .child_gap = 0,
-        .flex_shrink = null,
-        .font_family_file = "",
-        .font_family = "",
-        .opacity = 1,
-        .text_decoration = null,
-        .shadow = .{},
-        .white_space = null,
-        .flex_wrap = null,
-        .key_frame = null,
-        .key_frames = null,
-        .animation = null,
-        .exit_animation = null,
-        .z_index = null,
-        .list_style = null,
-        .blur = null,
-        .outline = null,
-        .transition = null,
-        .show_scrollbar = true,
-        .cursor = null,
-        .hover = null,
-        .btn_id = 0,
-        .dialog_id = null,
-        .accent_color = null,
-        .child_styles = null,
-        .box_sizing = null,
-        .float_type = null,
-        .appearance = null,
-        .web_kit_appearance = null,
-        .checkmark_style = null,
-        .will_change = null,
-        .transform = null,
-        .transform_origin = null,
-        .backface_visibility = null,
+        .child_gap = 12,
+        .child_alignment = .{ .x = .start, .y = .center },
+        .flex_wrap = .wrap,
+        .width = .percent(100),
     };
-    // Get the current base style (user defaults or system defaults)
-    pub fn getBase() Style {
+
+    pub const Button: Style = .{
+        .padding = .{ .top = 8, .bottom = 8, .left = 12, .right = 12 },
+        .border_radius = .all(6),
+        .display = .inline_flex,
+        .child_alignment = .{ .x = .center, .y = .center },
+        .cursor = .pointer,
+        .font_weight = 600,
+    };
+
+    pub const Card: Style = .{
+        .background = .{ 255, 255, 255, 255 }, // White
+        .padding = .all(16),
+        .border_radius = .all(8),
+        .shadow = .{ .blur = 8, .top = 2, .color = .{ 0, 0, 0, 25 } },
+        .display = .block,
+    };
+
+    /// Gets the current base style to use for inheritance.
+    /// Returns user-defined defaults if set, otherwise returns system defaults.
+    ///
+    /// # Returns:
+    /// Style - The base style configuration
+    ///
+    /// # Usage:
+    /// ```zig
+    /// const base = Style.getDefault();
+    /// const custom = Style{ .font_size = 16 }.merge(base);
+    /// ```
+    pub fn getDefault() Style {
         return user_defaults orelse Style.default;
     }
-    /// we override the base style, which is passed
+
+    /// Merges this style with a base style, creating a new style where
+    /// non-default properties from this style override the base style.
+    /// Only properties that differ from system defaults are applied.
+    ///
+    /// # Parameters:
+    /// - `self`: Style - The style with override properties
+    /// - `base`: Style - The base style to merge with
+    ///
+    /// # Returns:
+    /// Style - New style with merged properties
+    ///
+    /// # Usage:
+    /// ```zig
+    /// const base_style = Style{ .font_size = 14, .padding = .all(8) };
+    /// const override_style = Style{ .font_size = 18 }; // Only override font size
+    /// const merged = override_style.merge(base_style);
+    /// // Result: font_size = 18, padding = .all(8)
+    /// ```
     pub fn merge(self: Style, base: Style) Style {
         var result = base;
         inline for (@typeInfo(Style).@"struct".fields) |field| {
             const field_value = @field(self, field.name);
-            const default_value = @field(Style.default, field.name);
+            const default_value = @field(default, field.name);
 
             // Only override if the field is not the default value
             if (!std.meta.eql(field_value, default_value)) {
@@ -869,9 +968,63 @@ pub const Style = struct {
         }
         return result;
     }
-    // Updated with function to use user defaults
-    pub fn with(overrides: Style) Style {
-        return overrides.merge(Style.getBase());
+
+    /// Creates a new style by merging the provided overrides with the current default style.
+    /// This is the primary way to create styled components with inheritance.
+    ///
+    /// # Parameters:
+    /// - `overrides`: Style - Style properties to override defaults
+    ///
+    /// # Returns:
+    /// Style - New style with default properties and specified overrides
+    ///
+    /// # Usage:
+    /// ```zig
+    /// // Create a button style with custom background and padding
+    /// const button_style = Style.apply(.{
+    ///     .background = .{ 70, 130, 180, 255 }, // Steel blue
+    ///     .padding = .all(12),
+    ///     .border_radius = .all(6),
+    ///     .text_color = .{ 255, 255, 255, 255 }, // White text
+    /// });
+    ///
+    /// // Create a card style with shadow and border
+    /// const card_style = Style.apply(.{
+    ///     .background = .{ 255, 255, 255, 255 }, // White background
+    ///     .shadow = .{ .blur = 10, .color = .{ 0, 0, 0, 50 } },
+    ///     .border_radius = .all(8),
+    ///     .padding = .all(16),
+    /// });
+    /// ```
+    pub fn apply(overrides: Style) Style {
+        return overrides.merge(Style.getDefault());
+    }
+
+    /// Sets the global user defaults that will be used as the base for all future styles.
+    /// This allows you to establish consistent theming across your application.
+    ///
+    /// # Parameters:
+    /// - `new_default`: Style - The new default style configuration
+    ///
+    /// # Returns:
+    /// void
+    ///
+    /// # Usage:
+    /// ```zig
+    /// // Set up application-wide defaults
+    /// Style.setDefault(.{
+    ///     .font_family = "Inter",
+    ///     .font_size = 14,
+    ///     .text_color = .{ 33, 37, 41, 255 }, // Dark gray
+    ///     .background = .{ 248, 249, 250, 255 }, // Light gray
+    /// });
+    ///
+    /// // All subsequent Style.apply() calls will inherit these defaults
+    /// const button = Style.apply(.{ .padding = .all(8) });
+    /// // button now has Inter font, 14px size, dark gray text, etc.
+    /// ```
+    pub fn setDefault(new_default: Style) void {
+        user_defaults = new_default;
     }
 };
 pub const Config = struct {

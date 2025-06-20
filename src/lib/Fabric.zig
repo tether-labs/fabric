@@ -25,8 +25,6 @@ const getInputType = grabInputDetails.getInputType;
 
 pub const Component = fn (void) void;
 
-const IOS = @import("IOS.zig");
-// const objc = @import("objc");
 const print = std.debug.print;
 pub const stdout = std.io.getStdOut().writer();
 
@@ -268,57 +266,6 @@ pub fn getOffsets(ptr: [*]const u8, len: u32) [*]f32 {
 }
 
 pub extern fn eventPreventDefault(id: u32) void;
-// const options = {
-//   // Request method
-//   method: "GET", // "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", etc.
-//
-//   // Request headers
-//   headers: {
-//     "Content-Type": "application/json", // or "text/plain", "multipart/form-data", etc.
-//     "Authorization": "Bearer token123",
-//     "Accept": "application/json",
-//     "User-Agent": "My App/1.0",
-//     // Any other custom headers
-//   },
-//
-//   // Request body - must be compatible with the Content-Type header
-//   body: JSON.stringify({ key: "value" }), // or FormData, URLSearchParams, Blob, BufferSource, etc.
-//
-//   // Mode for CORS requests
-//   mode: "cors", // "no-cors", "same-origin", "navigate"
-//
-//   // Authentication credentials
-//   credentials: "same-origin", // "include", "omit"
-//
-//   // Cache mode
-//   cache: "default", // "no-cache", "reload", "force-cache", "only-if-cached"
-//
-//   // Redirect mode
-//   redirect: "follow", // "error", "manual"
-//
-//   // Referrer policy
-//   referrerPolicy: "no-referrer-when-downgrade", // "no-referrer", "origin", "origin-when-cross-origin",
-//                                                 // "same-origin", "strict-origin", "strict-origin-when-cross-origin", "unsafe-url"
-//
-//   // Request priority (experimental)
-//   priority: "auto", // "high", "low"
-//
-//   // Request keepalive flag
-//   keepalive: false, // true
-//
-//   // Signal to abort the request
-//   signal: AbortController.signal,
-//
-//   // Request integrity (for subresource integrity)
-//   integrity: "sha256-hash",
-//
-//   // Whether to include user credentials (cookies, HTTP auth) even for cross-origin requests
-//   // (credentials is preferred over this)
-//   useCredentials: false, // true
-//
-//   // The window parameter (used for ServiceWorker)
-//   window: null
-// };
 
 pub const Action = struct {
     runFn: ActionProto,
@@ -630,6 +577,7 @@ pub fn renderCycle(route: []const u8) void {
     const diff = start_ts.read();
 
     Fabric.printlnSrc("Nano-seconds: {any}", .{diff}, @src());
+    allocator_global.free(route); // return host‑allocated buffer
     // Clean up the old context
 }
 
