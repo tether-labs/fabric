@@ -31,7 +31,7 @@ A modern, lightweight web framework for building WebAssembly applications with Z
 
 3. **Add Fabric dependency**:
    ```bash
-   zig fetch https://github.com/vic-Rokx/fabric/archive/refs/tags/v1.0.0.tar.gz
+   zig fetch https://github.com/vic-Rokx/fabric/archive/refs/tags/v1.1.0.tar.gz
    ```
 
 4. **Configure `build.zig.zon`**:
@@ -41,7 +41,7 @@ A modern, lightweight web framework for building WebAssembly applications with Z
        .version = "0.1.0",
        .dependencies = .{
            .fabric = .{
-               .url = "https://github.com/vic-Rokx/fabric/archive/refs/tags/v1.0.0.tar.gz",
+               .url = "https://github.com/vic-Rokx/fabric/archive/refs/tags/v1.1.0.tar.gz",
                .hash = "YOUR_HASH_HERE", // Replace with hash from zig fetch
            },
        },
@@ -109,7 +109,6 @@ A modern, lightweight web framework for building WebAssembly applications with Z
    export fn renderCommands(route_ptr: [*:0]u8) i32 {
        const route = std.mem.span(route_ptr);
        fabric.renderCycle(route);
-       fabric.lib.allocator_global.free(route);
        return 0;
    }
 
@@ -229,6 +228,7 @@ my-fabric-app/
 │       └── *.zig
 └── web/
     └── index.html
+    ...
 ```
 
 ## 🔧 Configuration
