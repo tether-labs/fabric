@@ -155,18 +155,66 @@ pub const FetchNodeProto = *const fn (*FetchNode) void;
 
 pub const FetchNode = struct { data: FetchAction };
 
-pub fn fetch(url: []const u8, self: anytype, cb: anytype) void {
-    const Args = @TypeOf(self);
-    const Closure = struct {
-        self: Args,
-        fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-        //
-        fn runFn(action: *FetchAction, resp: []const u8) void {
-            const fetch_node: *FetchNode = @fieldParentPtr("data", action);
-            const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", fetch_node));
-            @call(.auto, cb, .{ closure.self, resp });
+pub fn fetch(url: []const u8, cb: *const fn () void, http_req: HttpReq) void {
+    var writer = String.new();
+    writer.append_str("{\n\"method\": ");
+    writer.append_str("\"");
+    writer.append_str(http_req.method);
+    writer.append_str("\"");
+    if (http_req.headers) |headers| {
+        writer.append_str(",\n\"headers\": {\n");
+        constructHeaders(headers, http_req.extra_headers, &writer);
+        writer.append_str("\n}");
+    } else if (http_req.extra_headers.len > 0) {
+        writer.append_str(",\n\"headers\": {\n");
+        var count: usize = 1;
+        for (http_req.extra_headers) |header| {
+            writer.append_str("\"");
+            writer.append_str(header.name);
+            writer.append_str("\"");
+            writer.append_str(": ");
+            writer.append_str("\"");
+            writer.append_str(header.value);
+            writer.append_str("\"");
+            if (count < http_req.extra_headers.len) {
+                writer.append_str(",\n");
+            }
+            count += 1;
         }
-        //
+        writer.append_str("\n}");
+    }
+
+    if (http_req.credentials) |credentials| {
+        writer.append_str(",\n\"credentials\": ");
+        writer.append_str("\"");
+        writer.append_str(credentials);
+        writer.append_str("\"");
+    }
+
+    if (http_req.body) |body| {
+        writer.append_str(",\n\"body\": ");
+        switch (http_req.body_type) {
+            .string => {
+                writer.append_str("\"");
+                writer.append_str(body);
+                writer.append_str("\"");
+            },
+            .json => {
+                writer.append_str(body);
+            },
+        }
+    }
+    writer.append_str("\n}");
+
+    const final = writer.contents[0..writer.len];
+    const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
+    // const http_req_offset_ptr = generateHttpLayout(http_req);
+
+    const Closure = struct {
+        fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+        fn runFn(_: *FetchAction, resp: Response) void {
+            @call(.auto, cb, .{resp});
+        }
         fn deinitFn(node: *FetchNode) void {
             const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
             Fabric.allocator_global.destroy(closure);
@@ -177,16 +225,14 @@ pub fn fetch(url: []const u8, self: anytype, cb: anytype) void {
         Fabric.println("Error could not create closure {any}\n ", .{err});
         unreachable;
     };
-    closure.* = .{
-        .self = self,
-    };
+    closure.* = .{};
 
     const id = Fabric.fetch_registry.count() + 1;
     Fabric.fetch_registry.put(id, &closure.fetch_node) catch |err| {
         Fabric.println("Button Function Registry {any}\n", .{err});
+        return;
     };
-
-    js_fetch(url.ptr, url.len, id);
+    js_fetch(url.ptr, url.len, id, json.ptr, json.len);
 }
 
 var last_time: i64 = 0;
@@ -203,6 +249,8 @@ extern fn js_fetch(
     url_ptr: [*]const u8,
     url_len: usize,
     callback_id: usize,
+    http_req_offset_ptr: [*]u8,
+    size: usize,
 ) void;
 
 extern fn js_fetch_params(
