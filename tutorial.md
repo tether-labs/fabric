@@ -958,7 +958,8 @@ pub fn render() void {
             }
         }
     });
-}```
+}
+```
 
 ### 14.2 Comparing the Two Approaches
 
