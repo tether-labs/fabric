@@ -506,11 +506,9 @@ pub export fn rerenderLayout() void {
 
 var clean_up_ctx: *UIContext = undefined;
 pub fn renderCycle(route: []const u8) void {
-    var start_ts = std.time.Timer.start() catch return;
-    Fabric.printlnSrc("Reconcile", .{}, @src());
     key_depth_map.clearRetainingCapacity();
     Fabric.registry.clearRetainingCapacity();
-    //
+
     var ctx_itr = ctx_registry.iterator();
     while (ctx_itr.next()) |entry| {
         const node = entry.value_ptr.*;
@@ -565,8 +563,6 @@ pub fn renderCycle(route: []const u8) void {
 
     // Replace old context with new context in the map
     clean_up_ctx = old_ctx;
-    // defer old_ctx.deinit();
-    // defer allocator_global.destroy(old_ctx);
 
     _ = ctx_map.put(route, new_ctx) catch {
         printlnSrcErr("Failed to update context map\n", .{}, @src());
@@ -574,9 +570,7 @@ pub fn renderCycle(route: []const u8) void {
         allocator_global.destroy(new_ctx);
         return;
     };
-    const diff = start_ts.read();
 
-    Fabric.printlnSrc("Nano-seconds: {any}", .{diff}, @src());
     allocator_global.free(route); // return host‑allocated buffer
     // Clean up the old context
 }

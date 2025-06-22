@@ -12,7 +12,7 @@ It defines four exported functions that the host calls at well‑defined moments
 | Export           | When the host calls it                                                                  | Responsibility                                                          |
 | ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `instantiate`    | **Once**, immediately after loading the Wasm module and obtaining initial viewport size | Initialise Fabric core, register root routes/pages                      |
-| `renderCommands` | **Every frame** or whenever navigation / state changes require a re‑render              | Generate the full command buffer describing the next HTML/CSS/DOM frame |
+| `renderUI` | **Every frame** or whenever navigation / state changes require a re‑render              | Generate the full command buffer describing the next HTML/CSS/DOM frame |
 | `deinit`         | When the user navigates away or the Wasm module unloads                                 | Release Fabric resources + allocator bookkeeping                        |
 | `main`           | Executed automatically at module start‑up                                               | Choose the global allocator and set default style                       |
 
@@ -25,18 +25,7 @@ Together, these functions implement the typical _init → render → teardown_ l
 ```zig
 var fb: fabric.lib = undefined;        // Singleton Fabric library handle
 var allocator: std.mem.Allocator = undefined; // Process‑wide allocator (wasm)
-var initial: bool = true;               // Flag available for first‑frame logic if needed
 ```
-
-### `TrackingAllocator`
-
-Fabric ships with an optional `TrackingAllocator` that wraps any allocator and provides runtime leak detection. Swap it in via:
-
-```zig
-allocator = TrackingAllocator.init(std.heap.wasm_allocator);
-```
-
-This page keeps the example simple and uses the raw `wasm_allocator`.
 
 ---
 
@@ -46,7 +35,6 @@ This page keeps the example simple and uses the raw `wasm_allocator`.
 
 ```zig
 pub fn main() !void {
-    fabric.Style.setDefault(fabric.Style.Opaque); // global default
     allocator = std.heap.wasm_allocator;          // choose allocator
 }
 ```
@@ -72,10 +60,10 @@ export fn instantiate(window_width: i32, window_height: i32) void {
 
 > **Tip:** If your app has many routes, factor the initialisation into a small helper that auto‑discovers `*.zig` files under `src/routes/*` at build‑time.
 
-### 3.3 `renderCommands(route_ptr)`
+### 3.3 `renderUI(route_ptr)`
 
 ```zig
-export fn renderCommands(route_ptr: [*:0]u8) i32 {
+export fn renderUI(route_ptr: [*:0]u8) i32 {
     const route = std.mem.span(route_ptr);        // zero‑terminated C string → Zig slice
     fabric.renderCycle(route);                    // produce diff & command buffer
     fabric.lib.allocator_global.free(route);      // return host‑allocated buffer
@@ -138,7 +126,7 @@ src/
 ## 5. Memory Management Notes
 
 - **Allocator choice matters:** While `std.heap.wasm_allocator` is fine for demos, consider using a pool or slab allocator for predictable latency in production.
-- **Freeing route strings:** `renderCommands` takes ownership of the `route_ptr` buffer allocated on the JS side. Always free it after the render cycle.
+- **Freeing route strings:** `renderUI` takes ownership of the `route_ptr` buffer allocated on the JS side. Always free it after the render cycle.
 - **Leak detection:** Build with `-Drelease-safe` and enable `TrackingAllocator` during development to catch leaks introduced by custom components.
 
 ---
@@ -150,7 +138,7 @@ const wasm = await WebAssembly.instantiateStreaming(
   fetch("main.wasm"),
   imports,
 );
-const { instantiate, renderCommands, deinit } = wasm.instance.exports;
+const { instantiate, renderUI, deinit } = wasm.instance.exports;
 
 // 1. Initialise once
 instantiate(window.innerWidth, window.innerHeight);
@@ -158,11 +146,11 @@ instantiate(window.innerWidth, window.innerHeight);
 // 2. Tell Fabric to render the first frame
 const route = "/";
 const routePtr = allocCString(route); // helper that mallocs in Wasm memory
-renderCommands(routePtr);
+renderUI(routePtr);
 
-// 3. On resize or navigation, call renderCommands again with the new route
-window.onpopstate = () => renderCommands(allocCString(location.pathname));
-window.onresize = () => renderCommands(allocCString(location.pathname));
+// 3. On resize or navigation, call renderUI again with the new route
+window.onpopstate = () => renderUI(allocCString(location.pathname));
+window.onresize = () => renderUI(allocCString(location.pathname));
 
 // 4. Teardown on unload
 window.addEventListener("beforeunload", () => deinit());
@@ -174,17 +162,16 @@ window.addEventListener("beforeunload", () => deinit());
 
 | Symptom                                        | Likely cause                                             | Fix                                                                                        |
 | ---------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **Black screen** on first load                 | Forgot to call `instantiate()` before `renderCommands()` | Ensure `instantiate()` runs exactly once per Wasm instantiation.                           |
+| **Black screen** on first load                 | Forgot to call `instantiate()` before `renderUI()` | Ensure `instantiate()` runs exactly once per Wasm instantiation.                           |
 | **Panic:** `alloc null`                        | `allocator` not initialised                              | Confirm you set `allocator` in `main()` _before_ any Fabric call.                          |
-| **Memory leaks** during navigation stress test | Route buffer not freed                                   | Double‑check you call `fabric.lib.allocator_global.free(route)` inside `renderCommands()`. |
+| **Memory leaks** during navigation stress test | Route buffer not freed                                   | Double‑check you call `fabric.lib.allocator_global.free(route)` inside `renderUI()`. |
 
 ---
 
 ## 8. Next Steps
 
 1. Add additional `Page.init()` calls for every new route folder.
-2. Experiment with `TrackingAllocator` to detect leaks during development.
-3. Optimise build sizes with `zig build -Drelease-small`.
+2. Optimise build sizes with `zig build -Drelease-small`.
 
 > _Questions?_ Ping the Fabric Discord or open an issue on GitHub—happy building!
 
@@ -262,7 +249,7 @@ No other code changes are required—`fabric.renderCycle` already chooses the co
 If you get a blank screen, confirm:
 
 - The folder is named **exactly** `tictac` (case‑sensitive).
-- `TicTacToe.init()` is indeed called before the first `renderCommands`.
+- `TicTacToe.init()` is indeed called before the first `renderUI`.
 
 ---
 
