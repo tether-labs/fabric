@@ -9,12 +9,12 @@
 `main.zig` is the primary interface between your Fabric‑based Zig application and its JavaScript host (or other Wasm embedder).
 It defines four exported functions that the host calls at well‑defined moments:
 
-| Export           | When the host calls it                                                                  | Responsibility                                                          |
-| ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `instantiate`    | **Once**, immediately after loading the Wasm module and obtaining initial viewport size | Initialise Fabric core, register root routes/pages                      |
-| `renderUI` | **Every frame** or whenever navigation / state changes require a re‑render              | Generate the full command buffer describing the next HTML/CSS/DOM frame |
-| `deinit`         | When the user navigates away or the Wasm module unloads                                 | Release Fabric resources + allocator bookkeeping                        |
-| `main`           | Executed automatically at module start‑up                                               | Choose the global allocator and set default style                       |
+| Export        | When the host calls it                                                                  | Responsibility                                                          |
+| ------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `instantiate` | **Once**, immediately after loading the Wasm module and obtaining initial viewport size | Initialise Fabric core, register root routes/pages                      |
+| `renderUI`    | **Every frame** or whenever navigation / state changes require a re‑render              | Generate the full command buffer describing the next HTML/CSS/DOM frame |
+| `deinit`      | When the user navigates away or the Wasm module unloads                                 | Release Fabric resources + allocator bookkeeping                        |
+| `main`        | Executed automatically at module start‑up                                               | Choose the global allocator and set default style                       |
 
 Together, these functions implement the typical _init → render → teardown_ lifecycle for a single‑page application.
 
@@ -160,11 +160,11 @@ window.addEventListener("beforeunload", () => deinit());
 
 ## 7. Common Pitfalls & FAQ
 
-| Symptom                                        | Likely cause                                             | Fix                                                                                        |
-| ---------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **Black screen** on first load                 | Forgot to call `instantiate()` before `renderUI()` | Ensure `instantiate()` runs exactly once per Wasm instantiation.                           |
-| **Panic:** `alloc null`                        | `allocator` not initialised                              | Confirm you set `allocator` in `main()` _before_ any Fabric call.                          |
-| **Memory leaks** during navigation stress test | Route buffer not freed                                   | Double‑check you call `fabric.lib.allocator_global.free(route)` inside `renderUI()`. |
+| Symptom                                        | Likely cause                                       | Fix                                                                                  |
+| ---------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Black screen** on first load                 | Forgot to call `instantiate()` before `renderUI()` | Ensure `instantiate()` runs exactly once per Wasm instantiation.                     |
+| **Panic:** `alloc null`                        | `allocator` not initialised                        | Confirm you set `allocator` in `main()` _before_ any Fabric call.                    |
+| **Memory leaks** during navigation stress test | Route buffer not freed                             | Double‑check you call `fabric.lib.allocator_global.free(route)` inside `renderUI()`. |
 
 ---
 
@@ -184,7 +184,7 @@ This section walks you through adding a fully‑working Tic‑Tac‑Toe game as 
 ### 9.1 Create the Route Folder
 
 ```bash
-mkdir -p src/routes/tictac
+mkdir src/routes/tictac
 ```
 
 Fabric’s router maps URL segments to matching folders under `src/routes`. Creating the `tictac` directory means that visiting **`/tictac`** in the browser will load whatever components you register from this folder.
@@ -192,6 +192,10 @@ Fabric’s router maps URL segments to matching folders under `src/routes`. Crea
 ### 9.2 Scaffold `Page.zig`
 
 Inside `src/routes/tictac/`, add **`Page.zig`** with the minimal boilerplate:
+
+```bash
+fabric gen page
+```
 
 ```zig
 const std    = @import("std");
@@ -209,8 +213,6 @@ pub fn render() void {
     Static.FlexBox(.{
         .width  = .percent(100),
         .height = .percent(100),
-        .justify_content = .center,
-        .align_items     = .center,
     })({
         Static.Text("Tic‑Tac‑Toe!", .{});
     });
@@ -242,9 +244,8 @@ No other code changes are required—`fabric.renderCycle` already chooses the co
 
 ### 9.4 Smoke‑test the Route
 
-1. **Re‑build** your Wasm bundle (`zig build -Drelease-small`).
-2. Navigate to `http://localhost:5173/tictac` in the browser.
-3. You should see the centred “Tic‑Tac‑Toe!” header.
+1. Navigate to `http://localhost:5173/tictac` in the browser.
+2. You should see the centred “Tic‑Tac‑Toe!” header.
 
 If you get a blank screen, confirm:
 
@@ -301,8 +302,6 @@ pub fn render() void {
                 .border_thickness = .all(1),
                 .width            = .percent(33),
                 .height           = .percent(33),
-                .justify_content  = .center,
-                .align_items      = .center,
             })({
                 // Placeholder content; will later become “X” / “O” marks.
                 Pure.AllocText("{d}", .{i}, .{});
@@ -339,9 +338,7 @@ pub fn render() void {
         .direction = .column,
         .width     = .percent(100),
         .height    = .percent(100),
-        .align_items     = .center,
-        .justify_content = .center,
-        .gap             = .px(20),
+        .child_gap             = 20,
     })({
         Static.Text("Tic‑Tac‑Toe!", .{});
         // Constrain the board to 30 % of the viewport for now.
@@ -407,7 +404,7 @@ Create an **`assets`** folder at project root (or any path you like) and drop tw
 Replace the placeholder‐number implementation with click‑aware logic and embedded icons:
 
 ```zig
-const std    = @import("std");
+const std = @import("std");
 const Fabric = @import("fabric");
 const Static = Fabric.Static;
 
@@ -415,16 +412,16 @@ const Player = enum { x, o };
 
 const GridBox = struct {
     clicked: bool = false,
-    player : Player = undefined,
+    player: Player = undefined,
 };
 
 // Compile‑time embed of the SVG markup.
 fn drawX() void {
-    Static.Svg(@embedFile("assets/X.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+    Static.Svg(@embedFile("../assets/X.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
 }
 
 fn drawO() void {
-    Static.Svg(@embedFile("assets/O.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+    Static.Svg(@embedFile("../assets/O.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
 }
 
 var grid_boxes: [9]GridBox = undefined;
@@ -432,41 +429,43 @@ var current_player: Player = .x;
 
 /// Initialise the board for a new game.
 pub fn init() void {
-    for (grid_boxes) |*box| box.* = GridBox{};
+    for (&grid_boxes) |*box| box.* = GridBox{};
     current_player = .x;
 }
 
 /// Button callback when a square is selected.
 fn selectBox(box: *GridBox) void {
-    if (box.clicked) return;          // Ignore already‑played squares
+    Fabric.println("Selecting a box!", .{});
+    if (box.clicked) return; // Ignore already‑played squares
 
     box.clicked = true;
-    box.player  = current_player;
+    box.player = current_player;
 
     // TODO: call win‑detection here.
 
     // Swap turns
-    current_player = switch (current_player) { .x => .o, .o => .x };
+    current_player = switch (current_player) {
+        .x => .o,
+        .o => .x,
+    };
 
-    Fabric.invalidate(); // Mark the component dirty so Fabric schedules a re‑render.
+    // Mark the component dirty so Fabric schedules a re‑render.
 }
 
 /// Render the interactive grid.
 pub fn render() void {
     Static.FlexBox(.{
-        .width      = .percent(100),
-        .height     = .percent(100),
-        .flex_wrap  = .wrap,
+        .width = .percent(100),
+        .height = .percent(100),
+        .flex_wrap = .wrap,
     })({
         for (&grid_boxes) |*box| {
-            Static.CtxButton(selectBox, .{ box }, .{
-                .border_color     = .hex("#CCCCCC"),
+            Static.CtxButton(selectBox, .{box}, .{
+                .border_color = .hex("#CCCCCC"),
                 .border_thickness = .all(1),
-                .width            = .percent(33),
-                .height           = .percent(33),
-                .justify_content  = .center,
-                .align_items      = .center,
-                .padding          = .all(24),
+                .width = .percent(33),
+                .height = .percent(33),
+                .padding = .all(24),
             })({
                 if (box.clicked) switch (box.player) {
                     .x => drawX(),
@@ -480,18 +479,16 @@ pub fn render() void {
 
 **Key points**
 
-| Concept               | Where it appears        | Why it matters                                                                                           |
-| --------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------- |
-| **`@embedFile`**      | `drawX()` / `drawO()`   | Embeds raw SVG markup in the Wasm binary; zero runtime fetches.                                          |
-| **`Static.Svg`**      | same                    | Lets Fabric treat the markup like any other DOM node, inheriting flex‑box centring and size constraints. |
-| **Turn state**        | `current_player` global | Ensures clicks alternate X→O→X…                                                                          |
-| **Re‑render trigger** | `Fabric.invalidate()`   | Schedules a render pass after state changes (analogous to React’s `setState`).                           |
+| Concept          | Where it appears        | Why it matters                                                                                           |
+| ---------------- | ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| **`@embedFile`** | `drawX()` / `drawO()`   | Embeds raw SVG markup in the Wasm binary; zero runtime fetches.                                          |
+| **`Static.Svg`** | same                    | Lets Fabric treat the markup like any other DOM node, inheriting flex‑box centring and size constraints. |
+| **Turn state**   | `current_player` global | Ensures clicks alternate X→O→X…                                                                          |
 
 ### 11.3 Smoke‑test Interaction
 
-1. Re‑build (`zig build -Drelease-small`) and refresh `/tictac`.
-2. Click squares; X and O should alternate.
-3. Clicking an already‑taken square does nothing.
+1. Click squares; should log Selecting a box!.
+2. Clicking an already‑taken square does nothing.
 
 If icons are missing, verify the asset path in `@embedFile` and that Zig’s build file includes the `assets` folder in `build.zig`.
 
@@ -508,41 +505,41 @@ Instead of sprinkling many small `Signal`s throughout the grid, we can leverage 
 - ✔ **Explicit intent** – Makes it crystal‑clear where state changes occur.
 - ✔ **Zero payload** – A `Signal(void)` carries no data; it’s purely a _recompute_ trigger.
 
-> You could also call `Fabric.invalidate()` directly (as we did earlier). The force‑signal pattern, however, keeps mutation logic _inside_ your component and plays nicely with Fabric’s diffing heuristics—especially if you later refactor parts of the board into sub‑components.
-
 ### 12.2 Updated `Grid.zig` with `Signal`
 
-```zig
-const std    = @import("std");
+````zig
+const std = @import("std");
 const Fabric = @import("fabric");
 const Static = Fabric.Static;
-const Signal = Fabric.Signal;
+const Signal = Fabric.Signal // 👈 Add the signal;
 
 const Player = enum { x, o };
 
 const GridBox = struct {
     clicked: bool = false,
-    player : Player = undefined,
+    player: Player = undefined,
 };
 
+// Compile‑time embed of the SVG markup.
 fn drawX() void {
-    Static.Svg(@embedFile("assets/X.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+    Static.Svg(@embedFile("../assets/X.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
 }
 
 fn drawO() void {
-    Static.Svg(@embedFile("assets/O.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+    Static.Svg(@embedFile("../assets/O.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
 }
 
 var grid_boxes: [9]GridBox = undefined;
-var current_player: Player  = .x;
-var rerender      : Signal(void) = undefined;
-
+var current_player: Player = .x;
+var rerender: Signal(void) = undefined;
+/// Initialise the board for a new game.
 pub fn init() void {
-    rerender.init({});           // Initialise the force signal once
-    for (grid_boxes) |*b| b.* = GridBox{};
+    for (&grid_boxes) |*box| box.* = GridBox{};
     current_player = .x;
+    rerender.init({}); // Initialise the force signal once
 }
 
+/// Button callback when a square is selected.
 fn selectBox(box: *GridBox) void {
     if (box.clicked) {
         Fabric.println("This square is already taken!", .{});
@@ -550,36 +547,34 @@ fn selectBox(box: *GridBox) void {
     }
 
     box.clicked = true;
-    box.player  = current_player;
+    box.player = current_player;
 
     // TODO: call checkWin() here.
 
     // Toggle turn
-    current_player = switch (current_player) { .x => .o, .o => .x };
+    current_player = switch (current_player) {
+        .x => .o,
+        .o => .x,
+    };
 
     rerender.force(); // ⬅ Trigger a full re‑render via the signal
 }
 
+/// Render the interactive grid.
 pub fn render() void {
     Static.FlexBox(.{
-        .width      = .percent(100),
-        .height     = .percent(100),
-        .flex_wrap  = .wrap,
+        .width = .percent(100),
+        .height = .percent(100),
+        .flex_wrap = .wrap,
     })({
-        // The render closure *captures* `rerender`, so any call to force()
-        // schedules this entire block for diffing.
-        _ = rerender; // suppress unused‑var warning
-
         for (&grid_boxes) |*box| {
-            Static.CtxButton(selectBox, .{ box }, .{
-                .display          = .flex,
-                .border_color     = .hex("#CCCCCC"),
+            Static.CtxButton(selectBox, .{box}, .{
+                .display = .flex, // 👈 Add the flex
+                .border_color = .hex("#CCCCCC"),
+                .height = .percent(33),
+                .width = .percent(33),
                 .border_thickness = .all(1),
-                .width            = .percent(33),
-                .height           = .percent(33),
-                .justify_content  = .center,
-                .align_items      = .center,
-                .padding          = .all(24),
+                .padding = .all(24),
             })({
                 if (box.clicked) switch (box.player) {
                     .x => drawX(),
@@ -588,8 +583,7 @@ pub fn render() void {
             });
         }
     });
-}
-```
+}```
 
 ### 12.3 Quick test
 
@@ -631,7 +625,7 @@ fn checkWin() ?Player {
     }
     return null;
 }
-```
+````
 
 ### 13.2 Integrate with `selectBox`
 
@@ -666,26 +660,148 @@ fn selectBox(box: *GridBox) void {
 Append this overlay inside `render()` **after** the grid loops:
 
 ```zig
-if (winner) |p| {
-    // Semi‑transparent fullscreen overlay
+      if (winner) |winning_player| {
+            switch (winning_player) {
+                .x => {
+                    Static.Text("Player X Won!", .{
+                        .font_size = 24,
+                        .font_weight = 900,
+                        .text_color = .hex("#744DFF"),
+                        .margin = .{ .top = 32 },
+                    });
+                },
+                .o => {
+                    Static.Text("Player O Won!", .{
+                        .font_size = 24,
+                        .font_weight = 900,
+                        .text_color = .hex("#744DFF"),
+                        .margin = .{ .top = 32 },
+                    });
+                },
+            }
+        }
+```
+
+```zig
+const std = @import("std");
+const Fabric = @import("fabric");
+const Static = Fabric.Static;
+const Signal = Fabric.Signal;
+
+const Player = enum { x, o };
+
+const GridBox = struct {
+    clicked: bool = false,
+    player: Player = undefined,
+};
+
+// Compile‑time embed of the SVG markup.
+fn drawX() void {
+    Static.Svg(@embedFile("../assets/X.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+}
+
+fn drawO() void {
+    Static.Svg(@embedFile("../assets/O.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+}
+
+var grid_boxes: [9]GridBox = undefined;
+var current_player: Player = .x;
+var rerender: Signal(void) = undefined;
+var winner: ?Player = null;
+/// Initialise the board for a new game.
+pub fn init() void {
+    for (&grid_boxes) |*box| box.* = GridBox{};
+    current_player = .x;
+    rerender.init({}); // Initialise the force signal once
+}
+
+fn selectBox(box: *GridBox) void {
+    if (box.clicked or winner != null) return; // ignore if game over
+
+    box.clicked = true;
+    box.player = current_player;
+
+    if (checkWin()) |p| {
+        winner = p;
+    } else {
+        // Toggle turn only if no winner yet
+        current_player = switch (current_player) {
+            .x => .o,
+            .o => .x,
+        };
+    }
+
+    rerender.force(); // request re‑render
+}
+
+// All 8 possible winning line combinations (rows, columns, diagonals)
+const win_patterns = [8][3]usize{
+    .{ 0, 1, 2 }, // top row
+    .{ 3, 4, 5 }, // middle row
+    .{ 6, 7, 8 }, // bottom row
+    .{ 0, 3, 6 }, // left column
+    .{ 1, 4, 7 }, // middle column
+    .{ 2, 5, 8 }, // right column
+    .{ 0, 4, 8 }, // main diagonal
+    .{ 2, 4, 6 }, // anti‑diagonal
+};
+
+/// Returns the winning player, or `null` if no one has yet won.
+fn checkWin() ?Player {
+    for (win_patterns) |pattern| {
+        const a = &grid_boxes[pattern[0]];
+        const b = &grid_boxes[pattern[1]];
+        const c = &grid_boxes[pattern[2]];
+
+        if (a.clicked and b.clicked and c.clicked and a.player == b.player and a.player == c.player) {
+            return a.player;
+        }
+    }
+    return null;
+}
+
+/// Render the interactive grid.
+pub fn render() void {
     Static.FlexBox(.{
-        .position        = .absolute,
-        .left            = .px(0),
-        .top             = .px(0),
-        .width           = .percent(100),
-        .height          = .percent(100),
-        .background_color = .rgba(0,0,0,0.5),
-        .justify_content = .center,
-        .align_items     = .center,
-        .gap             = .px(20),
+        .width = .percent(100),
+        .height = .percent(100),
+        .flex_wrap = .wrap,
     })({
-        Static.Text(
-            switch (p) { .x => "X wins!", .o => "O wins!" },
-            .{ .font_size = 24 }
-        );
-        Static.Button(init, .{})({
-            Static.Text("Play Again", .{});
-        });
+        for (&grid_boxes) |*box| {
+            Static.CtxButton(selectBox, .{box}, .{
+                .display = .flex,
+                .border_color = .hex("#CCCCCC"),
+                .height = .percent(33),
+                .width = .percent(33),
+                .border_thickness = .all(1),
+                .padding = .all(24),
+            })({
+                if (box.clicked) switch (box.player) {
+                    .x => drawX(),
+                    .o => drawO(),
+                };
+            });
+        }
+        if (winner) |winning_player| {
+            switch (winning_player) {
+                .x => {
+                    Static.Text("Player X Won!", .{
+                        .font_size = 24,
+                        .font_weight = 900,
+                        .text_color = .hex("#744DFF"),
+                        .margin = .{ .top = 32 },
+                    });
+                },
+                .o => {
+                    Static.Text("Player O Won!", .{
+                        .font_size = 24,
+                        .font_weight = 900,
+                        .text_color = .hex("#744DFF"),
+                        .margin = .{ .top = 32 },
+                    });
+                },
+            }
+        }
     });
 }
 ```
@@ -710,110 +826,140 @@ Some teams prefer an **explicit data‑signal** over a global force signal. The 
 
 ### 14.1 Full Source (array‑signal version)
 
-```zig
-const std    = @import("std");
+````zig
+const std = @import("std");
 const Fabric = @import("fabric");
 const Static = Fabric.Static;
+const Pure = Fabric.Pure;
 const Signal = Fabric.Signal;
 
-const Player = enum { x, o };
+const Player = enum {
+    x,
+    o,
+};
 
 const GridBox = struct {
     clicked: bool = false,
-    player : Player = undefined,
+    player: Player = undefined,
 };
 
-fn drawX() void {
-    Static.Svg(@embedFile("assets/X.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
-}
-fn drawO() void {
-    Static.Svg(@embedFile("assets/O.svg"), .{ .width = .fixed(42), .height = .fixed(42) });
+fn X() void {
+    Static.Svg(@embedFile("X.svg"), .{
+        .width = .fixed(42),
+        .height = .fixed(42),
+    });
 }
 
-var grid_boxes_sig : Signal([9]GridBox) = undefined; // 👈 the signal
-var current_player : Player             = .x;
-var winner         : ?Player            = null;
+fn O() void {
+    Static.Svg(@embedFile("O.svg"), .{
+        .width = .fixed(42),
+        .height = .fixed(42),
+    });
+}
 
-/// Initialise the board and signal.
+var grid_boxes_sig: Signal([9]GridBox) = undefined;
+var current_player: Player = .x;
+var winner: ?Player = null;
+
 pub fn init() void {
-    var fresh: [9]GridBox = undefined;
-    for (0..9) |i| fresh[i] = GridBox{};
-    grid_boxes_sig.init(fresh);
-    current_player = .x;
-    winner        = null;
+    var grid_boxes: [9]GridBox = undefined;
+    for (0..9) |i| {
+        grid_boxes[i] = GridBox{};
+    }
+    grid_boxes_sig.init(grid_boxes);
 }
 
 fn selectBox(index: usize) void {
-    // Early‑out when game finished or square already taken.
-    if (winner != null) return;
-    var box = grid_boxes_sig.getElement(index);
-    if (box.clicked) return;
+    var grid_box = grid_boxes_sig.getElement(index);
+    if (grid_box.clicked or winner != null) return; // ignore if game over
 
-    // Apply mutation.
-    box.clicked = true;
-    box.player  = current_player;
-    grid_boxes_sig.updateElement(index, box);
+    grid_box.clicked = true;
+    grid_box.player = current_player;
+    grid_boxes_sig.updateElement(index, grid_box);
 
-    // Win detection.
     if (checkWin()) |p| {
         winner = p;
     } else {
-        current_player = switch (current_player) { .x => .o, .o => .x };
+        // Toggle turn only if no winner yet
+        current_player = switch (current_player) {
+            .x => .o,
+            .o => .x,
+        };
     }
 }
 
-// 8 winning patterns (rows, columns, diagonals)
+// All 8 possible winning line combinations (rows, columns, diagonals)
 const win_patterns = [8][3]usize{
-    .{ 0, 1, 2 }, .{ 3, 4, 5 }, .{ 6, 7, 8 }, // rows
-    .{ 0, 3, 6 }, .{ 1, 4, 7 }, .{ 2, 5, 8 }, // cols
-    .{ 0, 4, 8 }, .{ 2, 4, 6 },               // diags
+    .{ 0, 1, 2 }, // top row
+    .{ 3, 4, 5 }, // middle row
+    .{ 6, 7, 8 }, // bottom row
+    .{ 0, 3, 6 }, // left column
+    .{ 1, 4, 7 }, // middle column
+    .{ 2, 5, 8 }, // right column
+    .{ 0, 4, 8 }, // main diagonal
+    .{ 2, 4, 6 }, // anti‑diagonal
 };
+
+/// Returns the winning player, or `null` if no one has yet won.
 fn checkWin() ?Player {
-    const grid = grid_boxes_sig.get();
-    for (win_patterns) |pat| {
-        const a = grid[pat[0]];
-        const b = grid[pat[1]];
-        const c = grid[pat[2]];
-        if (a.clicked and b.clicked and c.clicked and a.player == b.player and a.player == c.player)
+    for (win_patterns) |pattern| {
+        const a = grid_boxes_sig.get()[pattern[0]];
+        Fabric.println("{any}", .{a});
+        const b = grid_boxes_sig.get()[pattern[1]];
+        const c = grid_boxes_sig.get()[pattern[2]];
+
+        if (a.clicked and b.clicked and c.clicked and a.player == b.player and a.player == c.player) {
             return a.player;
+        }
     }
     return null;
 }
 
 pub fn render() void {
-    const grid = grid_boxes_sig.get(); // capture signal contents
     Static.FlexBox(.{
-        .width  = .percent(100),
+        .width = .percent(100),
         .height = .percent(100),
         .flex_wrap = .wrap,
     })({
-        for (grid, 0..) |square, i| {
-            Static.CtxButton(selectBox, .{ i }, .{
-                .display          = .flex,
-                .border_color     = .hex("#CCCCCC"),
+        for (grid_boxes_sig.get(), 0..) |grid_box, i| {
+            Static.CtxButton(selectBox, .{i}, .{
+                .display = .flex,
+                .border_color = .hex("#CCCCCC"),
+                .height = .percent(33),
+                .width = .percent(33),
                 .border_thickness = .all(1),
-                .width            = .percent(33),
-                .height           = .percent(33),
-                .justify_content  = .center,
-                .align_items      = .center,
-                .padding          = .all(24),
+                .padding = .all(24),
             })({
-                if (square.clicked) switch (square.player) {
-                    .x => drawX(),
-                    .o => drawO(),
-                };
+                if (grid_box.clicked) {
+                    switch (grid_box.player) {
+                        .x => X(),
+                        .o => O(),
+                    }
+                }
             });
         }
-
-        if (winner) |p| {
-            Static.Text(
-                switch (p) { .x => "Player X Won!", .o => "Player O Won!" },
-                .{ .font_size = 24, .font_weight = 900, .text_color = .hex("#744DFF"), .margin = .{ .top = 32 } }
-            );
+        if (winner) |winning_player| {
+            switch (winning_player) {
+                .x => {
+                    Static.Text("Player X Won!", .{
+                        .font_size = 24,
+                        .font_weight = 900,
+                        .text_color = .hex("#744DFF"),
+                        .margin = .{ .top = 32 },
+                    });
+                },
+                .o => {
+                    Static.Text("Player O Won!", .{
+                        .font_size = 24,
+                        .font_weight = 900,
+                        .text_color = .hex("#744DFF"),
+                        .margin = .{ .top = 32 },
+                    });
+                },
+            }
         }
     });
-}
-```
+}```
 
 ### 14.2 Comparing the Two Approaches
 
@@ -832,3 +978,4 @@ Both techniques are valid. Pick **force‑signal** for speed of implementation
 ---
 
 > **Challenge:** Extend either version with a _draw_ state (no winner after 9 moves) and an AI that picks random empty cells when it’s O’s turn.
+````
