@@ -978,4 +978,3 @@ Both techniques are valid. Pick **force‑signal** for speed of implementation
 ---
 
 > **Challenge:** Extend either version with a _draw_ state (no winner after 9 moves) and an AI that picks random empty cells when it’s O’s turn.
-````
