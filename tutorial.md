@@ -66,7 +66,6 @@ export fn instantiate(window_width: i32, window_height: i32) void {
 export fn renderUI(route_ptr: [*:0]u8) i32 {
     const route = std.mem.span(route_ptr);        // zero‑terminated C string → Zig slice
     fabric.renderCycle(route);                    // produce diff & command buffer
-    fabric.lib.allocator_global.free(route);      // return host‑allocated buffer
     return 0;
 }
 ```
