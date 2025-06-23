@@ -1,4 +1,4 @@
-# Fabric 🚧Under heavy development - breaking changes expected🚧
+# Fabric 🚧 Under heavy development 🚧
 
 A modern, lightweight web framework for building WebAssembly applications with Zig. Fabric enables developers to create fast, efficient web applications by compiling Zig code directly to WebAssembly, bringing systems programming performance to the browser.
 
@@ -21,6 +21,7 @@ A modern, lightweight web framework for building WebAssembly applications with Z
 ### Installation
 
 1. **Install Zig** (recommended: use [ZVM](https://www.zvm.app/) for version management)
+2. [Learn Zig](https://www.openmymind.net/learning_zig/language_overview_1/)
 
 # Install Fabric CLI
 

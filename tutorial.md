@@ -182,8 +182,32 @@ This section walks you through adding a fully‑working Tic‑Tac‑Toe game as 
 
 ### 9.1 Create the Route Folder
 
+Using the fabric cli, run...
+
+```bash
+fabric create mytictactoegame
+```
+
+```bash
+cd mytictactoegame
+fabric run
+```
+
+```bash
+fabric run
+```
+
+Visit http://localhost:5173/
+You should see a counter element which you can click!
+
+### 9.2 Create the tictac route
+
 ```bash
 mkdir src/routes/tictac
+```
+
+```bash
+cd src/routes/tictac
 ```
 
 Fabric’s router maps URL segments to matching folders under `src/routes`. Creating the `tictac` directory means that visiting **`/tictac`** in the browser will load whatever components you register from this folder.
@@ -218,14 +242,12 @@ pub fn render() void {
 }
 ```
 
-At this stage the page simply displays a centred title; we will flesh out the 3×3 grid and game state in upcoming sections.
-
 ### 9.3 Register the Page in `main.zig`
 
 Update the imports and add **one** line inside `instantiate()`:
 
 ```zig
-const TicTacToe = @import("routes/tictac/Page.zig");
+const TicTacToe = @import("routes/tictac/Page.zig"); // 👈 NEW;
 ...
 export fn instantiate(window_width: i32, window_height: i32) void {
     fb.init(.{
@@ -238,8 +260,9 @@ export fn instantiate(window_width: i32, window_height: i32) void {
     TicTacToe.init(); // 👈 NEW
 }
 ```
-
 No other code changes are required—`fabric.renderCycle` already chooses the correct page implementation based on the route string you pass in from JavaScript.
+
+At this stage the page simply displays a centred title; we will flesh out the 3×3 grid and game state in upcoming sections.
 
 ### 9.4 Smoke‑test the Route
 
@@ -262,12 +285,21 @@ In the next chapter you’ll replace the placeholder header with a 3 × 3 bo
 With the route skeleton in place, the next step is to render a 3 × 3 board. We’ll encapsulate board‑drawing in a separate component so it can be tested or swapped out easily later.
 
 ### 10.1 Add the `components` Directory
+Make sure your in the root directory
 
 ```bash
-mkdir -p src/components
+mkdir src/components
+```
+
+```bash
+mkdir cd src/components 
 ```
 
 ### 10.2 Implement `Grid.zig`
+```bash
+fabric gen component -o Grid
+```
+
 
 ```zig
 const std    = @import("std");
@@ -506,11 +538,11 @@ Instead of sprinkling many small `Signal`s throughout the grid, we can leverage 
 
 ### 12.2 Updated `Grid.zig` with `Signal`
 
-````zig
+```zig
 const std = @import("std");
 const Fabric = @import("fabric");
 const Static = Fabric.Static;
-const Signal = Fabric.Signal // 👈 Add the signal;
+const Signal = Fabric.Signal; // 👈 Add the signal;
 
 const Player = enum { x, o };
 
@@ -582,7 +614,8 @@ pub fn render() void {
             });
         }
     });
-}```
+}
+```
 
 ### 12.3 Quick test
 
@@ -624,7 +657,7 @@ fn checkWin() ?Player {
     }
     return null;
 }
-````
+```
 
 ### 13.2 Integrate with `selectBox`
 
@@ -825,7 +858,7 @@ Some teams prefer an **explicit data‑signal** over a global force signal. The 
 
 ### 14.1 Full Source (array‑signal version)
 
-````zig
+```zig
 const std = @import("std");
 const Fabric = @import("fabric");
 const Static = Fabric.Static;
