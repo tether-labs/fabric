@@ -52,7 +52,10 @@ fabric --help
 fabric create myapp
 ```
 
-## 📖 Documentation
+## 📖 Tutorial 
+[Fabric Tutorial](https://github.com/vic-Rokx/fabric/blob/main/tutorial.md)
+
+## 📖 Documentation 
 
 ### Core Concepts
 
