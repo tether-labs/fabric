@@ -8,26 +8,6 @@ const Self = @This();
 
 var layout_path: []const u8 = "";
 pub fn reconcile(old_ctx: *UIContext, new_ctx: *UIContext, _: []const u8) void {
-    // const route = Fabric.getWindowPath();
-    // var itr = std.mem.tokenizeScalar(u8, route, '/');
-    // var buf = std.ArrayList(u8).init(Fabric.allocator_global);
-    // blk: while (itr.next()) |sub| {
-    //     if (itr.peek() == null) {
-    //         break :blk;
-    //     }
-    //     // buf.append('/') catch |err| {
-    //     //     Fabric.printlnSrcErr("Allocator ran out of space {any}\n", .{err}, @src());
-    //     //     return;
-    //     // };
-    //
-    //     buf.appendSlice(sub) catch |err| {
-    //         Fabric.printlnSrcErr("Allocator ran out of space {any}\n", .{err}, @src());
-    //         return;
-    //     };
-    // }
-    // const parent_path = buf.toOwnedSlice() catch return;
-    // layout_path = std.fmt.allocPrint(Fabric.allocator_global, "layout-{s}", .{parent_path}) catch return;
-    // Fabric.printlnSrc("Layout Path {s}", .{layout_path}, @src());
     traverseNodes(old_ctx.root.?, new_ctx.root.?);
     Fabric.Theme.switched_theme = false;
 }
@@ -212,19 +192,9 @@ fn compareOptionalSlice(
 }
 
 fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
-    // If we are a layout node, we want to skip!
-    // if (old_node.type == .Layout and std.mem.eql(u8, old_node.uuid, layout_path)) {
-    //     old_node.dirty = false;
-    //     new_node.dirty = false;
-    //     Fabric.printlnSrc("Skipping Layout Nodes", .{}, @src());
-    //     return;
-    // }
-    // First we wanna check if the nodes are static or not
-    // If it is static this mean no signals and so only style and props change
-
     if (old_node.dirty) {
         new_node.dirty = true;
-    } else if (Fabric.Theme.switched_theme) {
+    } else if (Fabric.rerender_everything) {
         new_node.dirty = true;
     } else if (!std.mem.eql(u8, old_node.uuid, new_node.uuid)) {
         // Fabric.printlnSrc("Dirty node: {any} {s}", .{ new_node.type, new_node.uuid }, @src());

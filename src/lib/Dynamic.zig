@@ -7,6 +7,7 @@ const Signal = @import("Rune.zig").Signal;
 const Element = @import("Element.zig").Element;
 const Fabric = @import("Fabric.zig");
 const Grain = Fabric.Grain;
+const LifeCycle = Fabric.LifeCycle;
 
 const Style = types.Style;
 const EventType = types.EventType;
@@ -250,4 +251,18 @@ pub inline fn Input(
 
     local.CloseElement();
     return;
+}
+
+
+pub inline fn FlexBox(comptime T : type, signal: *Signal(T), style: Style) fn (void) void {
+    const elem_decl = ElementDecl{
+        .style = style,
+        .dynamic = .static,
+        .elem_type = .FlexBox,
+    };
+
+    const ui_node = LifeCycle.open(elem_decl);
+    LifeCycle.configure(elem_decl);
+    signal.subscribe(ui_node);
+    return LifeCycle.close;
 }

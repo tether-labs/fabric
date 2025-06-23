@@ -34,9 +34,10 @@ const BoundingBox = types.BoundingBox;
 const InputDetails = types.InputDetails;
 const Dimensions = types.Dimensions;
 const InputParams = types.InputParams;
-const ElementDecl = types.ElementDeclaration;
+pub const ElementDecl = types.ElementDeclaration;
+pub const StateType = types.StateType;
 const RenderCommand = types.RenderCommand;
-const ElementType = types.ElementType;
+pub const ElementType = types.ElementType;
 const Hover = types.Hover;
 const Transform = types.Transform;
 const TransformType = types.TransformType;
@@ -45,6 +46,7 @@ pub var ctx_map: std.StringHashMap(*UIContext) = undefined;
 pub var page_map: std.StringHashMap(*const fn () void) = undefined;
 pub var page_deinit_map: std.StringHashMap(*const fn () void) = undefined;
 pub var global_rerender: bool = false;
+pub var rerender_everything: bool = false;
 pub var grain_rerender: bool = false;
 pub var router: Router = undefined;
 
@@ -298,7 +300,7 @@ const Class = struct {
 pub var classes_to_add: std.ArrayList(Class) = undefined;
 pub var classes_to_remove: std.ArrayList(Class) = undefined;
 pub var component_subscribers: std.ArrayList(*Rune.ComponentNode) = undefined;
-pub var grain_subs: std.ArrayList(*GrainStruct.ComponentNode) = undefined;
+// pub var grain_subs: std.ArrayList(*GrainStruct.ComponentNode) = undefined;
 pub var motions: std.ArrayList(Animation.Motion) = undefined;
 // Define a type for continuation functions
 var callback_count: u32 = 0;
@@ -348,7 +350,7 @@ pub fn init(target: *Fabric, config: FabricConfig) void {
     created_funcs = std.AutoHashMap(u32, *const fn () void).init(config.allocator.*);
     motions = std.ArrayList(Animation.Motion).init(config.allocator.*);
     component_subscribers = std.ArrayList(*Rune.ComponentNode).init(config.allocator.*);
-    grain_subs = std.ArrayList(*GrainStruct.ComponentNode).init(config.allocator.*);
+    // grain_subs = std.ArrayList(*GrainStruct.ComponentNode).init(config.allocator.*);
     classes_to_add = std.ArrayList(Class).init(config.allocator.*);
     classes_to_remove = std.ArrayList(Class).init(config.allocator.*);
     futures = std.ArrayList(Future).init(std.heap.page_allocator);
@@ -383,9 +385,9 @@ pub fn deinit(_: *Fabric) void {
     for (component_subscribers.items) |node| {
         node.data.deinitFn(node);
     }
-    for (grain_subs.items) |node| {
-        node.data.deinitFn(node);
-    }
+    // for (grain_subs.items) |node| {
+    //     node.data.deinitFn(node);
+    // }
     // then we deinit the router
     router.deinit();
     // then we deinit the button registry
@@ -448,7 +450,7 @@ pub fn deinit(_: *Fabric) void {
 
     Fabric.motions.deinit();
     component_subscribers.deinit();
-    grain_subs.deinit();
+    // grain_subs.deinit();
 
     // then we iterate trhough the context maps
     var itr = ctx_map.iterator();
@@ -458,6 +460,50 @@ pub fn deinit(_: *Fabric) void {
         allocator_global.destroy(item.value_ptr.*);
     }
     ctx_map.deinit();
+}
+
+/// The LifeCycle struct
+/// allows control over ui node in the tree
+/// exposes open, configure, and close, must be called in this order to attach the node to the tree
+pub const LifeCycle = struct {
+    /// open takes an element decl and return a *UINode
+    /// this opens the element to allow for children
+    /// within the dom tree, node this current opened node is the current top stack node, ie any children
+    /// will reference this node as their parent
+    pub fn open(elem_decl: ElementDecl) ?*UINode {
+        const ui_node = Fabric.current_ctx.open(elem_decl) catch |err| {
+            println("{any}\n", .{err});
+            return null;
+        };
+        return ui_node;
+    }
+    /// close, closes the current UINode
+    pub fn close(_: void) void {
+        _ = Fabric.current_ctx.close();
+        return;
+    }
+    /// configure is used internally to configure the UINode, used for adding text props, or hover props ect
+    /// within configure, we check if the node has a id if so we use that, otherwise later we generate one
+    /// we also set various props, such as text, style, is an SVG or not
+    /// Any mainpulation of the node after this point is considered undefined behaviour be cautious;
+    pub fn configure(elem_decl: ElementDecl) void {
+        _ = Fabric.current_ctx.configure(elem_decl);
+    }
+};
+
+/// Force rerender forces the entire dom tree to check props of all dynamic and pure components and rerender the ui
+/// since Fabric is built with zig and wasm, checking all props of 10000s of nodes and ui components is cheap
+/// feel free to abuse force, its essentially a global signal
+pub fn force() void {
+    Fabric.global_rerender = true;
+}
+
+/// Force rerender forces the entire dom tree to check props and rerender the entire ui
+/// since Fabric is built with zig and wasm, checking all props of 10000s of nodes and ui components is cheap
+/// feel free to abuse force, its essentially a global signal
+pub fn forceEverything() void {
+    Fabric.rerender_everything = true;
+    Fabric.global_rerender = true;
 }
 
 pub fn initLayout(fabric: *Fabric, style: Style) !void {
@@ -506,6 +552,10 @@ pub export fn rerenderLayout() void {
 
 var clean_up_ctx: *UIContext = undefined;
 pub fn renderCycle(route: []const u8) void {
+
+    // if (grain_rerender) {
+    // }
+
     key_depth_map.clearRetainingCapacity();
     Fabric.registry.clearRetainingCapacity();
 
@@ -1523,6 +1573,7 @@ export fn shouldRerender() bool {
 
 export fn resetRerender() void {
     global_rerender = false;
+    rerender_everything = false;
 }
 
 export fn setRerenderTrue() void {

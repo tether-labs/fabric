@@ -336,20 +336,9 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     const stack = ui_ctx.stack orelse unreachable;
     const current_open = stack.ptr orelse unreachable;
     const style = elem_decl.style;
-    //
-    // if (style.id == null) {
-    //     const parent = current_open.parent orelse {
-    //         println("PARENT UUID IS NULL\n", .{});
-    //         return current_open;
-    //     };
-    //     const parent_uuid = parent.uuid;
-    //     const key = KeyGenerator.generateKey(elem_decl.elem_type, parent_uuid, elem_decl.style, null);
-    //     current_open.uuid = key;
-    // } else {
     if (style.id != null) {
         current_open.uuid = style.id.?;
     }
-    // }
 
     if (elem_decl.elem_type == .Svg) {
         current_open.text = elem_decl.svg;
@@ -376,14 +365,6 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     current_open.dynamic = elem_decl.dynamic;
 
     return current_open;
-    // createElement(
-    //     current_open.uuid[0..].ptr,
-    //     36,
-    //     @intFromEnum(current_open.type),
-    //     current_open.style.btn_id,
-    //     currentruet_open.text.ptr,
-    //     current_open.text.len,
-    // );
 }
 
 // close is breadth post order first

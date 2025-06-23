@@ -1155,6 +1155,7 @@ pub const StateType = enum {
     static,
     dynamic,
     animation,
+    grain,
 };
 
 pub const ButtonType = enum {

@@ -532,7 +532,6 @@ pub fn Signal(comptime T: type) type {
                         else => {},
                     }
                 }
-
                 self._parent = node;
                 self.markChildrenDirty(node);
             }
