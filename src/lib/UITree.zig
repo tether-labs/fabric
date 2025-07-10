@@ -49,7 +49,7 @@ pub const CommandsTree = struct {
 };
 
 pub const UINode = struct {
-    dirty: bool = true,
+    dirty: bool = false,
     parent: ?*UINode = null,
     type: EType = EType.FlexBox,
     style: Style = undefined,
@@ -68,6 +68,7 @@ pub const UINode = struct {
     input_params: ?InputParams = null,
     event_type: ?types.EventType = null,
     dynamic: types.StateType = .pure,
+    aria_label: ?[]const u8 = null,
 
     pub fn init(parent: ?*UINode, etype: EType, allocator: *std.mem.Allocator) !*UINode {
         const node = try allocator.create(UINode);
@@ -126,11 +127,6 @@ pub fn initLayout(ui_ctx: *UIContext, allocator: *std.mem.Allocator, width: f32,
     };
     ui_ctx.root_stack_ptr = item;
     ui_ctx.stack = item;
-    // try ui_ctx.stackRegister(node_ptr);
-    // ui_ctx.uuids.put(node_ptr.uuid, node_ptr) catch |err| {
-    //     println("Error out of Memory, {any}\n", .{err});
-    //     return;
-    // };
 }
 
 fn recurseDestroyItems(ui_ctx: *UIContext) void {
@@ -188,22 +184,6 @@ fn recurseDestroy(ui_ctx: *UIContext, ui_node: *UINode) void {
     ui_node.children = undefined;
 }
 
-// pub fn createRoot(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
-//     const node_ptr = try UINode.init(null, elem_decl.elem_type, ui_ctx.allocator);
-//     node_ptr.uuid = "fabric_root_id";
-//
-//     const item: *Item = try ui_ctx.memory_pool.create();
-//     item.* = .{
-//         .ptr = node_ptr,
-//     };
-//     ui_ctx.root_stack_ptr = item;
-//     ui_ctx.stack = item;
-//     try ui_ctx.stackRegister(node_ptr);
-//
-//     ui_ctx.root = node_ptr;
-//     return node_ptr;
-// }
-
 pub fn stackRegister(ui_ctx: *UIContext, ui_node: *UINode) !void {
     const item: *Item = try ui_ctx.allocator.create(Item);
     const current_stack = ui_ctx.stack;
@@ -257,7 +237,6 @@ fn setUUID(parent: *UINode, child: *UINode) void {
     Fabric.key_depth_map.put(parent.uuid, KeyGenerator.getCount()) catch |err| {
         Fabric.printlnSrcErr("{any}", .{err}, @src());
     };
-    // Fabric.printlnSrcErr("Hellllll", .{}, @src());
 }
 
 // Open takes a current stack and adds the elements depth first search
@@ -269,22 +248,9 @@ pub fn open(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
     const stack = ui_ctx.stack.?;
     // Parent node
     const current_open = stack.ptr orelse unreachable;
-    // const style = elem_decl.style;
-
-    // var node_uuid: []const u8 = "";
-    // if (style.id == null) {
-    //     const parent_uuid = current_open.uuid;
-    //     const key = KeyGenerator.generateKey(elem_decl.elem_type, parent_uuid, elem_decl.style, null);
-    //     node_uuid = key;
-    // } else {
-    //     node_uuid = style.id.?;
-    // }
-
-    // const node = ui_ctx.uuids.get(node_uuid) orelse {
     const node = try UINode.init(current_open, elem_decl.elem_type, ui_ctx.allocator);
 
     node.dynamic = elem_decl.dynamic;
-    // node.uuid = node_uuid;
 
     // Here we register the node to be open
     if (!current_open.show) {
@@ -293,27 +259,12 @@ pub fn open(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
         node.show = elem_decl.show;
     }
 
-    // node.show = true;
     try current_open.addChild(node);
     try ui_ctx.stackRegister(node);
 
-    // uuid_depth += 1;
     node.uuid = elem_decl.style.id orelse "";
     setUUID(current_open, node);
-    // ui_ctx.uuids.put(node_uuid, node) catch |err| {
-    //     println("Error out of Memory, {any}\n", .{err});
-    //     return current_open;
-    // };
-    return node;
-    // };
-    // Here we register the node to be open
-    // if (!current_open.show) {
-    //     node.show = current_open.show;
-    // } else {
-    //     node.show = elem_decl.show;
-    // }
-    // try ui_ctx.stackRegister(node);
-    // return node;
+   return node;
 }
 
 fn reset(_: *UIContext, ui_node: *UINode) void {
@@ -329,7 +280,6 @@ fn reset(_: *UIContext, ui_node: *UINode) void {
     ui_node.style = style;
     ui_node.type = ui_node.type;
     ui_node.style = style;
-    // }
 }
 
 pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
@@ -360,9 +310,11 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     current_open.href = elem_decl.href;
 
     current_open.type = elem_decl.elem_type;
-    current_open.style = style;
+    // We need to think about this, ie do we want to have dfeaults set so they are always used or for users to explictily pass a default to use
+    current_open.style = Style.override(style);
     current_open.hooks = elem_decl.hooks;
     current_open.dynamic = elem_decl.dynamic;
+    current_open.aria_label = elem_decl.aria_label;
 
     return current_open;
 }
@@ -372,17 +324,10 @@ pub fn fitWidths(ui_ctx: *UIContext) void {
     while (ui_ctx.stack) |stack| {
         const ui_node = stack.ptr orelse unreachable;
 
-        // if (!ui_node.show) {
-        //     ui_ctx.stackPop();
-        //     return;
-        // }
-
         const parent_op = ui_node.parent;
         const padding = ui_node.style.padding;
         const margin = ui_node.style.margin;
         const element = ui_node;
-        // print("Config Node Width{any}{any}\n", .{ ui_node.style.width.size.minmax.max, ui_node.type });
-        // element.calculated_width = ui_node.style.width.size.minmax.max;
         const padding_w: f32 = @floatFromInt(padding.left + padding.right);
         const padding_w_m: f32 = @floatFromInt(padding.left + padding.right);
         const margin_w: f32 = @floatFromInt(margin.left + margin.right);
@@ -419,43 +364,43 @@ pub fn close(ui_ctx: *UIContext) void {
     } else {
         Fabric.printlnSrcErr("Depth is negative {}", .{uuid_depth}, @src());
     }
-    const stack = ui_ctx.stack orelse unreachable;
-    const ui_node = stack.ptr orelse unreachable;
+    // const stack = ui_ctx.stack orelse unreachable;
+    // const ui_node = stack.ptr orelse unreachable;
 
     // if (!ui_node.show) {
     //     ui_ctx.stackPop();
     //     return;
     // }
 
-    const parent_op = ui_node.parent;
-    const padding = ui_node.style.padding;
-    const margin = ui_node.style.margin;
-    const element = ui_node;
+    // const parent_op = ui_node.parent;
+    // const padding = ui_node.style.padding;
+    // const margin = ui_node.style.margin;
+    // const element = ui_node;
     // element.calculated_width = ui_node.style.width.size.minmax.max;
-    const padding_w: f32 = @floatFromInt(padding.left + padding.right);
-    const padding_w_m: f32 = @floatFromInt(padding.left + padding.right);
-    const margin_w: f32 = @floatFromInt(margin.left + margin.right);
+    // const padding_w: f32 = @floatFromInt(padding.left + padding.right);
+    // const padding_w_m: f32 = @floatFromInt(padding.left + padding.right);
+    // const margin_w: f32 = @floatFromInt(margin.left + margin.right);
+    //
+    // if (ui_node.style.width.type != .fixed and ui_node.style.width.type != .grow and ui_node.style.width.type != .elastic and ui_node.style.width.type != .percent) {
+    //     // element.calculated_width += padding_w;
+    //     // element.min_width += padding_w_m;
+    // }
 
-    if (ui_node.style.width.type != .fixed and ui_node.style.width.type != .grow and ui_node.style.width.type != .elastic and ui_node.style.width.type != .percent) {
-        element.calculated_width += padding_w;
-        element.min_width += padding_w_m;
-    }
-
-    if (parent_op) |parent| {
-        const child_gap: f32 = @floatFromInt((parent.children.items.len - 1) * parent.style.child_gap);
-        // Here we lay out the width and heights or the parent based on the child elements
-        if (parent.style.width.type != .fixed and parent.style.width.type != .grow and parent.style.width.type != .percent) {
-            if (parent.style.direction == .row) {
-                parent.calculated_width += child_gap;
-                parent.calculated_width += margin_w;
-                parent.calculated_width += element.calculated_width;
-                parent.min_width += element.min_width;
-            } else {
-                parent.min_width = @max(element.min_width, parent.min_width);
-                parent.calculated_width = @max(element.calculated_width, parent.calculated_width);
-            }
-        }
-    }
+    // if (parent_op) |parent| {
+    //     const child_gap: f32 = @floatFromInt((parent.children.items.len - 1) * parent.style.child_gap);
+    //     // Here we lay out the width and heights or the parent based on the child elements
+    //     if (parent.style.width.type != .fixed and parent.style.width.type != .grow and parent.style.width.type != .percent) {
+    //         if (parent.style.direction == .row) {
+    //             parent.calculated_width += child_gap;
+    //             // parent.calculated_width += margin_w;
+    //             parent.calculated_width += element.calculated_width;
+    //             parent.min_width += element.min_width;
+    //         } else {
+    //             parent.min_width = @max(element.min_width, parent.min_width);
+    //             parent.calculated_width = @max(element.calculated_width, parent.calculated_width);
+    //         }
+    //     }
+    // }
 
     ui_ctx.stackPop();
 }
@@ -620,10 +565,18 @@ pub fn traverseChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_parent:
     if (parent_op) |parent| {
         if (parent.children.items.len > 0) {
             ui_tree_parent.children = std.ArrayList(*CommandsTree).init(ui_ctx.allocator.*);
-            const padding_left: f32 = @floatFromInt(parent.style.padding.left);
-            const padding_right: f32 = @floatFromInt(parent.style.padding.right);
-            const padding_top: f32 = @floatFromInt(parent.style.padding.top);
-            const padding_bottom: f32 = @floatFromInt(parent.style.padding.bottom);
+            var padding_left: f32 = 0;
+            var padding_right: f32 = 0;
+            var padding_top: f32 = 0;
+            var padding_bottom: f32 = 0;
+
+            if (parent.style.padding) |padding| {
+                padding_left = @floatFromInt(padding.left);
+                padding_right = @floatFromInt(padding.right);
+                padding_top = @floatFromInt(padding.top);
+                padding_bottom = @floatFromInt(padding.bottom);
+            }
+
             var center_x_offset: f32 = 0.0;
             var center_y_offset: f32 = 0.0;
             const effective_width: f32 = parent.calculated_width - padding_left - padding_right;
@@ -631,10 +584,17 @@ pub fn traverseChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_parent:
             var accumalated_child_width: f32 = 0.0;
             var accumalated_child_height: f32 = 0.0;
             for (parent.children.items) |child| {
-                const margin_left: f32 = @floatFromInt(child.style.margin.left);
-                const margin_right: f32 = @floatFromInt(child.style.margin.right);
-                const margin_top: f32 = @floatFromInt(child.style.margin.top);
-                const margin_bottom: f32 = @floatFromInt(child.style.margin.bottom);
+                var margin_left: f32 = 0;
+                var margin_right: f32 = 0;
+                var margin_top: f32 = 0;
+                var margin_bottom: f32 = 0;
+
+                if (parent.style.margin) |margin| {
+                    margin_left = @floatFromInt(margin.left);
+                    margin_right = @floatFromInt(margin.right);
+                    margin_top = @floatFromInt(margin.top);
+                    margin_bottom = @floatFromInt(margin.bottom);
+                }
 
                 accumalated_child_width += child.calculated_width + margin_left + margin_right;
                 accumalated_child_height += child.calculated_height + margin_top + margin_bottom;
@@ -684,10 +644,17 @@ pub fn traverseChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_parent:
                     center_y_offset = 0;
                 }
 
-                const margin_left: f32 = @floatFromInt(child.style.margin.left);
-                const margin_right: f32 = @floatFromInt(child.style.margin.right);
-                const margin_top: f32 = @floatFromInt(child.style.margin.top);
-                const margin_bottom: f32 = @floatFromInt(child.style.margin.bottom);
+                var margin_left: f32 = 0;
+                var margin_right: f32 = 0;
+                var margin_top: f32 = 0;
+                var margin_bottom: f32 = 0;
+
+                if (parent.style.margin) |margin| {
+                    margin_left = @floatFromInt(margin.left);
+                    margin_right = @floatFromInt(margin.right);
+                    margin_top = @floatFromInt(margin.top);
+                    margin_bottom = @floatFromInt(margin.bottom);
+                }
 
                 child.calculated_x += padding_left + parent.calculated_x + center_x_offset + margin_left;
                 child.calculated_y += padding_top + parent.calculated_y + center_y_offset + margin_top;
@@ -765,10 +732,17 @@ pub fn traverseCmdsChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_par
 
     if (parent_op) |parent| {
         if (parent.children.items.len > 0) {
-            const padding_left: f32 = @floatFromInt(parent.style.padding.left);
-            const padding_right: f32 = @floatFromInt(parent.style.padding.right);
-            const padding_top: f32 = @floatFromInt(parent.style.padding.top);
-            const padding_bottom: f32 = @floatFromInt(parent.style.padding.bottom);
+            var padding_left: f32 = 0;
+            var padding_right: f32 = 0;
+            var padding_top: f32 = 0;
+            var padding_bottom: f32 = 0;
+
+            if (parent.style.padding) |padding| {
+                padding_left = @floatFromInt(padding.left);
+                padding_right = @floatFromInt(padding.right);
+                padding_top = @floatFromInt(padding.top);
+                padding_bottom = @floatFromInt(padding.bottom);
+            }
             var center_x_offset: f32 = 0.0;
             var center_y_offset: f32 = 0.0;
             const effective_width: f32 = parent.calculated_width - padding_left - padding_right;
@@ -776,10 +750,17 @@ pub fn traverseCmdsChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_par
             var accumalated_child_width: f32 = 0.0;
             var accumalated_child_height: f32 = 0.0;
             for (parent.children.items) |child| {
-                const margin_left: f32 = @floatFromInt(child.style.margin.left);
-                const margin_right: f32 = @floatFromInt(child.style.margin.right);
-                const margin_top: f32 = @floatFromInt(child.style.margin.top);
-                const margin_bottom: f32 = @floatFromInt(child.style.margin.bottom);
+                var margin_left: f32 = 0;
+                var margin_right: f32 = 0;
+                var margin_top: f32 = 0;
+                var margin_bottom: f32 = 0;
+
+                if (parent.style.margin) |margin| {
+                    margin_left = @floatFromInt(margin.left);
+                    margin_right = @floatFromInt(margin.right);
+                    margin_top = @floatFromInt(margin.top);
+                    margin_bottom = @floatFromInt(margin.bottom);
+                }
 
                 accumalated_child_width += child.calculated_width + margin_left + margin_right;
                 accumalated_child_height += child.calculated_height + margin_top + margin_bottom;
@@ -829,10 +810,17 @@ pub fn traverseCmdsChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_par
                     center_y_offset = 0;
                 }
 
-                const margin_left: f32 = @floatFromInt(child.style.margin.left);
-                const margin_right: f32 = @floatFromInt(child.style.margin.right);
-                const margin_top: f32 = @floatFromInt(child.style.margin.top);
-                const margin_bottom: f32 = @floatFromInt(child.style.margin.bottom);
+                var margin_left: f32 = 0;
+                var margin_right: f32 = 0;
+                var margin_top: f32 = 0;
+                var margin_bottom: f32 = 0;
+
+                if (parent.style.margin) |margin| {
+                    margin_left = @floatFromInt(margin.left);
+                    margin_right = @floatFromInt(margin.right);
+                    margin_top = @floatFromInt(margin.top);
+                    margin_bottom = @floatFromInt(margin.bottom);
+                }
 
                 child.calculated_x += padding_left + parent.calculated_x + center_x_offset + margin_left;
                 child.calculated_y += padding_top + parent.calculated_y + center_y_offset + margin_top;
@@ -1067,8 +1055,19 @@ pub fn growChildElementWidth(ui_ctx: *UIContext, parent: *UINode) void {
     };
     if (parent.children.items.len == 0) return;
     var remaining_width = parent.calculated_width;
-    const padding_left: f32 = @floatFromInt(parent.style.padding.left);
-    const padding_right: f32 = @floatFromInt(parent.style.padding.right);
+
+    const padding_left: f32 = 0;
+    const padding_right: f32 = 0;
+    const padding_top: f32 = 0;
+    const padding_bottom: f32 = 0;
+
+    if (parent.style.padding) |padding| {
+        padding_left = @floatFromInt(padding.left);
+        padding_right = @floatFromInt(padding.right);
+        padding_top = @floatFromInt(padding.top);
+        padding_bottom = @floatFromInt(padding.bottom);
+    }
+
     remaining_width -= padding_left + padding_right;
     for (parent.children.items) |child| {
         if (parent.style.direction == .row and child.style.width.type != .percent) {

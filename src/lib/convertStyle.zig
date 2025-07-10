@@ -79,6 +79,8 @@ fn sizingTypeToCSS(sizing: Sizing, writer: anytype) !void {
         .fixed => try writer.print("{d}px", .{sizing.size.minmax.min}),
         .elastic => try writer.writeAll("auto"), // Could also use min/max width/height in separate properties
         .elastic_percent => try writer.print("{d}%", .{sizing.size.percent.min}),
+        .clamp_px => try writer.print("clamp({d}px,{d}px,{d}px)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
+        .clamp_percent => try writer.print("clamp({d}%,{d}px,{d}%)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
         .none, .grow => {},
     }
 }
@@ -87,7 +89,7 @@ fn posTypeToCSS(pos: Pos, writer: anytype) !void {
     switch (pos.type) {
         .fit => try writer.writeAll("fit-content"),
         .grow => try writer.writeAll("auto"),
-        .percent => try writer.print("{d}%", .{pos.value * 100}),
+        .percent => try writer.print("{d}%", .{pos.value}),
         .fixed => try writer.print("{d}px", .{pos.value}),
     }
 }
@@ -298,14 +300,15 @@ fn whiteSpaceToCSS(white_space: WhiteSpace, writer: anytype) !void {
 // Function to convert FlexType enum to a CSS string
 fn flexTypeToCSS(flex_type: FlexType, writer: anytype) !void {
     switch (flex_type) {
-        .flex => try writer.writeAll("flex"),
-        .inline_flex => try writer.writeAll("inline-flex"),
-        .inline_block => try writer.writeAll("inline-block"),
-        .inherit => try writer.writeAll("inherit"),
-        .initial => try writer.writeAll("initial"),
-        .revert => try writer.writeAll("revert"),
-        .unset => try writer.writeAll("unset"),
-        .none => try writer.writeAll("none"),
+        .Flex, .Center => try writer.writeAll("flex"),
+        .InlineFlex => try writer.writeAll("inline-flex"),
+        .InlineBlock => try writer.writeAll("inline-block"),
+        .Inherit => try writer.writeAll("inherit"),
+        .Initial => try writer.writeAll("initial"),
+        .Revert => try writer.writeAll("revert"),
+        .Unset => try writer.writeAll("unset"),
+        .None => try writer.writeAll("none"),
+        .Inline => try writer.writeAll("inline"),
     }
 }
 
@@ -350,18 +353,54 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
     if (ptr.type == .FlexBox) {
         writer.writeAll("  display: flex;\n") catch {};
         writer.print("  flex-direction: {s};\n", .{directionToCSS(style.direction)}) catch {};
+
+        // justify content is x by default
+        // align items is y by default and they swap when doing direction .column
+        if (style.direction == .row) {
+            writer.print("  justify-content: {s};\n", .{alignmentToCSS(style.child_alignment.x)}) catch {};
+            writer.print("  align-items: {s};\n", .{alignmentToCSS(style.child_alignment.y)}) catch {};
+        } else {
+            writer.print("  align-items: {s};\n", .{alignmentToCSS(style.child_alignment.x)}) catch {};
+            writer.print("  justify-content: {s};\n", .{alignmentToCSS(style.child_alignment.y)}) catch {};
+        }
     } else if (style.display) |d| {
-        writer.writeAll("  display: ") catch {};
-        flexTypeToCSS(d, writer) catch {};
-        writer.writeAll(";\n") catch {};
-        writer.print("  flex-direction: {s};\n", .{directionToCSS(style.direction)}) catch {};
+        if (ptr.text.len > 0 and d == .Center and ptr.type != .Svg) {
+            _ = writer.writeAll("  text-align: center;\n") catch {};
+        } else {
+            writer.writeAll("  display: ") catch {};
+            flexTypeToCSS(d, writer) catch {};
+            writer.writeAll(";\n") catch {};
+            writer.print("  flex-direction: {s};\n", .{directionToCSS(style.direction)}) catch {};
+
+            if (d == .Center) {
+                _ = writer.writeAll("  justify-content: center;\n") catch {};
+                _ = writer.writeAll("  align-items: center;\n") catch {};
+            } else {
+                if (style.direction == .row) {
+                    writer.print("  justify-content: {s};\n", .{alignmentToCSS(style.child_alignment.x)}) catch {};
+                    writer.print("  align-items: {s};\n", .{alignmentToCSS(style.child_alignment.y)}) catch {};
+                } else {
+                    writer.print("  align-items: {s};\n", .{alignmentToCSS(style.child_alignment.x)}) catch {};
+                    writer.print("  justify-content: {s};\n", .{alignmentToCSS(style.child_alignment.y)}) catch {};
+                }
+            }
+        }
     }
 
     // Write width and height
     if (style.width.type != .none and style.width.type != .grow) {
-        writer.writeAll("  width: ") catch {};
-        sizingTypeToCSS(style.width, writer) catch {};
-        writer.writeAll(";\n") catch {};
+        if (style.width.type == .elastic_percent) {
+            writer.writeAll("  max-width: ") catch {};
+            writer.print("{d}%", .{style.width.size.percent.max}) catch {};
+            writer.writeAll(";\n") catch {};
+            writer.writeAll("  min-width: ") catch {};
+            writer.print("{d}%", .{style.width.size.percent.min}) catch {};
+            writer.writeAll(";\n") catch {};
+        } else {
+            writer.writeAll("  width: ") catch {};
+            sizingTypeToCSS(style.width, writer) catch {};
+            writer.writeAll(";\n") catch {};
+        }
     } else if (style.width.type == .grow) {
         writer.writeAll("flex: 1;\n") catch {};
     }
@@ -389,11 +428,36 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         writer.print("  font-weight: {d};\n", .{sf}) catch {};
     }
 
-
     if (style.font_family.len > 0) {
         writer.print("  font-family: {s};\n", .{style.font_family}) catch {};
     }
-    if (style.border_thickness) |border_thickness| {
+
+    if (style.border) |border| {
+        const border_thickness = border.thickness;
+        writer.print("  border-width: {d}px {d}px {d}px {d}px;\n", .{
+            border_thickness.top,
+            border_thickness.right,
+            border_thickness.bottom,
+            border_thickness.left,
+        }) catch {};
+
+        if (border.color) |border_color| {
+            writer.writeAll("  border-color: ") catch {};
+            colorToCSS(border_color, writer) catch {};
+            writer.writeAll(";\n") catch {};
+        }
+        writer.writeAll("  border-style: solid;\n") catch {};
+
+        // Border radius
+        if (border.radius) |border_radius| {
+            writer.print("  border-radius: {d}px {d}px {d}px {d}px;\n", .{
+                border_radius.top_left,
+                border_radius.top_right,
+                border_radius.bottom_right,
+                border_radius.bottom_left,
+            }) catch {};
+        }
+    } else if (style.border_thickness) |border_thickness| {
         writer.print("  border-width: {d}px {d}px {d}px {d}px;\n", .{
             border_thickness.top,
             border_thickness.right,
@@ -407,22 +471,18 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
             writer.writeAll(";\n") catch {};
         }
         writer.writeAll("  border-style: solid;\n") catch {};
+    } else if (ptr.type == .Button or ptr.type == .CtxButton) {
+        _ = writer.writeAll("  border-width: 0px;\n") catch {};
     }
 
     // Border radius
     if (style.border_radius) |border_radius| {
-        if (border_radius.top_left > 0 or
-            border_radius.top_right > 0 or
-            border_radius.bottom_right > 0 or
-            border_radius.bottom_left > 0)
-        {
-            writer.print("  border-radius: {d}px {d}px {d}px {d}px;\n", .{
-                border_radius.top_left,
-                border_radius.top_right,
-                border_radius.bottom_right,
-                border_radius.bottom_left,
-            }) catch {};
-        }
+        writer.print("  border-radius: {d}px {d}px {d}px {d}px;\n", .{
+            border_radius.top_left,
+            border_radius.top_right,
+            border_radius.bottom_right,
+            border_radius.bottom_left,
+        }) catch {};
     }
 
     // Text color
@@ -433,22 +493,24 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
     }
 
     // Padding
-    writer.print("  padding: {d}px {d}px {d}px {d}px;\n", .{
-        style.padding.top,
-        style.padding.right,
-        style.padding.bottom,
-        style.padding.left,
-    }) catch {};
-    writer.print("  margin: {d}px {d}px {d}px {d}px;\n", .{
-        style.margin.top,
-        style.margin.right,
-        style.margin.bottom,
-        style.margin.left,
-    }) catch {};
+    if (style.padding) |padding| {
+        writer.print("  padding: {d}px {d}px {d}px {d}px;\n", .{
+            padding.top,
+            padding.right,
+            padding.bottom,
+            padding.left,
+        }) catch {};
+    }
+    if (style.margin) |margin| {
+        writer.print("  margin: {d}px {d}px {d}px {d}px;\n", .{
+            margin.top,
+            margin.right,
+            margin.bottom,
+            margin.left,
+        }) catch {};
+    }
 
     // Alignment
-    writer.print("  justify-content: {s};\n", .{alignmentToCSS(style.child_alignment.x)}) catch {};
-    writer.print("  align-items: {s};\n", .{alignmentToCSS(style.child_alignment.y)}) catch {};
 
     if (style.child_gap > 0) {
         writer.print("  gap: {d}px;\n", .{style.child_gap}) catch {};
@@ -459,6 +521,8 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         writer.writeAll("  background-color: ") catch {};
         colorToCSS(background, writer) catch {};
         writer.writeAll(";\n") catch {};
+    } else if (ptr.type == .Button or ptr.type == .CtxButton) {
+        _ = writer.writeAll("  background-color: rgba(0,0,0,0);\n") catch {};
     }
 
     // Shadow
@@ -546,7 +610,7 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
         writer.writeAll(";\n") catch {};
     }
 
-    writer.print("  opacity: {d};\n", .{style.opacity}) catch {};
+    // writer.print("  opacity: {d};\n", .{style.opacity}) catch {};
 
     if (style.transition) |tr| {
         writer.writeAll("  transition: ") catch {};
@@ -584,7 +648,6 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
 
     // // Transform
     if (style.transform) |tr| {
-        println("Transform\n", .{});
         writer.writeAll("  transform: ") catch {};
         switch (tr.type) {
             .none => {},

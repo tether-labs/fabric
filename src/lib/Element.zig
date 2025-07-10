@@ -33,7 +33,6 @@ const AttributeType = union(enum) {
 };
 
 pub const Element = struct {
-    const Self = @This();
 
     // Size and position related
     client_height: f32 = 0,
@@ -70,7 +69,7 @@ pub const Element = struct {
     // outer_html: ?[]const u8 = null,
     // inner_text: ?[]const u8 = null,
     // text_content: ?[]const u8 = null,
-    pub fn _get_id(self: *Self) ?[]const u8 {
+    pub fn _get_id(self: *Element) ?[]const u8 {
         if (self._node_ptr) |node| {
             return node.uuid;
         } else if (self.id) |id| {
@@ -79,7 +78,7 @@ pub const Element = struct {
             return null;
         }
     }
-    pub fn scrollTop(self: *Self, value: u32) void {
+    pub fn scrollTop(self: *Element, value: u32) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -89,7 +88,7 @@ pub const Element = struct {
         self.scroll_top = value;
     }
 
-    pub fn toOffsetWidth(self: *Self, value: u32) void {
+    pub fn toOffsetWidth(self: *Element, value: u32) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -99,7 +98,7 @@ pub const Element = struct {
         @field(self, attribute) = value;
     }
 
-    pub fn getAttributeNumber(self: *Self, attribute: []const u8) u32 {
+    pub fn getAttributeNumber(self: *Element, attribute: []const u8) u32 {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return 0;
@@ -107,7 +106,7 @@ pub const Element = struct {
         return Fabric.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len);
     }
 
-    pub fn mutate(self: *Self, attribute: []const u8, value: u32) void {
+    pub fn mutate(self: *Element, attribute: []const u8, value: u32) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -117,7 +116,7 @@ pub const Element = struct {
     }
 
     pub fn addInstListener(
-        self: *Self,
+        self: *Element,
         event_type: types.EventType,
         construct: anytype,
         cb: anytype,
@@ -130,9 +129,9 @@ pub const Element = struct {
     }
 
     pub fn addListener(
-        self: *Self,
+        self: *Element,
         event_type: types.EventType,
-        cb: *const fn (event: *Fabric.Event) void,
+        cb: *const fn (event: *Fabric.Event) void
     ) ?usize {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
@@ -142,7 +141,7 @@ pub const Element = struct {
     }
 
     pub fn removeListener(
-        self: *Self,
+        self: *Element,
         event_type: types.EventType,
         cb_idx: usize,
     ) ?bool {
@@ -154,7 +153,7 @@ pub const Element = struct {
     }
 
     pub fn removeInstListener(
-        self: *Self,
+        self: *Element,
         event_type: types.EventType,
         cb_idx: usize,
     ) ?bool {
@@ -165,7 +164,7 @@ pub const Element = struct {
         return Fabric.destroyElementInstEventListener(id, event_type, cb_idx);
     }
 
-    pub fn mutateStyle(self: *Self, comptime attribute: []const u8, value: AttributeType) void {
+    pub fn mutateStyle(self: *Element, comptime attribute: []const u8, value: AttributeType) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -187,7 +186,7 @@ pub const Element = struct {
         }
     }
 
-    pub fn scrollLeft(self: *Self, value: u32) void {
+    pub fn scrollLeft(self: *Element, value: u32) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -197,7 +196,7 @@ pub const Element = struct {
         self.scroll_left = value;
     }
 
-    pub fn showModal(self: *Self) void {
+    pub fn showModal(self: *Element) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -208,7 +207,7 @@ pub const Element = struct {
         }
         showDialog(id.ptr, id.len);
     }
-    pub fn closeModal(self: *Self) void {
+    pub fn closeModal(self: *Element) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -220,7 +219,7 @@ pub const Element = struct {
         closeDialog(id.ptr, id.len);
     }
 
-    pub fn getOffsets(self: *Self) ?Offsets {
+    pub fn getOffsets(self: *Element) ?Offsets {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return null;
@@ -236,7 +235,7 @@ pub const Element = struct {
         };
     }
 
-    pub fn getBoundingClientRect(self: *Self) ?Rect {
+    pub fn getBoundingClientRect(self: *Element) ?Rect {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -252,7 +251,7 @@ pub const Element = struct {
         };
     }
 
-    pub fn removeFromParent(self: *Self) void {
+    pub fn removeFromParent(self: *Element) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -260,7 +259,7 @@ pub const Element = struct {
         Fabric.removeFromParent(id.ptr, id.len);
     }
 
-    pub fn clear(self: *Self) void {
+    pub fn clear(self: *Element) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -268,7 +267,7 @@ pub const Element = struct {
         const text = "";
         Fabric.setInputValue(id.ptr, @intCast(id.len), text.ptr, text.len);
     }
-    pub fn setInputValue(self: Self, text: []const u8) void {
+    pub fn setInputValue(self: Element, text: []const u8) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -276,7 +275,7 @@ pub const Element = struct {
         Fabric.setInputValue(id.ptr, @intCast(id.len), text.ptr, text.len);
     }
 
-    pub fn getInputValue(self: *Self) ?[]const u8 {
+    pub fn getInputValue(self: *Element) ?[]const u8 {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return null;
@@ -285,7 +284,7 @@ pub const Element = struct {
         return std.mem.span(resp);
     }
 
-    pub fn addChild(self: *Self, childId: []const u8) void {
+    pub fn addChild(self: *Element, childId: []const u8) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -293,7 +292,7 @@ pub const Element = struct {
         Fabric.addChild(id.ptr, id.len, childId.ptr, childId.len);
     }
 
-    pub fn focus(self: *Self) ?void {
+    pub fn focus(self: *Element) ?void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -306,7 +305,7 @@ pub const Element = struct {
         Fabric.focus(id);
     }
 
-    pub fn addClass(self: *Self, classId: []const u8) void {
+    pub fn addClass(self: *Element, classId: []const u8) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -314,7 +313,7 @@ pub const Element = struct {
         Fabric.addToClassesList(id, classId);
     }
 
-    pub fn removeClass(self: *Self, classId: []const u8) void {
+    pub fn removeClass(self: *Element, classId: []const u8) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;
@@ -322,7 +321,7 @@ pub const Element = struct {
         Fabric.addToRemoveClassesList(id, classId);
     }
 
-    pub fn click(self: *Self) void {
+    pub fn click(self: *Element) void {
         const id = self._get_id() orelse {
             Fabric.printlnSrc("Id is null", .{}, @src());
             return;

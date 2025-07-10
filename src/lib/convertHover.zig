@@ -61,26 +61,28 @@ fn posTypeToCSS(pos: Pos, writer: anytype) !void {
 fn sizingTypeToCSS(sizing: Sizing, writer: anytype) !void {
     switch (sizing.type) {
         .fit => try writer.writeAll("fit-content"),
-        .grow => try writer.writeAll("auto"),
-        .percent => try writer.print("{}%", .{sizing.size.minmax.min}),
-        .fixed => try writer.print("{}px", .{sizing.size.minmax.min}),
+        .percent => try writer.print("{d}%", .{sizing.size.minmax.min}),
+        .fixed => try writer.print("{d}px", .{sizing.size.minmax.min}),
         .elastic => try writer.writeAll("auto"), // Could also use min/max width/height in separate properties
-        .elastic_percent => try writer.print("{}%", .{sizing.size.percent.min}),
-        .none => {},
+        .elastic_percent => try writer.print("{d}%", .{sizing.size.percent.min}),
+        .clamp_px => try writer.print("clamp({d}px,{d}px,{d}px)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
+        .clamp_percent => try writer.print("clamp({d}%,{d}%,{d}%)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
+        .none, .grow => {},
     }
 }
 
 // Function to convert FlexType enum to a CSS string
 fn flexTypeToCSS(flex_type: FlexType, writer: anytype) !void {
     switch (flex_type) {
-        .flex => try writer.writeAll("flex"),
-        .inline_flex => try writer.writeAll("inline-flex"),
-        .inline_block => try writer.writeAll("inline-block"),
-        .inherit => try writer.writeAll("inherit"),
-        .initial => try writer.writeAll("initial"),
-        .revert => try writer.writeAll("revert"),
-        .unset => try writer.writeAll("unset"),
-        .none => try writer.writeAll("none"),
+        .Flex, .Center => try writer.writeAll("flex"),
+        .InlineFlex => try writer.writeAll("inline-flex"),
+        .InlineBlock => try writer.writeAll("inline-block"),
+        .Inherit => try writer.writeAll("inherit"),
+        .Initial => try writer.writeAll("initial"),
+        .Revert => try writer.writeAll("revert"),
+        .Unset => try writer.writeAll("unset"),
+        .None => try writer.writeAll("none"),
+        .Inline => try writer.writeAll("inline"),
     }
 }
 
@@ -93,7 +95,7 @@ fn colorToCSS(color: Background, writer: anytype) !void {
         color.b,
         alpha,
     });
-} 
+}
 
 // Function to convert TransformType to CSS
 fn transformToCSS(transform: Transform, writer: anytype) !void {
@@ -204,13 +206,12 @@ pub export fn getHoverStyle(node_ptr: ?*UINode) [*]const u8 {
             }) catch {};
 
             writer.writeAll("  border-style: solid;\n") catch {};
-
-            if (hover.border_color) |border_color| {
-                writer.writeAll("  border-color: ") catch {};
-                colorToCSS(border_color, writer) catch {};
-                writer.writeAll(";\n") catch {};
-            }
         }
+    }
+    if (hover.border_color) |border_color| {
+        writer.writeAll("  border-color: ") catch {};
+        colorToCSS(border_color, writer) catch {};
+        writer.writeAll(";\n") catch {};
     }
 
     // Border radius
@@ -388,13 +389,12 @@ export fn getHoverEctClasses(node_ptr: ?*UINode) void {
                 }) catch {};
 
                 writer.writeAll("  border-style: solid;\n") catch {};
-
-                if (style.border_color) |hbc| {
-                    writer.writeAll("  border-color: ") catch {};
-                    colorToCSS(hbc, writer) catch {};
-                    writer.writeAll(";\n") catch {};
-                }
             }
+        }
+        if (style.border_color) |hbc| {
+            writer.writeAll("  border-color: ") catch {};
+            colorToCSS(hbc, writer) catch {};
+            writer.writeAll(";\n") catch {};
         }
 
         // Border radius

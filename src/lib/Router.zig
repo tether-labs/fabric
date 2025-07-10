@@ -4,7 +4,8 @@
 //       \
 //        v - e
 const std = @import("std");
-const CommandsTree = @import("UITree.zig").CommandsTree;
+const UITree = @import("UITree.zig");
+const Fabric = @import("Fabric.zig");
 const print = std.debug.print;
 const mem = std.mem;
 
@@ -25,12 +26,13 @@ fn findCommonPrefix(a: []const u8, b: []const u8) usize {
 
 pub const Node = struct {
     prefix: []const u8,
-    tree: ?*CommandsTree,
+    tree: ?*UITree,
     query_param: []const u8,
     is_dynamic: bool,
     children: std.StringHashMap(*Node),
     param_child: ?*Node,
     is_end: bool,
+    page: *const fn () void,
 
     fn findChildWithCommonPrefix(node: *Node, prefix: []const u8) ?*Node {
         var children_itr = node.children.iterator();
@@ -53,6 +55,7 @@ pub const Node = struct {
         self: *Node,
         at: usize,
         allocator: std.mem.Allocator,
+        page: *const fn () void,
     ) !*Node {
         // We take the current node and set it as the child,
         // so now we move everything from current to child
@@ -68,6 +71,7 @@ pub const Node = struct {
             .children = self.children,
             .param_child = self.param_child,
             .is_end = true,
+            .page = page,
         };
 
         // set the current node to hell
@@ -90,6 +94,7 @@ pub fn init(target: *Radix, arena: *std.mem.Allocator) !void {
         .children = std.StringHashMap(*Node).init(arena.*),
         .param_child = null,
         .is_end = false,
+        .page = undefined,
     };
     target.* = .{
         .root = root_node,
@@ -115,9 +120,10 @@ fn recurseDestroy(radix: *Radix, node: *Node) void {
 fn newNode(
     radix: *Radix,
     prefix: []const u8,
-    tree: *CommandsTree,
+    tree: *UITree,
     query_param: []const u8,
     is_end: bool,
+    page: *const fn () void,
 ) !*Node {
     const node = try radix.allocator.create(Node);
     node.* = Node{
@@ -128,6 +134,7 @@ fn newNode(
         .children = std.StringHashMap(*Node).init(radix.allocator),
         .param_child = null,
         .is_end = is_end,
+        .page = page,
     };
     return node;
 }
@@ -141,7 +148,11 @@ fn findSegmentEndIdx(path: []const u8) usize {
 }
 
 // /api/test
-pub fn searchRoute(radix: *const Radix, path: []const u8) ?*CommandsTree {
+const Route = struct {
+    ui_tree: *UITree = undefined,
+    page: *const fn () void = undefined,
+};
+pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
     // var param_args: ?*std.ArrayList(ParamInfo) = null;
     var node = radix.root;
     var start: usize = 1;
@@ -149,6 +160,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?*CommandsTree {
     // Manually parse path segments to avoid iterator overhead
     while (start < path.len) : (start += 1) {
         if (path[start] == '/') continue;
+        if (path[start] == '#') break;
         if (path[start] == ' ') break;
         if (path[start] == 0) break;
         // api/test
@@ -183,7 +195,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?*CommandsTree {
     }
 
     if (node.is_end) {
-        return node.tree;
+        return Route{ .ui_tree = node.tree.?, .page = node.page };
     }
     return null;
 }
@@ -191,16 +203,18 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?*CommandsTree {
 pub fn addRoute(
     radix: *Radix,
     path: []const u8,
-    tree: *CommandsTree,
+    tree: *UITree,
+    page: *const fn () void,
 ) !void {
     var path_iter = mem.tokenizeScalar(u8, path, '/');
-    try radix.insert(&path_iter, tree);
+    try radix.insert(&path_iter, tree, page);
 }
 
 fn insert(
     radix: *Radix,
     segments: *mem.TokenIterator(u8, .scalar),
-    tree: *CommandsTree,
+    tree: *UITree,
+    page: *const fn () void,
 ) !void {
     var node = radix.root;
     while (segments.next()) |segment| {
@@ -208,11 +222,10 @@ fn insert(
         const is_dynamic = segment[0] == ':';
         if (is_dynamic) {
             const param = segment[1..];
-
             if (node.param_child) |_| return error.ConflictDynamicRoute;
-            // check the current node hello startwith hell
-            const dynamic_node = try radix.newNode(":dynamic", tree, param, true);
+            const dynamic_node = try radix.newNode(":dynamic", tree, param, true, page);
             node.param_child = dynamic_node;
+            node.is_end = true;
             return;
         }
 
@@ -228,7 +241,7 @@ fn insert(
                 while (i < child.prefix.len and i < segement_remaining.len and child.prefix[i] == segement_remaining[i]) : (i += 1) {}
 
                 if (i < child.prefix.len) {
-                    _ = try child.splitNode(i, radix.allocator);
+                    _ = try child.splitNode(i, radix.allocator, page);
                     // Once we splitt the node we need to set the current to the correct route func
                     child.tree = tree;
                     child.prefix = segement_remaining[0..i];
@@ -249,6 +262,7 @@ fn insert(
                     tree,
                     "",
                     false,
+                    page,
                 );
                 try node.children.put(segement_remaining, new_node);
                 node = new_node;

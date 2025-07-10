@@ -4,9 +4,7 @@ const Fabric = @import("../Fabric.zig");
 
 pub const Kit = @This();
 
-pub fn glue(comptime T: type, value: *T, slice: []const u8) !void {
-    // assert_cm(@intFromEnum(self.content_type) == @intFromEnum(helpers.ContentType.JSON), "Http Payload must be JSON to Bind");
-    // const fields = @typeInfo(T).@"struct".fields;
+pub fn glue(comptime T: type, slice: []const u8) !std.json.Parsed(T) {
     const parsed = std.json.parseFromSlice(
         T,
         Fabric.allocator_global,
@@ -14,14 +12,7 @@ pub fn glue(comptime T: type, value: *T, slice: []const u8) !void {
         .{},
     ) catch return error.MalformedJson;
 
-    // we need to parse the struct []const u8 into []u8 to store in the hashmap
-    // inline for (fields) |f| {
-    //     if (f.type == []const u8) {
-    //         const field_value = @field(parsed.value, f.name);
-    //         @field(parsed.value, f.name) = try helpers.convertStringToSlice(field_value, std.heap.c_allocator);
-    //     }
-    // }
-    value.* = parsed.value;
+    return parsed;
 }
 
 fn getUnderlyingType(comptime T: type) type {
@@ -159,7 +150,7 @@ pub fn fetch(url: []const u8, cb: *const fn () void, http_req: HttpReq) void {
     var writer = String.new();
     writer.append_str("{\n\"method\": ");
     writer.append_str("\"");
-    writer.append_str(http_req.method);
+    writer.append_str(@tagName(http_req.method));
     writer.append_str("\"");
     if (http_req.headers) |headers| {
         writer.append_str(",\n\"headers\": {\n");
@@ -208,7 +199,6 @@ pub fn fetch(url: []const u8, cb: *const fn () void, http_req: HttpReq) void {
 
     const final = writer.contents[0..writer.len];
     const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
-    // const http_req_offset_ptr = generateHttpLayout(http_req);
 
     const Closure = struct {
         fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
@@ -458,8 +448,16 @@ const BodyType = enum {
     json,
 };
 
+const Methods = enum {
+    GET,
+    POST,
+    PATCH,
+    DELETE,
+    OPTIONS,
+};
+
 pub const HttpReq = struct {
-    method: []const u8,
+    method: Methods,
     headers: ?Headers = null,
     body: ?[]const u8 = null,
     body_type: BodyType = .string,
@@ -474,8 +472,8 @@ pub const HttpReq = struct {
 
 var http_req_view: HttpReqOffset = HttpReqOffset{};
 fn generateHttpLayout(http_req: HttpReq) *u8 {
-    http_req_view.method_ptr = http_req.method.ptr;
-    http_req_view.method_len = http_req.method.len;
+    http_req_view.method_ptr = @tagName(http_req.method).ptr;
+    http_req_view.method_len = @tagName(http_req.method).len;
 
     if (http_req.headers) |h| {
         if (h.content_type) |ct| {
@@ -570,7 +568,7 @@ pub fn fetchWithParams(url: []const u8, self: anytype, cb: anytype, http_req: Ht
     var writer = String.new();
     writer.append_str("{\n\"method\": ");
     writer.append_str("\"");
-    writer.append_str(http_req.method);
+    writer.append_str(@tagName(http_req.method));
     writer.append_str("\"");
     if (http_req.headers) |headers| {
         writer.append_str(",\n\"headers\": {\n");

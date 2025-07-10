@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const Fabric = @import("Fabric.zig");
+const LifeCycle = Fabric.LifeCycle;
 const println = Fabric.println;
 const Element = @import("Element.zig").Element;
 
@@ -8,6 +9,21 @@ const Style = types.Style;
 const InputDetails = types.InputDetails;
 const InputParams = types.InputParams;
 const ElementDecl = types.ElementDeclaration;
+
+pub inline fn Center(element: *Element, style: Style) fn (void) void {
+    var elem_decl = ElementDecl{
+        .style = style,
+        .dynamic = .static,
+        .elem_type = .FlexBox,
+    };
+    elem_decl.style.child_alignment.x = .center;
+    elem_decl.style.child_alignment.y = .center;
+
+    const ui_node = LifeCycle.open(elem_decl);
+    LifeCycle.configure(elem_decl);
+    element._node_ptr = ui_node;
+    return LifeCycle.close;
+}
 
 pub inline fn FlexBox(element: *Element, style: Style) fn (void) void {
     const local = struct {

@@ -535,7 +535,7 @@ pub fn Signal(comptime T: type) type {
                 self._parent = node;
                 self.markChildrenDirty(node);
             }
-            Fabric.global_rerender = true;
+            Fabric.cycle();
         }
 
         /// Notify effect takes a signals ptr and notifies all effect subscribers,
@@ -579,29 +579,4 @@ pub fn Signal(comptime T: type) type {
             }
         }
     };
-}
-
-var signal: Signal(u32) = undefined;
-fn increment() void {
-    signal.set(signal.get() + 1);
-}
-
-fn logCounter(count: u32) void {
-    std.debug.print("Current count: {any}\n", .{count});
-}
-
-fn logTripleCounter(count: u32) void {
-    std.debug.print("Logger Triple count: {any}\n", .{count});
-}
-
-fn doubleCounter(count: *u32) void {
-    if (count.* > 7) {
-        count.* *= 2;
-    }
-}
-
-fn tripleCounter(count: u32) u32 {
-    const new_count = count * 3;
-    std.debug.print("Triple count: {any}\n", .{new_count});
-    return new_count;
 }

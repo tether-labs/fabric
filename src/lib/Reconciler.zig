@@ -69,19 +69,23 @@ pub fn nodesEqual(old_node: *UINode, new_node: *UINode) bool {
         if (a.border_thickness.?.bottom != b.border_thickness.?.bottom) return false;
     }
     if (a.border_color != null and b.border_color != null) {
-    if (!compareRgba(a.border_color.?, b.border_color.?)) return false;
+        if (!compareRgba(a.border_color.?, b.border_color.?)) return false;
     }
     if (a.text_color != null and b.text_color != null) {
         if (!compareRgba(a.text_color.?, b.text_color.?)) return false;
     }
-    if (a.padding.top != b.padding.top) return false;
-    if (a.padding.left != b.padding.left) return false;
-    if (a.padding.bottom != b.padding.bottom) return false;
-    if (a.padding.right != b.padding.right) return false;
-    if (a.margin.top != b.margin.top) return false;
-    if (a.margin.left != b.margin.left) return false;
-    if (a.margin.bottom != b.margin.bottom) return false;
-    if (a.margin.right != b.margin.right) return false;
+    if (a.padding != null and b.padding != null) {
+        if (a.padding.?.top != b.padding.?.top) return false;
+        if (a.padding.?.left != b.padding.?.left) return false;
+        if (a.padding.?.bottom != b.padding.?.bottom) return false;
+        if (a.padding.?.right != b.padding.?.right) return false;
+    }
+    if (a.margin != null and b.margin != null) {
+        if (a.margin.?.top != b.margin.?.top) return false;
+        if (a.margin.?.left != b.margin.?.left) return false;
+        if (a.margin.?.bottom != b.margin.?.bottom) return false;
+        if (a.margin.?.right != b.margin.?.right) return false;
+    }
     // if (a.overflow != b.overflow) return false;
 
     if (a.overflow_x != b.overflow_x) return false;
@@ -253,7 +257,8 @@ fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
                 end = i;
             }
             for (new_node.children.items[end..]) |node| {
-                node.dirty = true;
+                // node.dirty = true;
+                Fabric.markChildrenDirty(node);
             }
         }
     } else {

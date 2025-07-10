@@ -19,9 +19,11 @@ const getHoverStyle = @import("convertHover.zig").getHoverStyle;
 const getStyle = @import("convertStyle.zig").getStyle;
 const generateInputHTML = @import("grabInputDetails.zig").generateInputHTML;
 const grabInputDetails = @import("grabInputDetails.zig");
+const utils = @import("utils.zig");
 const createInput = grabInputDetails.createInput;
 const getInputSize = grabInputDetails.getInputSize;
 const getInputType = grabInputDetails.getInputType;
+const getAriaLabel = utils.getAriaLabel;
 
 pub const Component = fn (void) void;
 
@@ -281,6 +283,7 @@ pub const Node = struct { data: Action };
 
 pub var registry: std.StringHashMap(*const fn () void) = undefined;
 pub var ctx_registry: std.StringHashMap(*Node) = undefined;
+pub var time_out_ctx_registry: std.AutoHashMap(usize, *Node) = undefined;
 pub var callback_registry: std.StringHashMap(*Node) = undefined;
 pub var fetch_registry: std.AutoHashMap(u32, *Kit.FetchNode) = undefined;
 pub var signal_registry: std.AutoHashMap(u32, *const fn (*Signal(type)) void) = undefined;
@@ -292,7 +295,7 @@ pub var mounted_ctx_funcs: std.AutoHashMap(u32, *Node) = undefined;
 pub var created_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
 pub var updated_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
 pub var destroy_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
-pub var removed_nodes: std.ArrayList(u32) = undefined;
+pub var removed_nodes: std.ArrayList([]const u8) = undefined;
 const Class = struct {
     element_id: []const u8,
     style_id: []const u8,
@@ -312,8 +315,8 @@ var continuations: [64]?ContinuationFn = undefined;
 
 pub var allocator_global: std.mem.Allocator = undefined;
 pub var key_depth_map: std.StringHashMap(usize) = undefined;
-var sw_global: i32 = 0;
-var sh_global: i32 = 0;
+pub var browser_width: i32 = 0;
+pub var browser_height: i32 = 0;
 
 pub const FabricConfig = struct {
     screen_width: i32,
@@ -338,6 +341,7 @@ pub fn init(target: *Fabric, config: FabricConfig) void {
     };
     registry = std.StringHashMap(*const fn () void).init(config.allocator.*);
     ctx_registry = std.StringHashMap(*Node).init(config.allocator.*);
+    time_out_ctx_registry = std.AutoHashMap(usize, *Node).init(config.allocator.*);
     callback_registry = std.StringHashMap(*Node).init(config.allocator.*);
     fetch_registry = std.AutoHashMap(u32, *Kit.FetchNode).init(config.allocator.*);
     events_callbacks = std.AutoHashMap(u32, *const fn (*Event) void).init(config.allocator.*);
@@ -350,12 +354,12 @@ pub fn init(target: *Fabric, config: FabricConfig) void {
     created_funcs = std.AutoHashMap(u32, *const fn () void).init(config.allocator.*);
     motions = std.ArrayList(Animation.Motion).init(config.allocator.*);
     component_subscribers = std.ArrayList(*Rune.ComponentNode).init(config.allocator.*);
+    removed_nodes = std.ArrayList([]const u8).init(config.allocator.*);
     // grain_subs = std.ArrayList(*GrainStruct.ComponentNode).init(config.allocator.*);
     classes_to_add = std.ArrayList(Class).init(config.allocator.*);
     classes_to_remove = std.ArrayList(Class).init(config.allocator.*);
-    futures = std.ArrayList(Future).init(std.heap.page_allocator);
-    sw_global = config.screen_width;
-    sh_global = config.screen_height;
+    browser_width = config.screen_width;
+    browser_height = config.screen_height;
     ctx_map = std.StringHashMap(*UIContext).init(config.allocator.*);
     page_map = std.StringHashMap(*const fn () void).init(config.allocator.*);
     page_deinit_map = std.StringHashMap(*const fn () void).init(config.allocator.*);
@@ -371,12 +375,12 @@ pub fn init(target: *Fabric, config: FabricConfig) void {
     key_depth_map = std.StringHashMap(usize).init(allocator_global);
     // TrackingAllocator.printBytes();
 
-    // current_ctx.initLayout(config.allocator, @floatFromInt(config.screen_width), @floatFromInt(config.screen_height)) catch return;
     _ = getStyle(null);
     _ = getHoverStyle(null);
     _ = createInput(null);
     _ = getInputType(null);
     _ = getInputSize(null);
+    _ = getAriaLabel(null);
 }
 
 pub fn deinit(_: *Fabric) void {
@@ -471,7 +475,7 @@ pub const LifeCycle = struct {
     /// within the dom tree, node this current opened node is the current top stack node, ie any children
     /// will reference this node as their parent
     pub fn open(elem_decl: ElementDecl) ?*UINode {
-        const ui_node = Fabric.current_ctx.open(elem_decl) catch |err| {
+        const ui_node = current_ctx.open(elem_decl) catch |err| {
             println("{any}\n", .{err});
             return null;
         };
@@ -479,7 +483,7 @@ pub const LifeCycle = struct {
     }
     /// close, closes the current UINode
     pub fn close(_: void) void {
-        _ = Fabric.current_ctx.close();
+        _ = current_ctx.close();
         return;
     }
     /// configure is used internally to configure the UINode, used for adding text props, or hover props ect
@@ -487,15 +491,27 @@ pub const LifeCycle = struct {
     /// we also set various props, such as text, style, is an SVG or not
     /// Any mainpulation of the node after this point is considered undefined behaviour be cautious;
     pub fn configure(elem_decl: ElementDecl) void {
-        _ = Fabric.current_ctx.configure(elem_decl);
+        _ = current_ctx.configure(elem_decl);
     }
 };
 
+var last_time: i64 = 0;
+pub fn throttle() bool {
+    const current_time = std.time.milliTimestamp();
+    if (current_time - last_time < 1000) {
+        return true;
+    }
+    last_time = current_time;
+    return false;
+}
+
+extern fn requestRerenderWasm() void;
 /// Force rerender forces the entire dom tree to check props of all dynamic and pure components and rerender the ui
 /// since Fabric is built with zig and wasm, checking all props of 10000s of nodes and ui components is cheap
 /// feel free to abuse force, its essentially a global signal
-pub fn force() void {
+pub fn cycle() void {
     Fabric.global_rerender = true;
+    requestRerenderWasm();
 }
 
 /// Force rerender forces the entire dom tree to check props and rerender the entire ui
@@ -537,25 +553,11 @@ pub export fn rerenderLayout() void {
     // growing element breadth first insert when inserting nodes into the tree and onto the stack
     current_ctx.resetAllUiNode();
     current_ctx.createStack(current_ctx.root.?);
-    // current_ctx.fitWidths();
-    current_ctx.growElementsWidths();
-    // current_ctx.wrapTextElements();
-    current_ctx.fitHeights();
-    current_ctx.growElementsHeights();
-    // current_ctx.endLayout();
     current_ctx.traverseCmds();
-
-    // createUUIDS(current_ctx.root.?);
-    // iterateChildren(current_ctx.root.?);
-
 }
 
 var clean_up_ctx: *UIContext = undefined;
 pub fn renderCycle(route: []const u8) void {
-
-    // if (grain_rerender) {
-    // }
-
     key_depth_map.clearRetainingCapacity();
     Fabric.registry.clearRetainingCapacity();
 
@@ -574,38 +576,29 @@ pub fn renderCycle(route: []const u8) void {
     mounted_ctx_funcs.clearRetainingCapacity();
 
     // Get the old context for current route
-    const old_ctx = ctx_map.get(route) orelse {
-        println("No Map found\n", .{});
-        println("Loading Error page\n", .{});
-        renderErrorPage("/error");
+    const old_route = router.searchRoute(route) orelse {
+        printlnWithColor("No Router found {s}\n", .{route}, "#FF3029", "ERROR");
+        printlnWithColor("Loading Error Page\n", .{}, "#FF3029", "ERROR");
+        renderErrorPage(route);
         return;
     };
+    const render_page = old_route.page;
+    const old_ctx = current_ctx;
     // Create new context
     const new_ctx: *UIContext = allocator_global.create(UIContext) catch {
         println("Failed to allocate UIContext\n", .{});
         return;
     };
 
-    UIContext.initLayout(new_ctx, &allocator_global, @floatFromInt(sw_global), @floatFromInt(sh_global)) catch |err| {
+    UIContext.initLayout(new_ctx, &allocator_global, @floatFromInt(browser_width), @floatFromInt(browser_height)) catch |err| {
         println("Allocator ran out of space {any}\n", .{err});
         new_ctx.deinit();
         allocator_global.destroy(new_ctx);
         return;
     };
-
-    //
-    // Get render function
-    const render_ptr = page_map.get(route) orelse {
-        println("No Call ptr found\n", .{});
-        new_ctx.deinit();
-        allocator_global.destroy(new_ctx);
-        return;
-    };
-
     // Render the page with the new context
     current_ctx = new_ctx;
-
-    @call(.auto, render_ptr, .{});
+    @call(.auto, render_page, .{});
     endPage(new_ctx);
 
     // Reconcile between old and new
@@ -614,7 +607,7 @@ pub fn renderCycle(route: []const u8) void {
     // Replace old context with new context in the map
     clean_up_ctx = old_ctx;
 
-    _ = ctx_map.put(route, new_ctx) catch {
+    _ = router.addRoute(route, new_ctx, render_page) catch {
         printlnSrcErr("Failed to update context map\n", .{}, @src());
         new_ctx.deinit();
         allocator_global.destroy(new_ctx);
@@ -626,11 +619,20 @@ pub fn renderCycle(route: []const u8) void {
 }
 
 fn renderErrorPage(route: []const u8) void {
+    const local_allocator = std.heap.wasm_allocator;
     // Get the old context for current route
-    const old_ctx = ctx_map.get(route) orelse {
-        println("No Map found\n", .{});
-        return;
+    const error_specific_route = std.fmt.allocPrint(local_allocator, "{s}/error", .{route}) catch return;
+    defer local_allocator.free(error_specific_route);
+    const old_route = router.searchRoute(error_specific_route) orelse blk: {
+        printlnWithColor("No Route Error Page Found\n", .{}, "#FF3029", "ERROR");
+        const default_error = router.searchRoute("/error") orelse {
+            printlnWithColor("No Default Error Page Found\n", .{}, "#FF3029", "ERROR");
+            return;
+        };
+        break :blk default_error;
     };
+    const render_page = old_route.page;
+    const old_ctx = current_ctx;
 
     // Create new context
     const new_ctx: *UIContext = allocator_global.create(UIContext) catch {
@@ -638,18 +640,15 @@ fn renderErrorPage(route: []const u8) void {
         return;
     };
 
-    UIContext.initLayout(new_ctx, &allocator_global, @floatFromInt(sw_global), @floatFromInt(sh_global)) catch |err| {
+    UIContext.initLayout(new_ctx, &allocator_global, @floatFromInt(browser_width), @floatFromInt(browser_height)) catch |err| {
         println("Allocator ran out of space {any}\n", .{err});
         new_ctx.deinit();
         allocator_global.destroy(new_ctx);
         return;
     };
-
-    //
-    // Get render function
     // Render the page with the new context
     current_ctx = new_ctx;
-    // Error.render();
+    @call(.auto, render_page, .{});
     endPage(new_ctx);
 
     // Reconcile between old and new
@@ -657,81 +656,46 @@ fn renderErrorPage(route: []const u8) void {
 
     // Replace old context with new context in the map
     clean_up_ctx = old_ctx;
-    // defer old_ctx.deinit();
-    // defer allocator_global.destroy(old_ctx);
 
-    _ = ctx_map.put(route, new_ctx) catch {
+    _ = router.addRoute(route, new_ctx, render_page) catch {
         printlnSrcErr("Failed to update context map\n", .{}, @src());
         new_ctx.deinit();
         allocator_global.destroy(new_ctx);
         return;
     };
 
-    // Clean up the old context
+    allocator_global.free(route); // return host‑allocated buffer
 }
 
 export fn cleanUp() void {
-    // iterateChildren(clean_up_ctx.root.?);
     clean_up_ctx.deinit();
     allocator_global.destroy(clean_up_ctx);
     clean_up_ctx = undefined;
 }
 
 pub fn createPage(style: Style, path: []const u8, page: fn () void, page_deinit: ?fn () void) !void {
-    // const url = Fabric.getWindowPath();
-    _ = ctx_map.get(path) orelse {
-        const path_ctx: *UIContext = try allocator_global.create(UIContext);
-        // Initial render
-        UIContext.initLayout(path_ctx, &allocator_global, @floatFromInt(sw_global), @floatFromInt(sh_global)) catch |err| {
-            println("Allocator ran out of space {any}\n", .{err});
-            return;
-        };
-
-        current_ctx = path_ctx;
-        path_ctx.stack.?.ptr.?.style = style;
-        // if (std.mem.eql(u8, path, url)) {
-        //     @call(.auto, page, .{});
-        // }
-        endPage(path_ctx);
-        ctx_map.put(path, path_ctx) catch |err| {
-            println("Could not put route {any}\n", .{err});
-        };
-        page_map.put(path, page) catch |err| {
-            println("Could not put route {any}\n", .{err});
-        };
-
-        if (page_deinit) |de| {
-            page_deinit_map.put(path, de) catch |err| {
-                println("Could not put route {any}\n", .{err});
-            };
-        }
+    const path_ctx: *UIContext = try allocator_global.create(UIContext);
+    // Initial render
+    UIContext.initLayout(path_ctx, &allocator_global, @floatFromInt(browser_width), @floatFromInt(browser_height)) catch |err| {
+        println("Allocator ran out of space {any}\n", .{err});
+        return;
     };
-    // Fabric.registry.clearRetainingCapacity();
-    // //
-    // var ctx_itr = ctx_registry.iterator();
-    // while (ctx_itr.next()) |entry| {
-    //     const node = entry.value_ptr.*;
-    //     node.data.deinitFn(node);
-    // }
-    // ctx_registry.clearRetainingCapacity();
-    //
-    // var hooks_ctx_itr = mounted_ctx_funcs.iterator();
-    // while (hooks_ctx_itr.next()) |entry| {
-    //     const node = entry.value_ptr.*;
-    //     node.data.deinitFn(node);
-    // }
-    // mounted_ctx_funcs.clearRetainingCapacity();
 
+    current_ctx = path_ctx;
+    path_ctx.stack.?.ptr.?.style = style;
+    router.addRoute(path, path_ctx, page) catch |err| {
+        println("Could not put route {any}\n", .{err});
+    };
+    if (page_deinit) |de| {
+        page_deinit_map.put(path, de) catch |err| {
+            println("Could not put route {any}\n", .{err});
+        };
+    }
     return;
 }
 
 pub fn endPage(path_ctx: *UIContext) void {
-    path_ctx.growElementsWidths();
-    // path_ctx.wrapTextElements();
-    path_ctx.fitHeights();
-    path_ctx.growElementsHeights();
-    path_ctx.endLayout();
-    // createUUIDS(path_ctx.root.?);
+   path_ctx.endLayout();
     path_ctx.traverse();
 }
 
@@ -741,19 +705,11 @@ pub fn endLayout(_: *Fabric) void {
     // then close function does breadth first post order
     // since we are going back up the tree
     // growing element breadth first insert when inserting nodes into the tree and onto the stack
-    // println("Item {any}\n", .{item.ptr.?.type});
     current_ctx.growElementsWidths();
-    // // current_ctx.wrapTextElements();
     current_ctx.fitHeights();
-    // println("Afeter heights Current Stack: {any}\n", .{current_ctx.stack});
     current_ctx.growElementsHeights();
     current_ctx.endLayout();
     current_ctx.traverse();
-    // for (current_ctx.render_cmds.items) |cmd| {
-    //     println("End Layout Bounding------X: {any}\n", .{cmd.bounding_box.x});
-    //     println("------Type: {any}\n", .{cmd.elem_type});
-    //     println("------Id: {s}\n", .{cmd.id});
-    // }
 }
 
 pub fn end(fabric: *Fabric) !void {
@@ -774,7 +730,7 @@ pub fn end(fabric: *Fabric) !void {
 
 // Okay so we need to change the node in the tree depending on the page route
 // for example we add the commads tree to the router tree
-pub inline fn Page(src: std.builtin.SourceLocation, page: fn () void, page_deinit: ?fn () void, style: Style) void {
+pub inline fn DynamicPage(src: std.builtin.SourceLocation, page: fn () void, page_deinit: ?fn () void, style: Style) void {
     const allocator = std.heap.page_allocator;
     const full_route = src.file;
     var itr = std.mem.tokenizeScalar(u8, full_route[7..], '/');
@@ -817,6 +773,53 @@ pub inline fn Page(src: std.builtin.SourceLocation, page: fn () void, page_deini
     };
 }
 
+// Okay so we need to change the node in the tree depending on the page route
+// for example we add the commads tree to the router tree
+pub inline fn Page(src: std.builtin.SourceLocation, page: fn () void, page_deinit: ?fn () void, style: Style) void {
+    const allocator = std.heap.page_allocator;
+    const full_route = src.file;
+    var itr = std.mem.tokenizeScalar(u8, full_route[7..], '/');
+    var buf = std.ArrayList(u8).init(allocator);
+    var file_name: []const u8 = "";
+    blk: while (itr.next()) |sub| {
+        if (itr.peek() == null) {
+            file_name = sub;
+            break :blk;
+        }
+        buf.append('/') catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            return;
+        };
+
+        buf.appendSlice(sub) catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            return;
+        };
+    }
+
+    if (buf.items.len == 0 and !std.mem.startsWith(u8, file_name, "Error")) {
+        buf.appendSlice("/root") catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            return;
+        };
+    } else if (std.mem.startsWith(u8, file_name, "Error")) {
+        buf.appendSlice("/error") catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            return;
+        };
+    }
+
+    const route = buf.toOwnedSlice() catch |err| {
+        println("Could not parse route {any}\n", .{err});
+        return;
+    };
+
+    createPage(style, route, page, page_deinit) catch |err| {
+        println("Could not add page {any}\n", .{err});
+        return;
+    };
+}
+
 pub inline fn Layout(src: std.builtin.SourceLocation, style: Style) fn (void) void {
     const allocator = allocator_global;
     const full_route = src.file;
@@ -838,11 +841,6 @@ pub inline fn Layout(src: std.builtin.SourceLocation, style: Style) fn (void) vo
         if (itr.peek() == null) {
             break :blk;
         }
-        // buf.append('/') catch |err| {
-        //     println("Allocator ran out of space {any}\n", .{err});
-        //     unreachable;
-        // };
-
         buf.appendSlice(sub) catch |err| {
             println("Allocator ran out of space {any}\n", .{err});
             unreachable;
@@ -1126,7 +1124,7 @@ pub export fn getRenderTreePtr() ?*UIContext.CommandsTree {
     const tree_op = current_ctx.ui_tree;
 
     if (tree_op != null) {
-        iterateTreeChildren(current_ctx.ui_tree.?);
+        // iterateTreeChildren(current_ctx.ui_tree.?);
         return current_ctx.ui_tree.?;
     }
     return null;
@@ -1135,12 +1133,6 @@ pub export fn getRenderTreePtr() ?*UIContext.CommandsTree {
 pub export fn getRenderCommandPtr(tree: *CommandsTree) [*]u8 {
     return @ptrCast(tree.node);
 }
-
-// pub export fn getRenderCommandSize(tree: *CommandsTree) usize {
-//     const index: u32 = @intFromPtr(tree.node);
-//     const size = @sizeOf(index);
-//     return size;
-// }
 
 export fn getTreeNodeChildrenCount(tree: *CommandsTree) usize {
     return tree.children.items.len;
@@ -1151,7 +1143,6 @@ export fn getUiNodeChildrenCount(tree: *CommandsTree) usize {
 }
 
 export fn getTreeNodeChild(tree: *CommandsTree, index: usize) *CommandsTree {
-    // return tree.node.node_ptr.children.items[index];
     return tree.children.items[index];
 }
 
@@ -1163,7 +1154,6 @@ export fn getCtxNodeChild(tree: *CommandsTree, index: usize) ?*CommandsTree {
         }
     }
     return null;
-    // return tree.children.items[index];
 }
 
 export fn getTreeNodeChildCommand(tree: *CommandsTree) *RenderCommand {
@@ -1179,7 +1169,7 @@ export fn getDirtyValue(node: *UINode) bool {
 }
 
 // The first node needs to be marked as false always
-fn markChildrenDirty(node: *UINode) void {
+pub fn markChildrenDirty(node: *UINode) void {
     if (node.parent != null) {
         node.dirty = true;
     }
@@ -1187,27 +1177,54 @@ fn markChildrenDirty(node: *UINode) void {
         markChildrenDirty(child);
     }
 }
-
 // The first node needs to be marked as false always
 export fn markCurrentTreeDirty() void {
     markChildrenDirty(current_ctx.root.?);
 }
 
 // The first node needs to be marked as false always
-var layout_path: []const u8 = "";
-fn markNonLayoutChildrenDirty(node: *UINode) void {
-    if (node.type == .Layout and std.mem.eql(u8, node.uuid, layout_path)) {
+export fn markCurrentTreeNotDirty() void {
+    markChildrenNotDirty(current_ctx.root.?);
+}
+
+// The first node needs to be marked as false always
+pub fn markChildrenNotDirty(node: *UINode) void {
+    if (node.parent != null) {
         node.dirty = false;
-        return;
-    } else {
-        node.dirty = true;
-        for (node.children.items) |child| {
-            markNonLayoutChildrenDirty(child);
-        }
+    }
+    for (node.children.items) |child| {
+        markChildrenNotDirty(child);
     }
 }
 
-export fn markAllNonLayoutNodesDirty() void {
+// The first node needs to be marked as false always
+fn markNonLayoutChildrenDirty(node: *UINode, layout_path: []const u8) usize {
+    if (node.type == .Layout and std.mem.eql(u8, node.uuid, layout_path)) {
+        node.dirty = false;
+        // markChildrenNotDirty(node);
+        return 0;
+    } else {
+        if (node.parent != null) {
+            removed_nodes.append(node.uuid) catch {};
+        }
+        // node.dirty = true;
+        node.dirty = false;
+        for (node.children.items) |child| {
+            _ = markNonLayoutChildrenDirty(child, layout_path);
+        }
+    }
+    return removed_nodes.items.len;
+}
+
+export fn getRemovedNode(index: usize) [*]const u8 {
+    return removed_nodes.items[index].ptr;
+}
+
+export fn getRemovedNodeLength(index: usize) usize {
+    return removed_nodes.items[index].len;
+}
+
+export fn markAllNonLayoutNodesDirty() usize {
     const route = Fabric.getWindowPath();
     var itr = std.mem.tokenizeScalar(u8, route, '/');
     var buf = std.ArrayList(u8).init(Fabric.allocator_global);
@@ -1218,17 +1235,27 @@ export fn markAllNonLayoutNodesDirty() void {
 
         buf.appendSlice(sub) catch |err| {
             Fabric.printlnSrcErr("Allocator ran out of space {any}\n", .{err}, @src());
-            return;
+            return 0;
         };
     }
-    const parent_path = buf.toOwnedSlice() catch return;
-    layout_path = std.fmt.allocPrint(Fabric.allocator_global, "layout-{s}", .{parent_path}) catch return;
-    Fabric.printlnSrc("Layout Path {s}", .{layout_path}, @src());
-    markNonLayoutChildrenDirty(current_ctx.root.?);
+    if (buf.items.len == 0) {
+        buf.appendSlice("root") catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            unreachable;
+        };
+    }
+
+    const parent_path = buf.toOwnedSlice() catch return 0;
+    const layout_path = std.fmt.allocPrint(Fabric.allocator_global, "layout-{s}", .{parent_path}) catch return 0;
+    return markNonLayoutChildrenDirty(current_ctx.root.?, layout_path);
 }
 
 fn iterateChildren(node: *UINode) void {
-    println("{any} Node {s}\n", .{ node.type, node.uuid });
+    if (node.dirty) {
+        println("{any}\n", .{node.dirty});
+    } else {
+        println("Layout: node {any}\n", .{node.dirty});
+    }
     for (node.children.items) |child| {
         iterateChildren(child);
     }
@@ -1237,7 +1264,6 @@ fn iterateChildren(node: *UINode) void {
 pub fn iterateTreeChildren(tree: *CommandsTree) void {
     for (tree.children.items) |child| {
         iterateTreeChildren(child);
-        // println("Child: {}", .{child.node.elem_type});
     }
 }
 
@@ -1247,28 +1273,20 @@ fn createUUIDS(node: *UINode) void {
     KeyGenerator.resetCounter();
     for (node.children.items) |child| {
         const index: usize = depth;
-        if (child.uuid.len > 0) {
-            // Fabric.printlnSrc("uUUUId: {s}", .{child.uuid}, @src());
-            // Fabric.printlnSrc("Depth: {d}", .{depth}, @src());
-            // Fabric.printlnSrc("Count: {d}", .{KeyGenerator.getCount()}, @src());
-
-            // Fabric.printlnSrc("uUUUId: {s}", .{child.uuid}, @src());
-            // index += i;
-        } else {
-            const key = KeyGenerator.generateKey(
-                child.type,
-                node.uuid,
-                node.style,
-                index,
-                node,
-                &allocator_global,
-            );
-            child.uuid = key;
-            // we add this so that animations are sepeate, we need to be careful though since
-            // if a user does not specifc a id for a class, and the  rerender tree has the same id
-            // and then previous one uses an animation then that transistion and animation will be
-            // applied to the new node since it has the same class name and styling
-        }
+        if (child.uuid.len > 0) continue;
+        const key = KeyGenerator.generateKey(
+            child.type,
+            node.uuid,
+            node.style,
+            index,
+            node,
+            &allocator_global,
+        );
+        child.uuid = key;
+        // we add this so that animations are sepeate, we need to be careful though since
+        // if a user does not specifc a id for a class, and the  rerender tree has the same id
+        // and then previous one uses an animation then that transistion and animation will be
+        // applied to the new node since it has the same class name and styling
     }
     for (node.children.items) |child| {
         createUUIDS(child);
@@ -1278,7 +1296,6 @@ fn createUUIDS(node: *UINode) void {
 
 export fn callRouteRenderCycle(ptr: [*:0]u8) void {
     const route: []const u8 = std.mem.span(ptr);
-    defer allocator_global.free(route);
     renderCycle(route);
     markChildrenDirty(current_ctx.root.?);
     return;
@@ -1286,33 +1303,7 @@ export fn callRouteRenderCycle(ptr: [*:0]u8) void {
 export fn setRouteRenderTree(ptr: [*:0]u8) void {
     const route: []const u8 = std.mem.span(ptr);
     defer allocator_global.free(route);
-    println("Setting route {s}\n", .{route});
-
-    // const ctx = ctx_map.get(route) orelse {
-    //     println("Route not found\n", .{});
-    //     println("Loading Error page\n", .{});
-    //     ren("/error");
-    //     const err_context = ctx_map.get("/error") orelse {
-    //         println("No Error Map found\n", .{});
-    //         return;
-    //     };
-    //     current_ctx = err_context;
-    //     markChildrenDirty(current_ctx.root.?);
-    //     return;
-    // };
-
-    // current_ctx = ctx;
     renderCycle(route);
-    // iterateChildren(current_ctx.root.?);
-
-    // const cmd_tree = router.searchRoute(route) orelse {
-    //     println("No Call ptr found\n", .{});
-    //     Error.Page();
-    //     println("Setting route {s}\n", .{route});
-    //     markChildrenDirty(current_ctx.root.?);
-    //     return;
-    // };
-    markChildrenDirty(current_ctx.root.?);
     return;
 }
 
@@ -1372,10 +1363,8 @@ var layout_info = struct {
     .exit_animation_len = @offsetOf(Style, "exit_animation") + @sizeOf(usize),
     .classname = @offsetOf(Style, "style_id"),
     .classname_len = @offsetOf(Style, "style_id") + @sizeOf(usize),
-    // .p__active_offset = @offsetOf(RenderCommand, "active"),
 };
 pub export fn allocateLayoutInfo() *u8 {
-    // println("{any}\n", .{layout_info});
     const info_ptr: *u8 = @ptrCast(&layout_info);
     return info_ptr;
 }
@@ -1424,15 +1413,15 @@ pub fn transparentize(hex_str: []const u8, alpha: u8) [4]u8 {
 
     // Parse red component
     const r = std.fmt.parseInt(u8, hex_str[1..3], 16) catch return .{ 0, 0, 0, 255 };
-    rgba[0] = @as(u8, @floatFromInt(r));
+    rgba[0] = r;
 
     // Parse green component
     const g = std.fmt.parseInt(u8, hex_str[3..5], 16) catch return .{ 0, 0, 0, 255 };
-    rgba[1] = @as(u8, @floatFromInt(g));
+    rgba[1] = g;
 
     // Parse blue component
     const b = std.fmt.parseInt(u8, hex_str[5..7], 16) catch return .{ 0, 0, 0, 255 };
-    rgba[2] = @as(u8, @floatFromInt(b));
+    rgba[2] = b;
 
     // Set alpha to 1.0
     rgba[3] = alpha;
@@ -1497,7 +1486,6 @@ pub fn printlnSrcErr(
     _ = consoleLogColored(buf_with_src.ptr, buf_with_src.len, style_1[0..].ptr, style_1.len, style_2[0..].ptr, style_2.len);
     allocator_global.free(buf_with_src);
     allocator_global.free(buf);
-    // std.debug.print(fmt, args);
 }
 
 pub extern fn trackAlloc() void;
@@ -1509,12 +1497,12 @@ pub fn printlnWithColor(
     title: []const u8,
 ) void {
     const buf = std.fmt.allocPrint(allocator_global, fmt, args) catch return;
+    const color_buf = std.fmt.allocPrint(allocator_global, "color: {s};", .{color}) catch return;
     const buf_with_src = std.fmt.allocPrint(allocator_global, "[Fabric] [%c{s}%c] {s}", .{ title, buf[0..] }) catch return;
     const style_2 = "";
-    _ = consoleLogColored(buf_with_src.ptr, buf_with_src.len, color[0..].ptr, color.len, style_2[0..].ptr, style_2.len);
+    _ = consoleLogColored(buf_with_src.ptr, buf_with_src.len, color_buf[0..].ptr, color_buf.len, style_2[0..].ptr, style_2.len);
     allocator_global.free(buf_with_src);
     allocator_global.free(buf);
-    // std.debug.print(fmt, args);
 }
 
 pub fn printlnAllocation(
@@ -1528,7 +1516,6 @@ pub fn printlnAllocation(
     _ = consoleLogColored(buf_with_src.ptr, buf_with_src.len, style_1[0..].ptr, style_1.len, style_2[0..].ptr, style_2.len);
     allocator_global.free(buf_with_src);
     allocator_global.free(buf);
-    // std.debug.print(fmt, args);
 }
 
 pub fn printlnSrc(
@@ -1543,7 +1530,6 @@ pub fn printlnSrc(
     _ = consoleLogColored(buf_with_src.ptr, buf_with_src.len, style_1[0..].ptr, style_1.len, style_2[0..].ptr, style_2.len);
     allocator_global.free(buf_with_src);
     allocator_global.free(buf);
-    // std.debug.print(fmt, args);
 }
 
 pub fn println(
@@ -1553,7 +1539,6 @@ pub fn println(
     const buf = std.fmt.allocPrint(allocator_global, fmt, args) catch return;
     _ = consoleLog(buf.ptr, buf.len);
     allocator_global.free(buf);
-    // std.debug.print(fmt, args);
 }
 
 extern fn consoleLog(ptr: [*]const u8, len: usize) i32;
@@ -1577,7 +1562,7 @@ export fn resetRerender() void {
 }
 
 export fn setRerenderTrue() void {
-    global_rerender = true;
+    cycle();
 }
 
 pub extern fn mutateDomElementWasm(
@@ -1705,16 +1690,12 @@ pub fn addToRemoveClassesList(id: []const u8, style_id: []const u8) void {
 pub export fn pendingClassesToAdd() void {
     for (classes_to_add.items) |clta| {
         addClass(clta.element_id.ptr, clta.element_id.len, clta.style_id.ptr, clta.style_id.len);
-        // allocator_global.free(clta.element_id);
-        // allocator_global.free(clta.style_id);
     }
     classes_to_add.clearAndFree();
 }
 pub export fn pendingClassesToRemove() void {
     for (classes_to_remove.items) |cltr| {
         removeClass(cltr.element_id.ptr, cltr.element_id.len, cltr.style_id.ptr, cltr.style_id.len);
-        // allocator_global.free(cltr.element_id);
-        // allocator_global.free(cltr.style_id);
     }
     classes_to_remove.clearAndFree();
 }
@@ -1748,8 +1729,6 @@ pub extern fn createElement(
     id_len: usize,
     elem_type: u8,
     btn_id: u32,
-    // btn_id_ptr: [*]const u8,
-    // btn_id_len: usize,
     text_ptr: [*]const u8,
     text_len: usize,
 ) void;
@@ -1758,8 +1737,6 @@ pub extern fn callClickWASM(
     id_ptr: [*]const u8,
     id_len: usize,
 ) void;
-
-// pub extern fn zig_sleep(ms: u32) u32;
 
 pub fn loopInterval(name: []const u8, cb: anytype, args: anytype, delay: u32) void {
     const Args = @TypeOf(args);
@@ -1805,6 +1782,12 @@ export fn timeOutCtxCallback(id_ptr: [*:0]u8) void {
     @call(.auto, node.data.runFn, .{&node.data});
 }
 
+export fn timeoutCtxCallBackId(id: usize) void {
+    const node = Fabric.time_out_ctx_registry.get(id) orelse return;
+    defer _ = Fabric.time_out_ctx_registry.remove(id);
+    @call(.auto, node.data.runFn, .{&node.data});
+}
+
 // External JavaScript functions
 extern "env" fn checkFutureResolved(futureId: u32) u32;
 extern "env" fn getFutureValue(futureId: u32) bool;
@@ -1828,28 +1811,6 @@ const Future = struct {
     state: FutureState,
     result: i32,
 };
-
-// Global registry of futures
-var futures = std.ArrayList(Future).init(std.heap.page_allocator);
-//
-// Export to JS: Start a sleep operation
-export fn sleep(_: u32) u32 {
-    // Register a timeout with JS
-    // const futureId = registerTimeout(ms);
-
-    // // Create a future to track this operation
-    // const future = Future{
-    //     .id = futureId,
-    //     .state = FutureState.Pending,
-    //     .result = 0,
-    // };
-    //
-    // futures.append(future) catch {
-    //     return 0; // Error
-    // };
-
-    return 0;
-}
 
 pub fn registerCtxTimeout(ms: u32, cb: anytype, args: anytype) void {
     const Args = @TypeOf(args);
@@ -1877,8 +1838,8 @@ pub fn registerCtxTimeout(ms: u32, cb: anytype, args: anytype) void {
         .arguments = args,
     };
 
-    const id = ctx_registry.count() + 1;
-    ctx_registry.put(id, &closure.run_node) catch |err| {
+    const id = time_out_ctx_registry.count() + 1;
+    time_out_ctx_registry.put(id, &closure.run_node) catch |err| {
         println("Button Function Registry {any}\n", .{err});
     };
 
@@ -1899,10 +1860,6 @@ pub fn registerTimeout(ms: u32, cb: *const fn () void) void {
     } else {
         return;
     }
-}
-
-export fn wasm_sleep(ms: u32) u32 {
-    return sleep(ms);
 }
 
 extern fn setCookieWASM(cookie_ptr: [*]const u8, cookie_len: usize) void;
@@ -1945,23 +1902,6 @@ export fn callback(callbackId: u32) void {
     if (continuation) |cb| {
         @call(.auto, cb, .{});
     }
-}
-
-// Export to JS: Get the result of an async operation
-export fn getAsyncResult(futureId: u32) i32 {
-    // Find the future
-    for (futures.items, 0..) |future, i| {
-        if (future.id == futureId) {
-            if (future.state == FutureState.Resolved) {
-                // Clean up
-                _ = futures.swapRemove(i);
-                return future.result;
-            }
-            break;
-        }
-    }
-
-    return -1; // Error
 }
 
 export fn allocate(size: usize) ?[*]f32 {

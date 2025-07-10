@@ -7,6 +7,7 @@ const println = Fabric.println;
 const Style = types.Style;
 const InputParams = types.InputParams;
 const ElementDecl = types.ElementDeclaration;
+const ElementType = types.Elements.ElementType;
 
 const HeaderSize = enum(u32) {
     XXLarge = 12,
@@ -16,18 +17,7 @@ const HeaderSize = enum(u32) {
     Small = 1,
 };
 
-pub inline fn Header(text: []const u8, size: HeaderSize, style: Style) fn (void) void {
-    const local = struct {
-        fn CloseElement(_: void) void {
-            _ = Fabric.current_ctx.close();
-            return;
-        }
-        fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
-            _ = Fabric.current_ctx.configure(elem_decl);
-            return CloseElement;
-        }
-    };
-
+pub inline fn Header(text: []const u8, size: HeaderSize, style: Style) void {
     var elem_decl = ElementDecl{
         .style = style,
         .dynamic = .static,
@@ -36,8 +26,6 @@ pub inline fn Header(text: []const u8, size: HeaderSize, style: Style) fn (void)
     };
     // const dimensions = measureText(text, &elem_decl.style);
     // // Make sure this is the right order of ops
-    elem_decl.style.width.type = .elastic;
-    elem_decl.style.background = .{ 0, 0, 0, 0 };
     if (style.font_size == null) {
         switch (size) {
             .XXLarge => elem_decl.style.font_size = 12 * 12,
@@ -47,11 +35,9 @@ pub inline fn Header(text: []const u8, size: HeaderSize, style: Style) fn (void)
             .Small => elem_decl.style.font_size = 12 * 1,
         }
     }
-    _ = Fabric.current_ctx.open(elem_decl) catch |err| {
-        println("{any}\n", .{err});
-    };
-    _ = local.ConfigureElement(elem_decl);
-    return local.CloseElement;
+    _ = LifeCycle.open(elem_decl);
+    LifeCycle.configure(elem_decl);
+    LifeCycle.close({});
 }
 
 pub inline fn CtxHooks(hooks: Fabric.HooksCtxFuncs, func: anytype, args: anytype, style: Style) fn (void) void {
@@ -174,44 +160,15 @@ pub inline fn TextArea(text: []const u8, style: Style) void {
 }
 
 pub inline fn Text(text: []const u8, style: Style) void {
-    var elem_decl = ElementDecl{
+    const elem_decl = ElementDecl{
         .style = style,
         .dynamic = .static,
         .elem_type = .Text,
         .text = text,
     };
-    // const dimensions = measureText(text, &elem_decl.style);
-    // Make sure this is the right order of ops
-    // elem_decl.style.width = dimensions.width;
-    // elem_decl.style.height = dimensions.height;
-    elem_decl.style.width.type = .elastic;
     _ = LifeCycle.open(elem_decl);
     LifeCycle.configure(elem_decl);
     LifeCycle.close({});
-}
-
-pub inline fn Box(style: Style) fn (void) void {
-    const local = struct {
-        fn CloseElement(_: void) void {
-            _ = Fabric.current_ctx.close();
-            return;
-        }
-        fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
-            _ = Fabric.current_ctx.configure(elem_decl);
-            return CloseElement;
-        }
-    };
-
-    const elem_decl = ElementDecl{
-        .style = style,
-        .dynamic = .static,
-        .elem_type = .Box,
-    };
-    _ = Fabric.current_ctx.open(elem_decl) catch |err| {
-        println("{any}\n", .{err});
-    };
-    _ = local.ConfigureElement(elem_decl);
-    return local.CloseElement;
 }
 
 pub inline fn Svg(svg: []const u8, style: Style) void {
@@ -408,6 +365,7 @@ fn callsiteId() u64 {
 pub const BtnProps = struct {
     onPress: ?*const fn () void = null,
     onRelease: ?*const fn () void = null,
+    aria_label: ?[]const u8 = null,
 };
 
 const _local = struct {
@@ -429,6 +387,7 @@ pub inline fn Button(
         .style = style,
         .dynamic = .static,
         .elem_type = .Button,
+        .aria_label = btnProps.aria_label,
     };
     const ui_node = Fabric.current_ctx.open(elem_decl) catch |err| {
         println("{any}\n", .{err});
@@ -684,28 +643,43 @@ pub inline fn Form(style: Style) fn (void) void {
     return local.CloseElement;
 }
 
-pub inline fn Floating(style: Style) fn (void) void {
-    const local = struct {
-        fn CloseElement(_: void) void {
-            _ = Fabric.current_ctx.close();
-            return;
-        }
-        fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
-            _ = Fabric.current_ctx.configure(elem_decl);
-            return CloseElement;
-        }
+pub inline fn Center(style: Style) fn (void) void {
+    var elem_decl = ElementDecl{
+        .style = style,
+        .dynamic = .static,
+        .elem_type = .FlexBox,
     };
+    elem_decl.style.child_alignment.x = .center;
+    elem_decl.style.child_alignment.y = .center;
 
+    _ = LifeCycle.open(elem_decl);
+    LifeCycle.configure(elem_decl);
+    return LifeCycle.close;
+}
+
+pub inline fn Column(style: Style) fn (void) void {
+    var elem_decl = ElementDecl{
+        .style = style,
+        .dynamic = .static,
+        .elem_type = .FlexBox,
+    };
+    elem_decl.style.direction = .column;
+
+    _ = LifeCycle.open(elem_decl);
+    LifeCycle.configure(elem_decl);
+    return LifeCycle.close;
+}
+
+pub inline fn Box(style: Style) fn (void) void {
     const elem_decl = ElementDecl{
         .style = style,
         .dynamic = .static,
         .elem_type = .FlexBox,
     };
-    _ = Fabric.current_ctx.open(elem_decl) catch |err| {
-        println("{any}\n", .{err});
-    };
-    _ = local.ConfigureElement(elem_decl);
-    return local.CloseElement;
+
+    _ = LifeCycle.open(elem_decl);
+    LifeCycle.configure(elem_decl);
+    return LifeCycle.close;
 }
 
 pub inline fn FlexBox(style: Style) fn (void) void {
@@ -740,7 +714,7 @@ pub inline fn Icon(icon_name: []const u8, style: Style) void {
     };
     _ = LifeCycle.open(elem_decl);
     LifeCycle.configure(elem_decl);
-    LifeCycle.close();
+    LifeCycle.close({});
 }
 
 pub inline fn Image(link: []const u8, style: Style) void {
@@ -751,7 +725,7 @@ pub inline fn Image(link: []const u8, style: Style) void {
     };
     _ = LifeCycle.open(elem_decl);
     LifeCycle.configure(elem_decl);
-    LifeCycle.close();
+    LifeCycle.close({});
 }
 
 pub inline fn EmbedLink(link: []const u8) fn (void) void {
@@ -777,7 +751,7 @@ pub inline fn EmbedLink(link: []const u8) fn (void) void {
     return local.CloseElement;
 }
 
-pub inline fn RedirectLink(url: []const u8, style: Style) fn (void) void {
+pub inline fn RedirectLink(link_props: LinkProps, style: Style) fn (void) void {
     const local = struct {
         fn CloseElement(_: void) void {
             _ = Fabric.current_ctx.close();
@@ -790,10 +764,11 @@ pub inline fn RedirectLink(url: []const u8, style: Style) fn (void) void {
     };
 
     const elem_decl = ElementDecl{
-        .href = url,
+        .href = link_props.url,
         .elem_type = .RedirectLink,
         .style = style,
         .dynamic = .static,
+        .aria_label = link_props.aria_label,
     };
     _ = Fabric.current_ctx.open(elem_decl) catch |err| {
         println("{any}\n", .{err});
@@ -802,7 +777,12 @@ pub inline fn RedirectLink(url: []const u8, style: Style) fn (void) void {
     return local.CloseElement;
 }
 
-pub inline fn Link(url: []const u8, style: Style) fn (void) void {
+const LinkProps = struct {
+    url: []const u8,
+    aria_label: ?[]const u8 = null,
+};
+
+pub inline fn Link(link_props: LinkProps, style: Style) fn (void) void {
     const local = struct {
         fn CloseElement(_: void) void {
             _ = Fabric.current_ctx.close();
@@ -815,10 +795,11 @@ pub inline fn Link(url: []const u8, style: Style) fn (void) void {
     };
 
     const elem_decl = ElementDecl{
-        .href = url,
+        .href = link_props.url,
         .elem_type = .Link,
         .style = style,
         .dynamic = .static,
+        .aria_label = link_props.aria_label,
     };
     _ = Fabric.current_ctx.open(elem_decl) catch |err| {
         println("{any}\n", .{err});

@@ -6,6 +6,7 @@ pub const TransitionProperty = @import("Transition.zig").TransitionProperty;
 const print = std.debug.print;
 const ColorTheme = @import("constants/Color.zig");
 const Animation = @import("Animation.zig");
+pub const ElementType = @import("user_config").ElementType;
 pub const color_theme: ColorTheme = ColorTheme{};
 
 pub fn switchColorTheme() void {
@@ -28,18 +29,9 @@ pub const SizingType = enum(u8) {
     elastic = 4,
     elastic_percent = 5,
     none = 6,
+    clamp_px = 7,
+    clamp_percent = 8,
 };
-
-// const MinMax = struct {
-//     min: f32 = 0,
-//     max: f32 = 0,
-// };
-//
-// pub const SizingConstraint = union {
-//     minmax: MinMax,
-//     percent: MinMax,
-// };
-//
 
 const MinMax = struct {
     min: f32 = 0,
@@ -50,10 +42,22 @@ const MinMax = struct {
     }
 };
 
+const Clamp = struct {
+    min: f32 = 0,
+    max: f32 = 0,
+    boundary: f32 = 0,
+
+    pub fn eql(self: MinMax, other: MinMax) bool {
+        return self.min == other.min and self.max == other.max;
+    }
+};
+
 // Make it a tagged union by adding an enum
 pub const SizingConstraint = union(enum) {
     minmax: MinMax,
     percent: MinMax,
+    clamp_percent: Clamp,
+    clamp_px: Clamp,
 
     pub fn eql(self: SizingConstraint, other: SizingConstraint) bool {
         if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
@@ -61,6 +65,8 @@ pub const SizingConstraint = union(enum) {
         return switch (self) {
             .minmax => |mm| mm.eql(other.minmax),
             .percent => |mm| mm.eql(other.percent),
+            .clamp_px => |mm| mm.eql(other.clamp_px),
+            .clamp_percent => |mm| mm.eql(other.clamp_percent),
         };
     }
 };
@@ -72,7 +78,7 @@ pub const Sizing = struct {
     pub const grow = Sizing{ .type = .grow, .size = .{ .minmax = .{ .min = 0, .max = 0 } } };
     pub const fit = Sizing{ .type = .fit, .size = .{ .minmax = .{ .min = 0, .max = 0 } } };
 
-    pub fn fixed(size: f32) Sizing {
+    pub fn px(size: f32) Sizing {
         return .{ .type = .fixed, .size = .{ .minmax = .{
             .min = size,
             .max = size,
@@ -100,46 +106,27 @@ pub const Sizing = struct {
         } } };
     }
 
+    pub fn clamp_px(min: f32, boundary: f32, max: f32) Sizing {
+        return .{ .type = .clamp_px, .size = .{ .clamp_px = .{
+            .min = min,
+            .boundary = boundary,
+            .max = max,
+        } } };
+    }
+
+    pub fn clamp_percent(min: f32, boundary: f32, max: f32) Sizing {
+        return .{ .type = .clamp_percent, .size = .{ .clamp_percent = .{
+            .min = min,
+            .boundary = boundary,
+            .max = max,
+        } } };
+    }
+
     // Add custom equality function for Sizing
     pub fn eql(self: Sizing, other: Sizing) bool {
         return self.type == other.type and self.size.eql(other.size);
     }
 };
-
-// pub const Sizing = struct {
-//     size: SizingConstraint = .{ .minmax = .{} },
-//     type: SizingType = .none,
-//
-//     pub const grow = Sizing{ .type = .grow, .size = .{ .minmax = .{ .min = 0, .max = 0 } } };
-//     pub const fit = Sizing{ .type = .fit, .size = .{ .minmax = .{ .min = 0, .max = 0 } } };
-//
-//     pub fn fixed(size: f32) Sizing {
-//         return .{ .type = .fixed, .size = .{ .minmax = .{
-//             .min = size,
-//             .max = size,
-//         } } };
-//     }
-//
-//     pub fn elastic(min: f32, max: f32) Sizing {
-//         return .{ .type = .elastic, .size = .{ .minmax = .{
-//             .min = min,
-//             .max = max,
-//         } } };
-//     }
-//
-//     pub fn percent(size: f32) Sizing {
-//         return .{ .type = .percent, .size = .{ .minmax = .{
-//             .min = size,
-//             .max = size,
-//         } } };
-//     }
-//     pub fn elastic_percent(min: f32, max: f32) Sizing {
-//         return .{ .type = .elastic_percent, .size = .{ .percent = .{
-//             .min = min,
-//             .max = max,
-//         } } };
-//     }
-// };
 
 pub const PosType = enum(u8) {
     fit = 0,
@@ -153,7 +140,7 @@ pub const Pos = struct {
     value: f32 = 0,
 
     pub const grow = Pos{ .type = .grow, .value = 0 };
-    pub fn fixed(pos: f32) Pos {
+    pub fn px(pos: f32) Pos {
         return .{ .type = .fixed, .value = pos };
     }
 
@@ -174,6 +161,7 @@ pub const Background = struct {
     g: u8 = 0,
     b: u8 = 0,
     a: u8 = 0,
+    pub const transparent = Background{};
     pub fn hex(hex_str: []const u8) Background {
         const rgba_arr = Fabric.hexToRgba(hex_str);
         return Background{
@@ -181,6 +169,40 @@ pub const Background = struct {
             .g = rgba_arr[1],
             .b = rgba_arr[2],
             .a = rgba_arr[3],
+        };
+    }
+
+    // Function to darken a hex color string by a percentage and return Background struct
+    pub fn darken(hex_str: []const u8, percentage: f32) Background {
+        if (percentage < 0.0 or percentage > 100.0) {
+            @panic("Percentage must be between 0 and 100");
+        }
+
+        const rgba_arr = Fabric.hexToRgba(hex_str);
+        const factor = 1.0 - (percentage / 100.0);
+
+        return Background{
+            .r = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[0])) * factor),
+            .g = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[1])) * factor),
+            .b = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[2])) * factor),
+            .a = rgba_arr[3], // Keep alpha unchanged
+        };
+    }
+
+    // Function to lighten a hex color string by a percentage and return Background struct
+    pub fn lighten(hex_str: []const u8, percentage: f32) Background {
+        if (percentage < 0.0 or percentage > 100.0) {
+            @panic("Percentage must be between 0 and 100");
+        }
+
+        const rgba_arr = Fabric.hexToRgba(hex_str);
+        const factor = percentage / 100.0;
+
+        return Background{
+            .r = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[0])) + (@as(f32, 255.0) - @as(f32, @floatFromInt(rgba_arr[0]))) * factor),
+            .g = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[1])) + (@as(f32, 255.0) - @as(f32, @floatFromInt(rgba_arr[1]))) * factor),
+            .b = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[2])) + (@as(f32, 255.0) - @as(f32, @floatFromInt(rgba_arr[2]))) * factor),
+            .a = rgba_arr[3], // Keep alpha unchanged
         };
     }
     pub fn rgba(r: u8, g: u8, b: u8, a: u8) Background {
@@ -290,6 +312,38 @@ pub const BorderRadius = struct {
             .bottom_right = bottom_right,
         };
     }
+    pub fn top_bottom(top_radius: f32, bottom_radius: f32) BorderRadius {
+        return BorderRadius{
+            .top_left = top_radius,
+            .top_right = top_radius,
+            .bottom_left = bottom_radius,
+            .bottom_right = bottom_radius,
+        };
+    }
+    pub fn bottom(radius: f32) BorderRadius {
+        return BorderRadius{
+            .top_left = 0,
+            .top_right = 0,
+            .bottom_left = radius,
+            .bottom_right = radius,
+        };
+    }
+    pub fn top(radius: f32) BorderRadius {
+        return BorderRadius{
+            .top_left = radius,
+            .top_right = radius,
+            .bottom_left = 0,
+            .bottom_right = 0,
+        };
+    }
+    pub fn left_right(left: f32, right: f32) BorderRadius {
+        return BorderRadius{
+            .top_left = left,
+            .top_right = right,
+            .bottom_left = left,
+            .bottom_right = right,
+        };
+    }
 };
 
 pub const Shadow = struct {
@@ -299,17 +353,6 @@ pub const Shadow = struct {
     spread: f32 = 0,
     color: Background = .{},
 };
-
-// pub const Transform = struct {
-//     x: f32,
-//     y: f32,
-//     width: f32,
-//     height: f32,
-//     pub fn scale(x: f32, y: f32, width: f32, height: f32) Transform {
-//     }
-//     pub fn scale_all(value: f32) Transform {
-//     }
-// };
 
 pub const Border = struct {
     top: f32 = 0,
@@ -402,24 +445,6 @@ pub const Transform = struct {
     percent: f32 = 0,
     type: TransformType = .none,
     opacity: ?u32 = null,
-    // pub fn scale(size: f32) Transform {
-    //     return .{
-    //         .scale_size = size,
-    //         .type = .scale,
-    //     };
-    // }
-    // pub fn translateX(dist: f32) Transform {
-    //     return .{
-    //         .type = .translateX,
-    //         .dist = dist,
-    //     };
-    // }
-    // pub fn translateY(dist: f32) Transform {
-    //     return .{
-    //         .type = .translateY,
-    //         .dist = dist,
-    //     };
-    // }
 };
 
 pub const Hover = struct {
@@ -553,14 +578,16 @@ pub const Outline = enum(u8) {
 };
 
 pub const FlexType = enum(u8) {
-    flex = 0, // "flex"
-    inline_flex = 1, // "inline-flex"
-    inherit = 2, // "inherit"
-    initial = 3, // "initial"
-    revert = 4, // "revert"
-    unset = 5, // "unset"
-    none = 6,
-    inline_block = 7, // "inline-block"
+    Flex = 0, // "flex"
+    InlineFlex = 1, // "inline-flex"
+    Inherit = 2, // "inherit"
+    Initial = 3, // "initial"
+    Revert = 4, // "revert"
+    Unset = 5, // "unset"
+    None = 6,
+    InlineBlock = 7, // "inline-block"
+    Inline = 8, // "inline-flex"
+    Center = 9, // "centers the child content"
 };
 
 // Enum definition for flex-wrap property
@@ -655,13 +682,9 @@ pub const ChildStyle = struct {
     outline: ?Outline = null,
     transition: ?Transition = null,
     show_scrollbar: bool = true,
-    // active: ?Active = null,
     btn_id: u32 = 0,
     dialog_id: ?[]const u8 = null,
     accent_color: ?[4]u8 = null,
-    // x: u32 = 0,
-    // focused: Focused = .{},
-    // pressed: Pressed = .{},
 };
 
 pub const Cursor = enum {
@@ -705,6 +728,22 @@ pub const TransformOrigin = enum(u8) {
     left = 3,
 };
 
+pub const ChildAlignment = struct {
+    x: Alignment = .start,
+    y: Alignment = .start,
+    pub const center = ChildAlignment{ .x = .center, .y = .center };
+    pub const start_center = ChildAlignment{ .x = .start, .y = .center };
+    pub const end_center = ChildAlignment{ .x = .end, .y = .center };
+    pub const top_center = ChildAlignment{ .x = .center, .y = .start };
+    pub const top_right = ChildAlignment{ .x = .end, .y = .start };
+    pub const top_left = ChildAlignment{ .x = .start, .y = .start };
+    pub const bottom_right = ChildAlignment{ .x = .end, .y = .end };
+    pub const bottom_left = ChildAlignment{ .x = .start, .y = .end };
+    pub const bottom_center = ChildAlignment{ .x = .center, .y = .end };
+    pub const even_center = ChildAlignment{ .x = .even, .y = .center };
+    pub const between_center = ChildAlignment{ .x = .between, .y = .center };
+};
+
 /// Global user-defined default style that overrides system defaults
 var user_defaults: ?Style = null;
 
@@ -739,7 +778,7 @@ pub const Style = struct {
 
     /// Background color as RGBA array [red, green, blue, alpha] (0-255 each)
     /// Default: transparent black
-    background: ?Background = .{},
+    background: ?Background = null,
 
     /// Width sizing configuration (fixed, percentage, auto, etc.)
     width: Sizing = .{},
@@ -763,20 +802,27 @@ pub const Style = struct {
     border_radius: ?BorderRadius = null,
 
     /// Border thickness specification
-    border_thickness: ?Border = .default(),
+    border_thickness: ?Border = null,
 
     /// Border color as RGBA array [red, green, blue, alpha]
     border_color: ?Background = .{},
 
+    border: ?struct {
+        thickness: Border = .all(1),
+        color: ?Background = null,
+        radius: ?BorderRadius = null,
+    } = null,
+
     /// Text color as RGBA array [red, green, blue, alpha]
     /// Default: solid black
     text_color: ?Background = .{ .a = 255 },
+    gradient: ?[]const Background = null,
 
     /// Internal spacing configuration
-    padding: Padding = .{},
+    padding: ?Padding = null,
 
     /// External spacing configuration
-    margin: Margin = .{},
+    margin: ?Margin = .{},
 
     /// Content overflow behavior (visible, hidden, scroll, auto)
     overflow: ?Overflow = null,
@@ -789,10 +835,7 @@ pub const Style = struct {
 
     /// Alignment configuration for child elements
     /// x: horizontal alignment, y: vertical alignment
-    child_alignment: struct { x: Alignment, y: Alignment } = .{
-        .x = .center,
-        .y = .center,
-    },
+    child_alignment: ChildAlignment = ChildAlignment{},
 
     /// Gap between child elements in pixels
     child_gap: u32 = 0,
@@ -981,7 +1024,7 @@ pub const Style = struct {
     /// # Usage:
     /// ```zig
     /// // Create a button style with custom background and padding
-    /// const button_style = Style.apply(.{
+    /// const button_style = Style.override(.{
     ///     .background = .{ 70, 130, 180, 255 }, // Steel blue
     ///     .padding = .all(12),
     ///     .border_radius = .all(6),
@@ -989,14 +1032,14 @@ pub const Style = struct {
     /// });
     ///
     /// // Create a card style with shadow and border
-    /// const card_style = Style.apply(.{
+    /// const card_style = Style.override(.{
     ///     .background = .{ 255, 255, 255, 255 }, // White background
     ///     .shadow = .{ .blur = 10, .color = .{ 0, 0, 0, 50 } },
     ///     .border_radius = .all(8),
     ///     .padding = .all(16),
     /// });
     /// ```
-    pub fn apply(overrides: Style) Style {
+    pub fn override(overrides: Style) Style {
         return overrides.merge(Style.getDefault());
     }
 
@@ -1019,8 +1062,8 @@ pub const Style = struct {
     ///     .background = .{ 248, 249, 250, 255 }, // Light gray
     /// });
     ///
-    /// // All subsequent Style.apply() calls will inherit these defaults
-    /// const button = Style.apply(.{ .padding = .all(8) });
+    /// // All subsequent Style.override() calls will inherit these defaults
+    /// const button = Style.override(.{ .padding = .all(8) });
     /// // button now has Inter font, 14px size, dark gray text, etc.
     /// ```
     pub fn setDefault(new_default: Style) void {
@@ -1166,61 +1209,84 @@ pub const ButtonType = enum {
 pub const ElementDeclaration = struct {
     hooks: HooksIds = .{},
     style: Style = .{},
-    elem_type: ElementType = .FlexBox,
+    elem_type: ElementType,
     text: []const u8 = "",
     svg: []const u8 = "",
     href: []const u8 = "",
     show: bool = true,
     input_params: ?InputParams = null,
     event_type: ?EventType = null,
-    dynamic: StateType = .pure,
+    dynamic: StateType = .static,
+    aria_label: ?[]const u8 = null,
+    /// Used for passing ect data
+    udata: usize = 0,
 };
-pub const Element = fn (Style) fn (void) void;
 
-pub const ElementType = enum {
-    Rectangle,
-    Text,
-    Image,
-    FlexBox,
-    Input,
-    Button,
-    Block,
-    Box,
-    Header,
-    Svg,
-    Link,
-    EmbedLink,
-    List,
-    ListItem,
-    _If,
-    Hooks,
-    Layout,
-    Page,
-    Bind,
-    Dialog,
-    DialogBtnShow,
-    DialogBtnClose,
-    Draggable,
-    RedirectLink,
-    Select,
-    SelectItem,
-    CtxButton,
-    EmbedIcon,
-    Icon,
-    Label,
-    Form,
-    AllocText,
-    Table,
-    TableRow,
-    TableCell,
-    TableHeader,
-    TableBody,
-    TextArea,
-    Canvas,
-    SubmitCtxButton,
-    HooksCtx,
-    JsonEditor,
-};
+// A comptime function to merge two enums
+pub fn createMergedEnum(comptime BaseEnum: type, comptime CustomEnum: type) type {
+    // Get the fields of both enums using @typeInfo
+    const base_fields = @typeInfo(BaseEnum).@"enum".fields;
+    const custom_fields = @typeInfo(CustomEnum).@"enum".fields;
+
+    // Create a new array to hold the merged fields
+    var merged_fields: [base_fields.len + custom_fields.len]std.builtin.Type.EnumField = undefined;
+
+    // Copy fields from the base enum
+    for (base_fields, 0..) |field, i| {
+        merged_fields[i] = .{
+            .name = field.name,
+            .value = field.value,
+        };
+    }
+
+    // Copy fields from the custom enum, adjusting their values to avoid conflicts
+    for (custom_fields, 0..) |field, i| {
+        merged_fields[base_fields.len + i] = .{
+            .name = field.name,
+            .value = base_fields.len + field.value,
+        };
+    }
+
+    // Create the new enum type using @Type
+    return @Type(.{
+        .@"enum" = .{
+            .tag_type = u8, // Or another suitable integer type
+            .fields = &merged_fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+}
+pub fn addCustomChoice(_name: []const u8, comptime T: anytype) type {
+    const name = std.mem.Allocator.dupeZ(std.heap.page_allocator, u8, _name) catch {};
+    // we should probably add some error-checks here that T is an enum etc!
+
+    // use reflection to get the information of the comptime parameter T
+    const enum_type = @typeInfo(T).@"enum";
+
+    // define an array, in compile time, with the fields of our new enum
+    // that has room for "custom".
+    comptime var fields: [enum_type.fields.len + 1]std.builtin.Type.EnumField = undefined;
+
+    // define our first field to be "custom" and have the value "1 more than
+    // the number of fields".
+    fields[0] = .{ .name = name, .value = enum_type.fields.len };
+
+    // copy the field from the "base" enum
+    inline for (1.., enum_type.fields) |idx, f| {
+        fields[idx] = f;
+    }
+
+    // and declare and return our new type!
+    const enumInfo = std.builtin.Type.Enum{
+        .tag_type = u8,
+        .fields = &fields,
+        .decls = &[0]std.builtin.Type.Declaration{},
+        .is_exhaustive = true,
+    };
+
+    return @Type(std.builtin.Type{ .@"enum" = enumInfo });
+}
 
 pub const RenderCommand = struct {
     /// Rectangular box that fully encloses this UI element
