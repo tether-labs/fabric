@@ -213,6 +213,7 @@ export fn ctxHooksMountedCallback(id: u32) void {
 export fn buttonCallback(id_ptr: [*:0]u8) void {
     const id = std.mem.span(id_ptr);
     defer Fabric.allocator_global.free(id);
+    Fabric.current_depth_node_id = std.mem.Allocator.dupe(Fabric.allocator_global, u8, id) catch return;
     const func = Fabric.registry.get(id) orelse return;
     @call(.auto, func, .{});
 }
@@ -389,8 +390,7 @@ pub inline fn Button(
         .elem_type = .Button,
         .aria_label = btnProps.aria_label,
     };
-    const ui_node = Fabric.current_ctx.open(elem_decl) catch |err| {
-        println("{any}\n", .{err});
+    const ui_node = LifeCycle.open(elem_decl) orelse {
         unreachable;
     };
 
@@ -400,8 +400,8 @@ pub inline fn Button(
         };
     }
 
-    _ = _local.ConfigureElement(elem_decl);
-    return _local.CloseElement;
+    LifeCycle.configure(elem_decl);
+    return LifeCycle.close;
 }
 
 pub inline fn Select(style: Style) fn (void) void {

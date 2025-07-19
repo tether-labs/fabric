@@ -79,9 +79,10 @@ fn sizingTypeToCSS(sizing: Sizing, writer: anytype) !void {
         .fixed => try writer.print("{d}px", .{sizing.size.minmax.min}),
         .elastic => try writer.writeAll("auto"), // Could also use min/max width/height in separate properties
         .elastic_percent => try writer.print("{d}%", .{sizing.size.percent.min}),
-        .clamp_px => try writer.print("clamp({d}px,{d}px,{d}px)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
-        .clamp_percent => try writer.print("clamp({d}%,{d}px,{d}%)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
+        .clamp_px => try writer.print("clamp({d}px,{d}px,{d}px)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.preferred, sizing.size.clamp_px.max }),
+        .clamp_percent => try writer.print("clamp({d}%,{d}%,{d}%)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.preferred, sizing.size.clamp_px.max }),
         .none, .grow => {},
+        else => {},
     }
 }
 
@@ -389,7 +390,14 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
 
     // Write width and height
     if (style.width.type != .none and style.width.type != .grow) {
-        if (style.width.type == .elastic_percent) {
+        if (style.width.type == .min_max_vp) {
+            writer.writeAll("  max-width: ") catch {};
+            writer.print("{d}vw", .{style.width.size.min_max_vp.max}) catch {};
+            writer.writeAll(";\n") catch {};
+            writer.writeAll("  min-width: ") catch {};
+            writer.print("{d}vw", .{style.width.size.min_max_vp.min}) catch {};
+            writer.writeAll(";\n") catch {};
+        } else if (style.width.type == .elastic_percent) {
             writer.writeAll("  max-width: ") catch {};
             writer.print("{d}%", .{style.width.size.percent.max}) catch {};
             writer.writeAll(";\n") catch {};
@@ -406,9 +414,18 @@ pub export fn getStyle(node_ptr: ?*UINode) [*]const u8 {
     }
 
     if (style.height.type != .none and style.height.type != .grow) {
-        writer.writeAll("  height: ") catch {};
-        sizingTypeToCSS(style.height, writer) catch {};
-        writer.writeAll(";\n") catch {};
+        if (style.height.type == .min_max_vp) {
+            // writer.writeAll("  max-height: ") catch {};
+            // writer.print("{d}vh", .{style.height.size.min_max_vp.max}) catch {};
+            // writer.writeAll(";\n") catch {};
+            writer.writeAll("  min-height: ") catch {};
+            writer.print("{d}vh", .{style.height.size.min_max_vp.min}) catch {};
+            writer.writeAll(";\n") catch {};
+        } else {
+            writer.writeAll("  height: ") catch {};
+            sizingTypeToCSS(style.height, writer) catch {};
+            writer.writeAll(";\n") catch {};
+        }
     } else if (style.height.type == .grow) {
         writer.writeAll("flex: 1;\n") catch {};
     }

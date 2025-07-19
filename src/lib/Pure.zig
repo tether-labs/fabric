@@ -8,6 +8,7 @@ const CommandsTree = UIContext.CommandsTree;
 const Transition = @import("Transition.zig").Transition;
 const TransitionState = @import("Transition.zig").TransitionState;
 const Element = @import("Element.zig").Element;
+const LifeCycle = Fabric.LifeCycle;
 
 const Style = types.Style;
 const EventType = types.EventType;
@@ -417,38 +418,33 @@ pub inline fn CtxButton(func: anytype, args: anytype, style: Style) fn (void) vo
     _ = local.ConfigureElement(elem_decl);
     return local.CloseElement;
 }
+pub const BtnProps = struct {
+    onPress: ?*const fn () void = null,
+    onRelease: ?*const fn () void = null,
+    aria_label: ?[]const u8 = null,
+};
 
 pub inline fn Button(
-    func: *const fn () void,
+    btnProps: BtnProps,
     style: Style,
 ) fn (void) void {
-    const local = struct {
-        fn CloseElement(_: void) void {
-            _ = Fabric.current_ctx.close();
-            return;
-        }
-        fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
-            _ = Fabric.current_ctx.configure(elem_decl);
-            return CloseElement;
-        }
-    };
-
     const elem_decl = ElementDecl{
         .style = style,
         .dynamic = .pure,
         .elem_type = .Button,
+        .aria_label = btnProps.aria_label,
     };
-
-    const ui_node = Fabric.current_ctx.open(elem_decl) catch |err| {
-        println("{any}\n", .{err});
+    const ui_node = LifeCycle.open(elem_decl) orelse {
         unreachable;
     };
+    if (btnProps.onPress) |onPress| {
+        Fabric.registry.put(ui_node.uuid, onPress) catch |err| {
+            println("Button Function Registry {any}\n", .{err});
+        };
+    }
 
-    Fabric.registry.put(ui_node.uuid, func) catch |err| {
-        println("Button Function Registry {any}\n", .{err});
-    };
-    _ = local.ConfigureElement(elem_decl);
-    return local.CloseElement;
+    LifeCycle.configure(elem_decl);
+    return LifeCycle.close;
 }
 
 pub inline fn Select(style: Style) fn (void) void {

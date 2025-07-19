@@ -691,6 +691,12 @@ pub fn traverseChildren(ui_ctx: *UIContext, parent_op: ?*UINode, ui_tree_parent:
                 if (child.style.hover) |_| {
                     render_cmd.hover = true;
                 }
+                if (child.style.focus) |_| {
+                    render_cmd.focus = true;
+                }
+                if (child.style.focus_within) |_| {
+                    render_cmd.focus_within = true;
+                }
 
                 const tree: *CommandsTree = ui_ctx.allocator.create(CommandsTree) catch unreachable;
                 tree.* = .{

@@ -8,6 +8,7 @@ const ColorTheme = @import("constants/Color.zig");
 const Animation = @import("Animation.zig");
 pub const ElementType = @import("user_config").ElementType;
 pub const color_theme: ColorTheme = ColorTheme{};
+const isMobile = @import("utils.zig").isMobile;
 
 pub fn switchColorTheme() void {
     switch (color_theme.theme) {
@@ -31,6 +32,7 @@ pub const SizingType = enum(u8) {
     none = 6,
     clamp_px = 7,
     clamp_percent = 8,
+    min_max_vp = 9,
 };
 
 const MinMax = struct {
@@ -45,7 +47,7 @@ const MinMax = struct {
 const Clamp = struct {
     min: f32 = 0,
     max: f32 = 0,
-    boundary: f32 = 0,
+    preferred: f32 = 0,
 
     pub fn eql(self: MinMax, other: MinMax) bool {
         return self.min == other.min and self.max == other.max;
@@ -58,11 +60,13 @@ pub const SizingConstraint = union(enum) {
     percent: MinMax,
     clamp_percent: Clamp,
     clamp_px: Clamp,
+    min_max_vp: MinMax,
 
     pub fn eql(self: SizingConstraint, other: SizingConstraint) bool {
         if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
 
         return switch (self) {
+            .min_max_vp => |mm| mm.eql(other.min_max_vp),
             .minmax => |mm| mm.eql(other.minmax),
             .percent => |mm| mm.eql(other.percent),
             .clamp_px => |mm| mm.eql(other.clamp_px),
@@ -114,10 +118,30 @@ pub const Sizing = struct {
         } } };
     }
 
-    pub fn clamp_percent(min: f32, boundary: f32, max: f32) Sizing {
+    pub fn min_max_vp(min: f32, max: f32) Sizing {
+        return .{ .type = .min_max_vp, .size = .{ .min_max_vp = .{
+            .min = min,
+            .max = max,
+        } } };
+    }
+
+    pub fn mobile_desktop_percent(mobile: f32, desktop: f32) Sizing {
+        if (isMobile()) {
+            return .{ .type = .percent, .size = .{ .minmax = .{
+                .min = mobile,
+                .max = mobile,
+            } } };
+        }
+            return .{ .type = .percent, .size = .{ .minmax = .{
+                .min = desktop,
+                .max = desktop,
+            } } };
+    }
+
+    pub fn clamp_percent(min: f32, preferred: f32, max: f32) Sizing {
         return .{ .type = .clamp_percent, .size = .{ .clamp_percent = .{
             .min = min,
-            .boundary = boundary,
+            .preferred = preferred,
             .max = max,
         } } };
     }
@@ -243,6 +267,31 @@ pub const Padding = struct {
             .bottom = size,
             .left = size,
             .right = size,
+        };
+    }
+    pub fn tbrl(top: u32, bottom: u32, left: u32, right: u32) Padding {
+        return Padding{
+            .top = top,
+            .bottom = bottom,
+            .left = left,
+            .right = right,
+        };
+    }
+
+    pub fn tb(top: u32, bottom: u32) Padding {
+        return Padding{
+            .top = top,
+            .bottom = bottom,
+            .left = 0,
+            .right = 0,
+        };
+    }
+    pub fn lr(left: u32, right: u32) Padding {
+        return Padding{
+            .top = 0,
+            .bottom = 0,
+            .left = left,
+            .right = right,
         };
     }
     pub fn horizontal(size: u32) Padding {
@@ -445,6 +494,30 @@ pub const Transform = struct {
     percent: f32 = 0,
     type: TransformType = .none,
     opacity: ?u32 = null,
+};
+
+pub const Focus = struct {
+    position: ?Position = null,
+    display: ?FlexType = null,
+    direction: ?Direction = null,
+    width: ?Sizing = null,
+    height: ?Sizing = null,
+    font_size: ?i32 = null,
+    letter_spacing: ?i32 = null,
+    line_height: ?i32 = null,
+    font_weight: ?usize = null,
+    border_radius: ?BorderRadius = null,
+    border_thickness: ?Border = null,
+    border_color: ?Background = null,
+    text_color: ?Background = null,
+    padding: ?Padding = null,
+    child_alignment: ?struct { x: Alignment, y: Alignment } = null,
+    child_gap: u16 = 0,
+    background: ?Background = null,
+    shadow: Shadow = .{},
+    transform: Transform = .{},
+    opacity: f32 = 1,
+    child_style: ?ChildStyle = null,
 };
 
 pub const Hover = struct {
@@ -732,16 +805,18 @@ pub const ChildAlignment = struct {
     x: Alignment = .start,
     y: Alignment = .start,
     pub const center = ChildAlignment{ .x = .center, .y = .center };
-    pub const start_center = ChildAlignment{ .x = .start, .y = .center };
-    pub const end_center = ChildAlignment{ .x = .end, .y = .center };
     pub const top_center = ChildAlignment{ .x = .center, .y = .start };
+    pub const left_center = ChildAlignment{ .x = .start, .y = .center };
+    pub const right_center = ChildAlignment{ .x = .end, .y = .center };
+    pub const bottom_center = ChildAlignment{ .x = .center, .y = .end };
     pub const top_right = ChildAlignment{ .x = .end, .y = .start };
     pub const top_left = ChildAlignment{ .x = .start, .y = .start };
     pub const bottom_right = ChildAlignment{ .x = .end, .y = .end };
     pub const bottom_left = ChildAlignment{ .x = .start, .y = .end };
-    pub const bottom_center = ChildAlignment{ .x = .center, .y = .end };
-    pub const even_center = ChildAlignment{ .x = .even, .y = .center };
-    pub const between_center = ChildAlignment{ .x = .between, .y = .center };
+    pub const x_even_center = ChildAlignment{ .x = .even, .y = .center };
+    pub const y_even_center = ChildAlignment{ .x = .center, .y = .even };
+    pub const x_between_center = ChildAlignment{ .x = .between, .y = .center };
+    pub const y_between_center = ChildAlignment{ .x = .center, .y = .between };
 };
 
 /// Global user-defined default style that overrides system defaults
@@ -893,6 +968,12 @@ pub const Style = struct {
 
     /// Hover state styling
     hover: ?Hover = null,
+
+    /// Focus state styling
+    focus: ?Focus = null,
+
+    /// Focus Within state styling
+    focus_within: ?Focus = null,
 
     /// Button identifier for click handling
     btn_id: u32 = 0,
@@ -1300,6 +1381,8 @@ pub const RenderCommand = struct {
     hooks: HooksIds,
     node_ptr: *UINode,
     hover: bool = false,
+    focus: bool = false,
+    focus_within: bool = false,
 };
 
 pub const EventType = enum(u8) {

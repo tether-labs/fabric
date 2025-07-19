@@ -65,9 +65,10 @@ fn sizingTypeToCSS(sizing: Sizing, writer: anytype) !void {
         .fixed => try writer.print("{d}px", .{sizing.size.minmax.min}),
         .elastic => try writer.writeAll("auto"), // Could also use min/max width/height in separate properties
         .elastic_percent => try writer.print("{d}%", .{sizing.size.percent.min}),
-        .clamp_px => try writer.print("clamp({d}px,{d}px,{d}px)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
-        .clamp_percent => try writer.print("clamp({d}%,{d}%,{d}%)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.boundary, sizing.size.clamp_px.max }),
+        .clamp_px => try writer.print("clamp({d}px,{d}px,{d}px)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.preferred, sizing.size.clamp_px.max }),
+        .clamp_percent => try writer.print("clamp({d}%,{d}%,{d}%)", .{ sizing.size.clamp_px.min, sizing.size.clamp_px.preferred, sizing.size.clamp_px.max }),
         .none, .grow => {},
+        else => {},
     }
 }
 

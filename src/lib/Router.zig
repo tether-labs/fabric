@@ -172,7 +172,8 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
 
         var remaining = segment;
         while (remaining.len > 0) {
-            const match = node.findChildWithCommonPrefix(remaining) orelse break;
+            const match = node.findChildWithCommonPrefix(remaining) orelse return null;
+
             const common_len = findCommonPrefix(match.prefix, remaining);
 
             if (common_len != match.prefix.len) return null;

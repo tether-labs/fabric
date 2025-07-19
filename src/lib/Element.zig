@@ -298,7 +298,7 @@ pub const Element = struct {
             return;
         };
         if (self.element_type != .Input) {
-            Fabric.println("Cannot focus on Input element\n", .{});
+            Fabric.println("Can only focus on Input Element, add element Type Input\n", .{});
             return null;
         }
         // Fabric.addClass(id.ptr, id.len, classId.ptr, classId.len);

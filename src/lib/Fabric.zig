@@ -16,6 +16,8 @@ const ColorTheme = @import("constants/Color.zig");
 const TrackingAllocator = @import("TrackingAllocator.zig");
 pub const KeyStone = @import("keystone/KeyStone.zig");
 const getHoverStyle = @import("convertHover.zig").getHoverStyle;
+const getFocusStyle = @import("convertFocus.zig").getFocusStyle;
+const getFocusWithinStyle = @import("convertFocusWithin.zig").getFocusWithinStyle;
 const getStyle = @import("convertStyle.zig").getStyle;
 const generateInputHTML = @import("grabInputDetails.zig").generateInputHTML;
 const grabInputDetails = @import("grabInputDetails.zig");
@@ -41,16 +43,21 @@ pub const StateType = types.StateType;
 const RenderCommand = types.RenderCommand;
 pub const ElementType = types.ElementType;
 const Hover = types.Hover;
+const Focus = types.Focus;
 const Transform = types.Transform;
 const TransformType = types.TransformType;
 pub var current_ctx: *UIContext = undefined;
 pub var ctx_map: std.StringHashMap(*UIContext) = undefined;
 pub var page_map: std.StringHashMap(*const fn () void) = undefined;
+pub var layout_map: std.StringHashMap(*const fn (*const fn () void) void) = undefined;
 pub var page_deinit_map: std.StringHashMap(*const fn () void) = undefined;
 pub var global_rerender: bool = false;
 pub var rerender_everything: bool = false;
 pub var grain_rerender: bool = false;
+pub var grain_element_uuid: []const u8 = "";
+pub var current_depth_node_id: []const u8 = "";
 pub var router: Router = undefined;
+var serious_error: bool = false;
 
 const Fabric = @This();
 pub const Dynamic = @import("Dynamic.zig");
@@ -315,17 +322,17 @@ var continuations: [64]?ContinuationFn = undefined;
 
 pub var allocator_global: std.mem.Allocator = undefined;
 pub var key_depth_map: std.StringHashMap(usize) = undefined;
-pub var browser_width: i32 = 0;
-pub var browser_height: i32 = 0;
+pub var browser_width: f32 = 0;
+pub var browser_height: f32 = 0;
 
 pub const FabricConfig = struct {
-    screen_width: i32,
-    screen_height: i32,
+    screen_width: f32,
+    screen_height: f32,
     allocator: *std.mem.Allocator,
 };
 
-sw: i32,
-sh: i32,
+sw: f32,
+sh: f32,
 allocator: *std.mem.Allocator,
 
 pub fn init(target: *Fabric, config: FabricConfig) void {
@@ -362,6 +369,7 @@ pub fn init(target: *Fabric, config: FabricConfig) void {
     browser_height = config.screen_height;
     ctx_map = std.StringHashMap(*UIContext).init(config.allocator.*);
     page_map = std.StringHashMap(*const fn () void).init(config.allocator.*);
+    layout_map = std.StringHashMap(*const fn (*const fn () void) void).init(config.allocator.*);
     page_deinit_map = std.StringHashMap(*const fn () void).init(config.allocator.*);
 
     const theme = ColorTheme{};
@@ -377,6 +385,8 @@ pub fn init(target: *Fabric, config: FabricConfig) void {
 
     _ = getStyle(null);
     _ = getHoverStyle(null);
+    _ = getFocusStyle(null);
+    _ = getFocusWithinStyle(null);
     _ = createInput(null);
     _ = getInputType(null);
     _ = getInputSize(null);
@@ -443,6 +453,7 @@ pub fn deinit(_: *Fabric) void {
 
     // we deinit the pages
     page_map.deinit();
+    layout_map.deinit();
 
     // then we call all the component deinit functions for all the signals attached
     var deinit_itr = page_deinit_map.iterator();
@@ -514,6 +525,15 @@ pub fn cycle() void {
     requestRerenderWasm();
 }
 
+/// Force rerender forces the entire dom tree to check props of all dynamic and pure components and rerender the ui
+/// since Fabric is built with zig and wasm, checking all props of 10000s of nodes and ui components is cheap
+/// feel free to abuse force, its essentially a global signal
+pub fn cycleGrain() void {
+    Fabric.grain_rerender = true;
+    Fabric.println("Grain rerender", .{});
+    // requestRerenderWasm();
+}
+
 /// Force rerender forces the entire dom tree to check props and rerender the entire ui
 /// since Fabric is built with zig and wasm, checking all props of 10000s of nodes and ui components is cheap
 /// feel free to abuse force, its essentially a global signal
@@ -523,7 +543,7 @@ pub fn forceEverything() void {
 }
 
 pub fn initLayout(fabric: *Fabric, style: Style) !void {
-    try current_ctx.initLayout(fabric.allocator, @floatFromInt(fabric.sw), @floatFromInt(fabric.sh));
+    try current_ctx.initLayout(fabric.allocator, fabric.sw, fabric.sh);
     current_ctx.stack.?.ptr.?.style = style;
 }
 
@@ -540,6 +560,7 @@ pub fn addRoute(
     path: []const u8,
     page: *CommandsTree,
 ) !void {
+    println("Adding route {s}\n", .{path});
     try router.addRoute(path, page);
     return;
 }
@@ -554,6 +575,56 @@ pub export fn rerenderLayout() void {
     current_ctx.resetAllUiNode();
     current_ctx.createStack(current_ctx.root.?);
     current_ctx.traverseCmds();
+}
+
+const LayoutFn = *const fn (*const fn () void) void;
+pub const PageFn = *const fn () void;
+
+// Generic function to call nested layouts based on route segments
+var current_path: []const u8 = "";
+const NestedCall = struct {
+    segments: []const []const u8,
+    page: PageFn,
+    call_fn: PageFn = @This().call,
+
+    pub fn call() void {
+        callNestedLayouts(@This().segments);
+    }
+};
+
+// fn callLayout(layout: LayoutFn, nested_call: *NestedCall) void {
+//     @call(.auto, layout, .{NestedCall.call});
+// }
+
+var render_page: *const fn () void = undefined;
+var route_segments: [][]const u8 = undefined;
+fn callNestedLayouts() void {
+    const local_allocator = std.heap.wasm_allocator;
+    if (route_segments.len == 0) {
+        render_page();
+        return;
+    }
+
+    // Get the current layout
+    var layout_itr = layout_map.iterator();
+    //Generate a path variable, ie starting with "" and root => /root then "/root" and docs => /root/docs;
+    current_path = std.fmt.allocPrint(local_allocator, "{s}/{s}", .{ current_path, route_segments[0] }) catch return;
+    while (layout_itr.next()) |entry| {
+        const layout_path = entry.key_ptr.*; // "/root" or "/root/docs"
+        const layout_fn = entry.value_ptr.*;
+        // We check if the layout path and current path are the same
+        if (std.mem.eql(u8, current_path, layout_path)) {
+            route_segments = route_segments[1..];
+            layout_fn(callNestedLayouts);
+        }
+    } else {
+        if (route_segments.len == 0) {
+            return;
+        }
+        // No layout found, continue with remaining segments
+        route_segments = route_segments[1..];
+        callNestedLayouts();
+    }
 }
 
 var clean_up_ctx: *UIContext = undefined;
@@ -582,7 +653,7 @@ pub fn renderCycle(route: []const u8) void {
         renderErrorPage(route);
         return;
     };
-    const render_page = old_route.page;
+    render_page = old_route.page;
     const old_ctx = current_ctx;
     // Create new context
     const new_ctx: *UIContext = allocator_global.create(UIContext) catch {
@@ -590,15 +661,43 @@ pub fn renderCycle(route: []const u8) void {
         return;
     };
 
-    UIContext.initLayout(new_ctx, &allocator_global, @floatFromInt(browser_width), @floatFromInt(browser_height)) catch |err| {
+    UIContext.initLayout(new_ctx, &allocator_global, browser_width, browser_height) catch |err| {
         println("Allocator ran out of space {any}\n", .{err});
         new_ctx.deinit();
         allocator_global.destroy(new_ctx);
         return;
     };
-    // Render the page with the new context
+
     current_ctx = new_ctx;
-    @call(.auto, render_page, .{});
+    var route_itr = std.mem.tokenizeScalar(u8, route, '/');
+    var count: usize = 0;
+    while (route_itr.next()) |_| {
+        count += 1;
+    }
+    route_segments = allocator_global.alloc([]const u8, count) catch return;
+    count = 0;
+    route_itr.reset();
+    while (route_itr.next()) |route_token| {
+        route_segments[count] = route_token;
+        count += 1;
+    }
+
+    current_path = "";
+    callNestedLayouts();
+    // var layout_page: ?*const fn (*const fn () void) void = null;
+    // while (layout_itr.next()) |entry| {
+    //     const path = entry.key_ptr.*;
+    //     if (std.ascii.startsWithIgnoreCase(route, path)) {
+    //         layout_page = entry.value_ptr.*;
+    //     }
+    // }
+    //
+    // // Render the page with the new context
+    // if (layout_page) |lp| {
+    //     @call(.auto, lp, .{render_page});
+    // } else {
+    //     @call(.auto, render_page, .{});
+    // }
     endPage(new_ctx);
 
     // Reconcile between old and new
@@ -606,7 +705,6 @@ pub fn renderCycle(route: []const u8) void {
 
     // Replace old context with new context in the map
     clean_up_ctx = old_ctx;
-
     _ = router.addRoute(route, new_ctx, render_page) catch {
         printlnSrcErr("Failed to update context map\n", .{}, @src());
         new_ctx.deinit();
@@ -627,11 +725,12 @@ fn renderErrorPage(route: []const u8) void {
         printlnWithColor("No Route Error Page Found\n", .{}, "#FF3029", "ERROR");
         const default_error = router.searchRoute("/error") orelse {
             printlnWithColor("No Default Error Page Found\n", .{}, "#FF3029", "ERROR");
+            serious_error = true;
             return;
         };
         break :blk default_error;
     };
-    const render_page = old_route.page;
+    render_page = old_route.page;
     const old_ctx = current_ctx;
 
     // Create new context
@@ -640,7 +739,7 @@ fn renderErrorPage(route: []const u8) void {
         return;
     };
 
-    UIContext.initLayout(new_ctx, &allocator_global, @floatFromInt(browser_width), @floatFromInt(browser_height)) catch |err| {
+    UIContext.initLayout(new_ctx, &allocator_global, browser_width, browser_height) catch |err| {
         println("Allocator ran out of space {any}\n", .{err});
         new_ctx.deinit();
         allocator_global.destroy(new_ctx);
@@ -676,7 +775,7 @@ export fn cleanUp() void {
 pub fn createPage(style: Style, path: []const u8, page: fn () void, page_deinit: ?fn () void) !void {
     const path_ctx: *UIContext = try allocator_global.create(UIContext);
     // Initial render
-    UIContext.initLayout(path_ctx, &allocator_global, @floatFromInt(browser_width), @floatFromInt(browser_height)) catch |err| {
+    UIContext.initLayout(path_ctx, &allocator_global, browser_width, browser_height) catch |err| {
         println("Allocator ran out of space {any}\n", .{err});
         return;
     };
@@ -695,7 +794,7 @@ pub fn createPage(style: Style, path: []const u8, page: fn () void, page_deinit:
 }
 
 pub fn endPage(path_ctx: *UIContext) void {
-   path_ctx.endLayout();
+    path_ctx.endLayout();
     path_ctx.traverse();
 }
 
@@ -820,6 +919,68 @@ pub inline fn Page(src: std.builtin.SourceLocation, page: fn () void, page_deini
     };
 }
 
+pub inline fn Remember(src: std.builtin.SourceLocation) fn (void) void {
+    const allocator = allocator_global;
+    const full_route = src.file;
+    var itr = std.mem.tokenizeScalar(u8, full_route[7..], '/');
+    var buf = std.ArrayList(u8).init(allocator);
+
+    const local = struct {
+        fn CloseElement(_: void) void {
+            _ = Fabric.current_ctx.close();
+            return;
+        }
+        fn ConfigureElement(elem_decl: ElementDecl) *const fn (void) void {
+            _ = Fabric.current_ctx.configure(elem_decl);
+            return CloseElement;
+        }
+    };
+
+    blk: while (itr.next()) |sub| {
+        if (itr.peek() == null) {
+            break :blk;
+        }
+        buf.appendSlice(sub) catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            unreachable;
+        };
+    }
+
+    if (buf.items.len == 0 and !std.mem.startsWith(u8, full_route, "Error")) {
+        buf.appendSlice("root") catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            unreachable;
+        };
+    } else if (std.mem.startsWith(u8, full_route, "Error")) {
+        buf.appendSlice("/error") catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            unreachable;
+        };
+    }
+
+    const route = buf.toOwnedSlice() catch |err| {
+        println("Could not parse route {any}\n", .{err});
+        unreachable;
+    };
+
+    const id = std.fmt.allocPrint(allocator, "layout-{s}", .{route}) catch |err| {
+        Fabric.printlnSrcErr("{any}", .{err}, @src());
+        unreachable;
+    };
+
+    var elem_decl = ElementDecl{
+        .style = .{},
+        .dynamic = .static,
+        .elem_type = .Layout,
+    };
+    elem_decl.style.id = id;
+    _ = Fabric.current_ctx.open(elem_decl) catch |err| {
+        println("{any}\n", .{err});
+    };
+    _ = local.ConfigureElement(elem_decl);
+    return local.CloseElement;
+}
+
 pub inline fn Layout(src: std.builtin.SourceLocation, style: Style) fn (void) void {
     const allocator = allocator_global;
     const full_route = src.file;
@@ -880,6 +1041,12 @@ pub inline fn Layout(src: std.builtin.SourceLocation, style: Style) fn (void) vo
     };
     _ = local.ConfigureElement(elem_decl);
     return local.CloseElement;
+}
+
+pub fn registerLayout(path: []const u8, layout: fn (*const fn () void) void) void {
+    layout_map.put(path, layout) catch |err| {
+        printlnSrcErr("Could not add layout to registry {}", .{err}, @src());
+    };
 }
 
 export fn eventCallback(id: u32) void {
@@ -1121,6 +1288,10 @@ pub inline fn eventListener(
 }
 
 pub export fn getRenderTreePtr() ?*UIContext.CommandsTree {
+    if (serious_error) {
+        serious_error = false;
+        return null;
+    }
     const tree_op = current_ctx.ui_tree;
 
     if (tree_op != null) {
@@ -1143,7 +1314,8 @@ export fn getUiNodeChildrenCount(tree: *CommandsTree) usize {
 }
 
 export fn getTreeNodeChild(tree: *CommandsTree, index: usize) *CommandsTree {
-    return tree.children.items[index];
+    const child = tree.children.items[index];
+    return child;
 }
 
 export fn getCtxNodeChild(tree: *CommandsTree, index: usize) ?*CommandsTree {
@@ -1182,6 +1354,10 @@ export fn markCurrentTreeDirty() void {
     markChildrenDirty(current_ctx.root.?);
 }
 
+export fn markUINodeTreeDirty(node: *UINode) void {
+    markChildrenDirty(node);
+}
+
 // The first node needs to be marked as false always
 export fn markCurrentTreeNotDirty() void {
     markChildrenNotDirty(current_ctx.root.?);
@@ -1198,10 +1374,10 @@ pub fn markChildrenNotDirty(node: *UINode) void {
 }
 
 // The first node needs to be marked as false always
-fn markNonLayoutChildrenDirty(node: *UINode, layout_path: []const u8) usize {
-    if (node.type == .Layout and std.mem.eql(u8, node.uuid, layout_path)) {
+fn markNonLayoutChildrenDirtyAndAddToRemoveList(node: *UINode, layout_path: []const u8) usize {
+    if (node.type == .Layout and std.ascii.startsWithIgnoreCase(layout_path, node.uuid)) {
         node.dirty = false;
-        // markChildrenNotDirty(node);
+        markChildrenNotDirty(node);
         return 0;
     } else {
         if (node.parent != null) {
@@ -1210,10 +1386,24 @@ fn markNonLayoutChildrenDirty(node: *UINode, layout_path: []const u8) usize {
         // node.dirty = true;
         node.dirty = false;
         for (node.children.items) |child| {
-            _ = markNonLayoutChildrenDirty(child, layout_path);
+            _ = markNonLayoutChildrenDirtyAndAddToRemoveList(child, layout_path);
         }
     }
     return removed_nodes.items.len;
+}
+
+// The first node needs to be marked as false always
+fn markNonLayoutChildrenDirty(node: *UINode, layout_path: []const u8) void {
+    if (node.type == .Layout and std.ascii.startsWithIgnoreCase(node.uuid, layout_path)) {
+        node.dirty = false;
+        markChildrenNotDirty(node);
+        return;
+    } else {
+        node.dirty = true;
+        for (node.children.items) |child| {
+            _ = markNonLayoutChildrenDirty(child, layout_path);
+        }
+    }
 }
 
 export fn getRemovedNode(index: usize) [*]const u8 {
@@ -1224,7 +1414,33 @@ export fn getRemovedNodeLength(index: usize) usize {
     return removed_nodes.items[index].len;
 }
 
-export fn markAllNonLayoutNodesDirty() usize {
+export fn markAllNonLayoutNodesDirty() void {
+    const route = Fabric.getWindowPath();
+    var itr = std.mem.tokenizeScalar(u8, route, '/');
+    var buf = std.ArrayList(u8).init(Fabric.allocator_global);
+    blk: while (itr.next()) |sub| {
+        if (itr.peek() == null) {
+            break :blk;
+        }
+
+        buf.appendSlice(sub) catch |err| {
+            Fabric.printlnSrcErr("Allocator ran out of space {any}\n", .{err}, @src());
+            return;
+        };
+    }
+    if (buf.items.len == 0) {
+        buf.appendSlice("root") catch |err| {
+            println("Allocator ran out of space {any}\n", .{err});
+            unreachable;
+        };
+    }
+
+    const parent_path = buf.toOwnedSlice() catch return;
+    const layout_path = std.fmt.allocPrint(Fabric.allocator_global, "layout-{s}", .{parent_path}) catch return;
+    markNonLayoutChildrenDirty(current_ctx.root.?, layout_path);
+}
+
+export fn markAllNonLayoutNodesDirtyRemoveList() usize {
     const route = Fabric.getWindowPath();
     var itr = std.mem.tokenizeScalar(u8, route, '/');
     var buf = std.ArrayList(u8).init(Fabric.allocator_global);
@@ -1247,7 +1463,8 @@ export fn markAllNonLayoutNodesDirty() usize {
 
     const parent_path = buf.toOwnedSlice() catch return 0;
     const layout_path = std.fmt.allocPrint(Fabric.allocator_global, "layout-{s}", .{parent_path}) catch return 0;
-    return markNonLayoutChildrenDirty(current_ctx.root.?, layout_path);
+    removed_nodes.clearRetainingCapacity();
+    return markNonLayoutChildrenDirtyAndAddToRemoveList(current_ctx.root.?, layout_path);
 }
 
 fn iterateChildren(node: *UINode) void {
@@ -1294,6 +1511,7 @@ fn createUUIDS(node: *UINode) void {
     depth -= 1;
 }
 
+/// Calling route renderCycle will mark eveything as dirty
 export fn callRouteRenderCycle(ptr: [*:0]u8) void {
     const route: []const u8 = std.mem.span(ptr);
     renderCycle(route);
@@ -1311,6 +1529,16 @@ export fn allocUint8(length: u32) [*]const u8 {
     const slice = allocator_global.alloc(u8, length) catch
         @panic("failed to allocate memory");
     return slice.ptr;
+}
+
+pub fn findNodeByUUID(ui_node: *UINode, uuid: []const u8) ?*UINode {
+    for (ui_node.children.items) |node| {
+        if (std.mem.eql(u8, node.uuid, uuid)) {
+            return node;
+        }
+        return findNodeByUUID(ui_node, uuid);
+    }
+    return null;
 }
 
 // Export memory layout information for JavaScript to correctly read the struct
@@ -1339,6 +1567,10 @@ var layout_info = struct {
     exit_animation_len: u32,
     classname: u32,
     classname_len: u32,
+    p__focus_offset: u32,
+    p__focus_size: u32,
+    p__focus_within_offset: u32,
+    p__focus_within_size: u32,
 }{
     .render_command_size = @sizeOf(RenderCommand),
     .bounding_box_offset = @offsetOf(RenderCommand, "bounding_box"),
@@ -1363,6 +1595,10 @@ var layout_info = struct {
     .exit_animation_len = @offsetOf(Style, "exit_animation") + @sizeOf(usize),
     .classname = @offsetOf(Style, "style_id"),
     .classname_len = @offsetOf(Style, "style_id") + @sizeOf(usize),
+    .p__focus_offset = @offsetOf(RenderCommand, "focus"),
+    .p__focus_size = @sizeOf(Focus),
+    .p__focus_within_offset = @offsetOf(RenderCommand, "focus_within"),
+    .p__focus_within_size = @sizeOf(Focus),
 };
 pub export fn allocateLayoutInfo() *u8 {
     const info_ptr: *u8 = @ptrCast(&layout_info);

@@ -25,6 +25,18 @@ pub inline fn Center(element: *Element, style: Style) fn (void) void {
     return LifeCycle.close;
 }
 
+pub inline fn Box(element: *Element, style: Style) fn (void) void {
+    const elem_decl = ElementDecl{
+        .style = style,
+        .dynamic = .dynamic,
+        .elem_type = .FlexBox,
+    };
+    const ui_node = LifeCycle.open(elem_decl) orelse unreachable;
+    _ = LifeCycle.configure(elem_decl);
+    element._node_ptr = ui_node;
+    return LifeCycle.close;
+}
+
 pub inline fn FlexBox(element: *Element, style: Style) fn (void) void {
     const local = struct {
         fn CloseElement(_: void) void {
@@ -136,6 +148,7 @@ pub inline fn Input(element: *Element, params: InputParams, style: Style) void {
         .elem_type = .Input,
         .input_params = params,
     };
+    element.element_type = .Input;
 
     const ui_node = Fabric.current_ctx.open(elem_decl) catch |err| {
         println("{any}\n", .{err});

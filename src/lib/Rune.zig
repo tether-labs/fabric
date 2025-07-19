@@ -416,6 +416,11 @@ pub fn Signal(comptime T: type) type {
             self._component_subscribers.append(node_ptr) catch unreachable;
         }
 
+        pub fn grain(_: *Self, node_ptr: *UINode) void {
+            Fabric.grain_element_uuid = node_ptr.uuid;
+            Fabric.cycleGrain();
+        }
+
         /// derived takes a signals and a callback function and returns a new signal that can be subscribed to
         pub fn derived(
             self: *Self,
@@ -505,6 +510,16 @@ pub fn Signal(comptime T: type) type {
         /// it also updates the values attached ie if the text is updated
         fn notifyComponents(self: *Self) void {
             for (self._component_subscribers.items) |node| {
+                if (node.dynamic == .grain) {
+                    // This is broken!!!!!!!!!!!!!!!!!!!
+                    if (isNodeChild(node)) {
+                        Fabric.println("Found node", .{});
+                        // Fabric.cycleGrain();
+                        Fabric.grain_element_uuid = node.uuid;
+                        return;
+                    }
+                    continue;
+                }
                 if (node.type == ._If) {
                     if (@TypeOf(self._value) == bool) {
                         node.show = self._value;
@@ -527,13 +542,21 @@ pub fn Signal(comptime T: type) type {
                             node.*.text = string_value;
                         },
                         []const u8 => {
-                            node.*.text = self._value;
+                            switch (node.type) {
+                                .Icon => {
+                                    Fabric.println("Setting this value", .{});
+                                    node.href = self._value;
+                                },
+                                else => {
+                                    node.*.text = self._value;
+                                },
+                            }
                         },
                         else => {},
                     }
                 }
                 self._parent = node;
-                self.markChildrenDirty(node);
+                // self.markChildrenDirty(node);
             }
             Fabric.cycle();
         }
@@ -577,6 +600,16 @@ pub fn Signal(comptime T: type) type {
                 }
                 self.markChildrenDirty(child);
             }
+        }
+        // This is broken
+        fn isNodeChild(node: *UINode) bool {
+            // Here we find the node which was clicked;
+            const starting_node = Fabric.findNodeByUUID(Fabric.current_ctx.root.?, Fabric.current_depth_node_id) orelse return false;
+            //Now we search said node if it has children that includes the grain component.
+            if (Fabric.findNodeByUUID(starting_node, node.uuid)) |_| {
+                return true;
+            }
+            return false;
         }
     };
 }
