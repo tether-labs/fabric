@@ -13,12 +13,79 @@ const Item = @import("UITree.zig").Item;
 // For each render cycle, beginFrame() is called to reset the current frame arena and get ready to allocate memory, for
 // the next frame. This means we can just deinit a single allocator and there is no need to recurse down the tree.
 
+// This gets attached to each route in your radix tree
+pub const RouteFrameArena = struct {
+    frames: [NUMBER_OF_FRAMES]FrameData,
+    current_frame: usize = 0,
+
+    pub fn init(backing_allocator: Allocator) RouteFrameArena {
+        return .{
+            .frames = .{
+                .{ .arena = Arena.init(backing_allocator) },
+                .{ .arena = Arena.init(backing_allocator) },
+            },
+        };
+    }
+
+    pub fn deinit(self: *RouteFrameArena) void {
+        self.frames[0].arena.deinit();
+        self.frames[1].arena.deinit();
+    }
+
+    pub fn allocator(self: *RouteFrameArena) Allocator {
+        return self.frames[self.current_frame].arena.allocator();
+    }
+
+    pub fn beginFrame(self: *RouteFrameArena) void {
+        const next = (self.current_frame + 1) % 2;
+        _ = self.frames[next].arena.reset(.retain_capacity);
+        self.frames[next].stats = .{};
+        self.current_frame = next;
+    }
+
+    pub fn getStats(self: *RouteFrameArena) Stats {
+        return self.frames[self.current_frame].stats;
+    }
+
+    pub fn incrementNodeCount(self: *RouteFrameArena) void {
+        self.frames[self.current_frame].stats.nodes_memory += @sizeOf(UINode);
+        self.frames[self.current_frame].stats.nodes_allocated += 1;
+    }
+    pub fn incrementItemCount(self: *RouteFrameArena) void {
+        self.frames[self.current_frame].stats.item_memory += @sizeOf(Item);
+        self.frames[self.current_frame].stats.items_allocated += 1;
+    }
+
+    pub fn addBytesUsed(self: *RouteFrameArena, bytes: usize) void {
+        self.frames[self.current_frame].stats.bytes_used += bytes;
+    }
+
+    pub fn queryBytesUsed(self: *RouteFrameArena) usize {
+        const current_frame = self.frames[self.current_frame];
+        const current_total = current_frame.arena.queryCapacity();
+        return current_total;
+    }
+
+    /// This is now just a simple, fast create() from the arena
+    pub fn nodeAlloc(self: *RouteFrameArena) ?*UINode {
+        // This is just a fast pointer bump
+        // const node = self.persistentAllocator().create(UINode) catch {
+        const node = self.frames[self.current_frame].arena.allocator().create(UINode) catch {
+            // This will only fail if you run out of memory (OOM)
+            // or the backing allocator fails.
+            return null;
+        };
+        // You could even initialize the node here if needed
+        return node;
+    }
+};
+
 const FrameData = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: Arena,
     stats: Stats = .{},
 };
 
-const NUMBER_OF_FRAMES =2;
+const NUMBER_OF_FRAMES = 2;
 
 pub const Stats = struct {
     nodes_allocated: usize = 0,
@@ -33,105 +100,64 @@ pub const Stats = struct {
 
 const FrameAllocator = @This();
 persistent_arena: Arena,
-frames: [NUMBER_OF_FRAMES]FrameData,
-current_frame: usize = 0,
+// frames: [NUMBER_OF_FRAMES]FrameData,
+// current_frame: usize = 0,
 view: [NUMBER_OF_FRAMES]FrameData,
 current_route: usize = 0,
 request_arena: Arena,
 scratch_arena: Arena,
+// Pointer to current route's frame arena
+current_route_arena: ?*RouteFrameArena = null,
+backing_allocator: Allocator,
 
-pub fn init(backing_allocator: *std.mem.Allocator) FrameAllocator {
-    var frames: [NUMBER_OF_FRAMES]FrameData = undefined;
-
-    for (0..NUMBER_OF_FRAMES) |i| {
-        frames[i] = .{ .arena = std.heap.ArenaAllocator.init(backing_allocator.*) };
-    }
-
+pub fn init(backing_allocator: Allocator) FrameAllocator {
     var views: [NUMBER_OF_FRAMES]FrameData = undefined;
     for (0..NUMBER_OF_FRAMES) |i| {
-        views[i] = .{ .arena = std.heap.ArenaAllocator.init(backing_allocator.*) };
+        views[i] = .{ .arena = std.heap.ArenaAllocator.init(backing_allocator) };
     }
 
     return .{
-        .frames = frames,
-        .persistent_arena = std.heap.ArenaAllocator.init(backing_allocator.*),
+        .persistent_arena = Arena.init(backing_allocator),
+        .request_arena = Arena.init(backing_allocator),
+        .scratch_arena = Arena.init(backing_allocator),
+        .backing_allocator = backing_allocator,
         .view = views,
-        .request_arena = std.heap.ArenaAllocator.init(backing_allocator.*),
-        .scratch_arena = std.heap.ArenaAllocator.init(backing_allocator.*),
     };
 }
 
 pub fn deinit(self: *FrameAllocator) void {
-    self.frames[0].arena.deinit();
-    self.frames[1].arena.deinit();
     self.persistent_arena.deinit();
+    self.request_arena.deinit();
+    self.scratch_arena.deinit();
+    // Note: route arenas are owned by the radix tree, not us
 }
 
-pub fn frameAllocator(self: *FrameAllocator) std.mem.Allocator {
-    return self.frames[self.current_frame].arena.allocator();
+// Call this to create a new RouteFrameArena for a route
+pub fn createRouteArena(self: *FrameAllocator) *RouteFrameArena {
+    const route_arena = self.backing_allocator.create(RouteFrameArena) catch unreachable;
+    route_arena.* = RouteFrameArena.init(self.backing_allocator);
+    return route_arena;
 }
 
-pub fn requestAllocator(self: *FrameAllocator) std.mem.Allocator {
-    return self.request_arena.allocator();
+// Call this when switching routes
+pub fn setCurrentRoute(self: *FrameAllocator, route_arena: *RouteFrameArena) void {
+    self.current_route_arena = route_arena;
 }
 
-pub fn viewAllocator(self: *FrameAllocator) std.mem.Allocator {
-    return self.view[self.current_route].arena.allocator();
+// Get the current route's frame allocator
+pub fn frameAllocator(self: *FrameAllocator) Allocator {
+    if (self.current_route_arena) |route| {
+        return route.allocator();
+    }
+    std.log.err("Cannot access the frame allocator, first create the Route via Page() then proceed with initliazation", .{});
+    @panic("No route set - call setCurrentRoute first");
 }
 
-pub fn incrementNodeCount(self: *FrameAllocator) void {
-    self.frames[self.current_frame].stats.nodes_memory += @sizeOf(UINode);
-    self.frames[self.current_frame].stats.nodes_allocated += 1;
-}
-
-pub fn incrementItemCount(self: *FrameAllocator) void {
-    self.frames[self.current_frame].stats.item_memory += @sizeOf(Item);
-    self.frames[self.current_frame].stats.items_allocated += 1;
-}
-
-pub fn addBytesUsed(self: *FrameAllocator, bytes: usize) void {
-    self.frames[self.current_frame].stats.bytes_used += bytes;
-}
-
-pub fn queryBytesUsed(self: *FrameAllocator) usize {
-    const current_frame = self.frames[self.current_frame];
-    const current_total = current_frame.arena.queryCapacity();
-
-    // Vapor.println("===================", .{});
-    // Vapor.println("Item Bytes {d}", .{current_frame.stats.item_memory});
-    // Vapor.println("Items {d}", .{current_frame.stats.items_allocated});
-    // Vapor.println("String Bytes {d}", .{current_frame.stats.bytes_used});
-    // Vapor.println("Nodes {d}", .{current_frame.stats.nodes_memory});
-    // Vapor.println("Commands {d}", .{current_frame.stats.command_memory});
-    // Vapor.println("Tree {d}", .{current_frame.stats.tree_memory});
-    // Vapor.println("Other {d}", .{current_total - current_frame.stats.bytes_used - current_frame.stats.nodes_memory - current_frame.stats.tree_memory - current_frame.stats.command_memory});
-    return current_total;
-}
-
-pub fn queryNodes(self: *FrameAllocator) usize {
-    const total = self.frames[self.current_frame].stats.nodes_allocated;
-    // Vapor.println("-------------Nodes Allocated {d}", .{self.frames[self.current_frame].stats.nodes_allocated});
-    return total;
-}
-
-/// Get allocator for data that should persist across frames
-pub fn persistentAllocator(self: *FrameAllocator) std.mem.Allocator {
-    return self.persistent_arena.allocator();
-}
-
-/// Start a new frame - swaps buffers and clears the old one
-pub export fn beginFrame(self: *FrameAllocator) void {
-    // if (Vapor.build_options.enable_debug and Vapor.build_options.debug_level == .all) {
-    //     printPrevStats(self);
-    // }
-    // Move to next frame
-    const next_frame = (self.current_frame + 1) % NUMBER_OF_FRAMES;
-
-    // Clear the frame we're about to use
-    _ = self.frames[next_frame].arena.reset(.retain_capacity);
-    self.frames[next_frame].stats = .{};
-
-    self.current_frame = next_frame;
+// Begin frame on the current route
+pub fn beginFrame(self: *FrameAllocator) void {
+    if (self.current_route_arena) |route| {
+        route.beginFrame();
+    }
 }
 
 pub fn beginView(self: *FrameAllocator) void {
@@ -145,43 +171,85 @@ pub fn beginView(self: *FrameAllocator) void {
     self.current_route = next_route;
 }
 
+pub fn persistentAllocator(self: *FrameAllocator) Allocator {
+    return self.persistent_arena.allocator();
+}
+
+pub fn requestAllocator(self: *FrameAllocator) Allocator {
+    return self.request_arena.allocator();
+}
+
 pub fn resetScratchArena(self: *FrameAllocator) void {
     _ = self.scratch_arena.reset(.free_all);
 }
 
+pub fn viewAllocator(self: *FrameAllocator) Allocator {
+    return self.view[self.current_route].arena.allocator();
+}
+
+// pub fn deinit(self: *FrameAllocator) void {
+//     self.frames[0].arena.deinit();
+//     self.frames[1].arena.deinit();
+//     self.persistent_arena.deinit();
+// }
+//
+// pub fn frameAllocator(self: *FrameAllocator) std.mem.Allocator {
+//     return self.frames[self.current_frame].arena.allocator();
+// }
+//
+// pub fn requestAllocator(self: *FrameAllocator) std.mem.Allocator {
+//     return self.request_arena.allocator();
+// }
+
+// pub fn viewAllocator(self: *FrameAllocator) std.mem.Allocator {
+//     return self.view[self.current_route].arena.allocator();
+// }
+
+pub fn incrementNodeCount(self: *FrameAllocator) void {
+    if (self.current_route_arena) |route| {
+        route.incrementNodeCount();
+    }
+}
+
+pub fn incrementItemCount(self: *FrameAllocator) void {
+    if (self.current_route_arena) |route| {
+        route.incrementItemCount();
+    }
+}
+
+pub fn addBytesUsed(self: *FrameAllocator, bytes: usize) void {
+    if (self.current_route_arena) |route| {
+        route.addBytesUsed(bytes);
+    }
+}
+
+pub fn queryBytesUsed(self: *FrameAllocator) usize {
+    if (self.current_route_arena) |route| {
+        return route.queryBytesUsed();
+    }
+}
+
+pub fn queryNodes(self: *FrameAllocator) usize {
+    const total = self.frames[self.current_frame].stats.nodes_allocated;
+    // Vapor.println("-------------Nodes Allocated {d}", .{self.frames[self.current_frame].stats.nodes_allocated});
+    return total;
+}
+
 /// This is now just a simple, fast create() from the arena
 pub fn nodeAlloc(self: *FrameAllocator) ?*UINode {
-    // This is just a fast pointer bump
-    // const node = self.persistentAllocator().create(UINode) catch {
-    const node = self.frames[self.current_frame].arena.allocator().create(UINode) catch {
-        // This will only fail if you run out of memory (OOM)
-        // or the backing allocator fails.
-        return null;
-    };
-    // You could even initialize the node here if needed
-    return node;
+    if (self.current_route_arena) |route| {
+        return route.nodeAlloc();
+    }
+    return null;
 }
 
 /// Get stats for current frame
-pub fn getStats(self: *FrameAllocator) Stats {
-    return self.frames[self.current_frame].stats;
+pub fn getStats(self: *FrameAllocator) ?Stats {
+    if (self.current_route_arena) |route| {
+        return route.getStats();
+    }
+    return null;
 }
-
-// fn convertColorToString(color: Types.Color) []const u8 {
-//     return switch (color) {
-//         .Literal => |rgba| rgbaToString(rgba),
-//         else => "",
-//     };
-// }
-
-// fn rgbaToString(rgba: Types.Rgba) []const u8 {
-//     return std.fmt.allocPrint(Vapor.allocator_global, "rgba({d},{d},{d},{d})", .{
-//         rgba.r,
-//         rgba.g,
-//         rgba.b,
-//         rgba.a,
-//     }) catch return "";
-// }
 
 pub fn printPrevStats(_: *FrameAllocator) void {
     // var buffer: [4096]u8 = undefined;

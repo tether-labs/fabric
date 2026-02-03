@@ -29,8 +29,8 @@ pub const Draggable = struct {
     on_drop: ?*const fn (self: *Draggable, evt: *Vapor.Event, target: ?*Vapor.Binded) void = null,
 
     // Internal listener IDs
-    move_listener_id: ?usize = null,
-    up_listener_id: ?usize = null,
+    move_listener_id: ?u32 = null,
+    up_listener_id: ?u32 = null,
     ctx: ?*anyopaque = null,
 
     pub const Config = struct {
@@ -229,6 +229,7 @@ pub const Draggable = struct {
 
         // Remove document listeners
         if (self.move_listener_id) |id| {
+            Vapor.println("handlePointerUp", .{});
             _ = Vapor.removeGlobalListener(.pointermove, id);
             self.move_listener_id = null;
         }
@@ -265,7 +266,6 @@ pub const Draggable = struct {
     }
 
     pub fn updatePosition(self: *Draggable, x: f32, y: f32) void {
-
         // if (self.config.use_gpu) {
         _ = self.element.translate3d(.{ .x = x, .y = y });
         // } else {

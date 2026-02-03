@@ -58,11 +58,24 @@ pub const Layer = struct {
         try writer.write("px ");
         try writer.writeU16(self.blur);
         try writer.write("px ");
-        try writer.writeI16(self.spread);
-        try writer.write("px ");
+        if (self.spread > 0) {
+            try writer.writeI16(self.spread);
+            try writer.write("px ");
+        }
         // try writer.write("{d}px {d}px {d}px {d}px ", .{ self.x, self.y, self.blur, self.spread });
         // Delegate to Color's write implementation
         // Adjust this call based on how your Color struct works (e.g. .format or .toCss)
+        try self.color.toCss(writer);
+    }
+
+    // NEW: for text-shadow (no spread, no inset)
+    pub fn writeTextShadowCss(self: Layer, writer: *Writer) !void {
+        try writer.writeI16(self.x);
+        try writer.write("px ");
+        try writer.writeI16(self.y);
+        try writer.write("px ");
+        try writer.writeU16(self.blur);
+        try writer.write("px ");
         try self.color.toCss(writer);
     }
 };
@@ -147,11 +160,24 @@ pub fn writeCss(self: Shadow, writer: *Writer) !void {
     }
 }
 
-pub fn toCss(self: Shadow, allocator: Allocator) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    defer list.deinit();
-    try self.writeCss(list.writer());
-    return list.toOwnedSlice();
+// pub fn writeTextShadowCss(self: Shadow, writer: *Writer) !void {
+//     if (self.layer_count == 0) {
+//         try writer.write("none");
+//         return;
+//     }
+//
+//     var written: u8 = 0;
+//     for (self.layers) |maybe_layer| {
+//         if (maybe_layer) |l| {
+//             if (written > 0) try writer.write(",");
+//             try l.writeTextShadowCss(writer); // Use text-shadow version
+//             written += 1;
+//         }
+//     }
+// }
+
+pub fn toCss(self: Shadow, writer: *Writer) !void {
+    try self.writeCss(writer);
 }
 
 // -- 6. Tests --
@@ -170,4 +196,3 @@ test "Complex Composition" {
     defer allocator.free(css);
     // errdefer std.debug.print("CSS: {s}\n", .{css});
 }
-

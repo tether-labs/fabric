@@ -40,6 +40,16 @@ pub fn shiftKey(evt: *Event) bool {
     }
 }
 
+pub fn ctrlKey(evt: *Event) bool {
+    const key_str: []const u8 = "ctrlKey";
+    const resp = getEventData(evt.id, key_str.ptr, key_str.len);
+    switch (resp[0]) {
+        't' => return true,
+        'f' => return false,
+        else => return false,
+    }
+}
+
 pub fn altKey(evt: *Event) bool {
     const key_str: []const u8 = "altKey";
     const resp = getEventData(evt.id, key_str.ptr, key_str.len);
@@ -60,6 +70,13 @@ pub fn number(evt: *Event) !i32 {
     const num_str = std.mem.span(resp);
     if (num_str.len == 0) return error.EmptyString;
     return try std.fmt.parseInt(i32, num_str, 10);
+}
+
+pub fn float(evt: *Event) !f32 {
+    const resp = getEventDataInput(evt.id);
+    const num_str = std.mem.span(resp);
+    if (num_str.len == 0) return error.EmptyString;
+    return try std.fmt.parseFloat(f32, num_str);
 }
 
 pub fn formData(evt: *Event, form_value: anytype) ?@typeInfo(@TypeOf(form_value)).pointer.child {
@@ -124,8 +141,9 @@ fn fillStruct(comptime T: type, cloned_form: *T, obj: *DynamicObject.DynamicObje
         // Safety check: ensure we don't out-of-bounds the dynamic object
         if (i >= obj.fields.items.len) break;
 
-        var obj_field: ?DynamicObject.Field = null;
+        if (@typeInfo(field.type) == .@"struct") continue;
 
+        var obj_field: ?DynamicObject.Field = null;
         for (obj.fields.items, 0..) |item, j| {
             index = j;
             if (std.mem.eql(u8, item.name, field.name)) {
@@ -137,8 +155,10 @@ fn fillStruct(comptime T: type, cloned_form: *T, obj: *DynamicObject.DynamicObje
             const obj_value = of.value;
             switch (@typeInfo(field.type)) {
                 .pointer => |ptr| {
-                    if (ptr.size == .slice) {
+                    if (ptr.size == .slice and ptr.child == u8) {
                         @field(cloned_form, field.name) = obj_value.string;
+                    } else if (ptr.size == .slice and ptr.child == []const u8) {
+                        @field(cloned_form, field.name) = &.{obj_value.string};
                     }
                 },
                 .int => {
@@ -156,12 +176,14 @@ fn fillStruct(comptime T: type, cloned_form: *T, obj: *DynamicObject.DynamicObje
                     // Handling floats since they are common in forms
                     @field(cloned_form, field.name) = if (obj_value == .float) obj_value.float else 0;
                 },
+                .@"struct" => {},
                 else => {
                     Vapor.printlnErr("Cannot set unsupported type for field {s}: {any}", .{ field.name, field.type });
                 },
             }
         } else {
-            Vapor.printlnErr("Field {s} not found in DynamicObject {s}\n", .{field.name, obj.fields.items[index].name});
+            std.log.warn("Field {s} not found in DynamicObject instead found {s}\n", .{ field.name, obj.fields.items[index].name });
+            // Vapor.printlnErr("Field {s} not found in DynamicObject instead found {s}\n", .{ field.name, obj.fields.items[index].name });
         }
     }
 }
@@ -169,6 +191,12 @@ fn fillStruct(comptime T: type, cloned_form: *T, obj: *DynamicObject.DynamicObje
 pub fn preventDefault(evt: *Event) void {
     if (isWasi) {
         Wasm.eventPreventDefault(evt.id);
+    }
+}
+
+pub fn stopPropagation(evt: *Event) void {
+    if (isWasi) {
+        Wasm.eventStopPropagation(evt.id);
     }
 }
 
@@ -192,14 +220,53 @@ pub fn offsetY(evt: *Event) f32 {
     return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
 }
 
+pub fn pageX(evt: *Event) f32 {
+    const key_str: []const u8 = "pageX";
+    return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
+}
+
+pub fn pageY(evt: *Event) f32 {
+    const key_str: []const u8 = "pageY";
+    return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
+}
+
+pub const ScrollIntoViewOptions = struct {
+    behavior: ScrollBehavior = .auto,
+    block: ScrollBlock = .start,
+};
+
+pub const ScrollBehavior = enum(u8) {
+    auto,
+    smooth,
+};
+
+pub const ScrollBlock = enum(u8) {
+    start,
+    center,
+    end,
+    nearest,
+};
+
+pub fn scrollIntoView(uuid: []const u8, options: ScrollIntoViewOptions) void {
+    if (Vapor.isWasi) {
+        Wasm.scrollIntoViewWasm(uuid.ptr, uuid.len, options.behavior, options.block);
+    }
+}
+
 pub fn movementX(evt: *Event) f32 {
     const key_str: []const u8 = "movementX";
-    return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
+    if (Vapor.isWasi) {
+        return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
+    }
+    return 0;
 }
 
 pub fn movementY(evt: *Event) f32 {
     const key_str: []const u8 = "movementY";
-    return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
+    if (Vapor.isWasi) {
+        return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
+    }
+    return 0;
 }
 
 // Static buffers for the dummy returns
@@ -259,7 +326,11 @@ export fn eventCallback(id: u32) void {
 }
 
 export fn eventInstCallback(id: u32) void {
-    const evt_node = Vapor.events_inst_callbacks.get(id).?;
+    const evt_node = Vapor.events_inst_callbacks.get(id) orelse {
+        Vapor.printlnSrcErr("Event Callback not found\n", .{}, @src());
+        return;
+    };
+
     var event = Event{
         .id = id,
         .type = evt_node.evt_type,

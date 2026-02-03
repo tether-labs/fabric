@@ -1,22 +1,45 @@
 const std = @import("std");
 const Vapor = @import("Vapor.zig");
 const Writer = @This();
+
 buffer: []u8,
 size: usize,
 pos: usize,
+start: usize = 0,
 
 pub fn init(writer: *Writer, buffer: []u8) void {
     writer.* = .{
         .buffer = buffer,
         .size = buffer.len,
         .pos = 0,
+        .start = 0,
     };
 }
 
 pub fn reset(self: *Writer) void {
     self.pos = 0;
+    self.start = 0;
 }
 
+/// Mark the current position as the start of a new segment
+pub fn mark(self: *Writer) void {
+    self.start = self.pos;
+}
+
+/// Get the current segment (from start to pos)
+pub fn getWritten(self: *Writer) []const u8 {
+    return self.buffer[self.start..self.pos];
+}
+
+/// Get the full buffer contents (from 0 to pos)
+pub fn getAll(self: *Writer) []const u8 {
+    return self.buffer[0..self.pos];
+}
+
+/// Reset just the current segment (move pos back to start)
+pub fn resetSegment(self: *Writer) void {
+    self.pos = self.start;
+}
 
 pub fn writeByte(self: *Writer, byte: u8) !void {
     self.buffer[self.pos] = byte;
@@ -36,10 +59,8 @@ pub fn write(self: *Writer, value: []const u8) !void {
 
 pub fn writeF32(self: *Writer, value: f32) !void {
     const remaining_buffer = self.buffer[self.pos..];
-    const formatted = try std.fmt.bufPrint(remaining_buffer, "{d}", .{value});
-    // @memcpy(self.buffer[self.pos .. self.pos + f32_string.len], f32_string);
+    const formatted = try std.fmt.bufPrint(remaining_buffer, "{d:.2}", .{value});
     self.pos += formatted.len;
-    // self.pos += f32_string.len;
 }
 
 pub fn writeF16(self: *Writer, value: f16) !void {
@@ -257,6 +278,10 @@ pub fn writeU32(self: *Writer, value: u32) !void {
 
 pub fn print(self: *Writer) !void {
     const len: usize = self.pos;
-    // self.buffer[len] = 0;
     Vapor.println("{s}", .{self.buffer[0..len]});
+}
+
+/// Print only the current segment (from start to pos)
+pub fn printSegment(self: *Writer) !void {
+    Vapor.println("{s}", .{self.buffer[self.start..self.pos]});
 }

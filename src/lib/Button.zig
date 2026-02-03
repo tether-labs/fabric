@@ -14,12 +14,8 @@ const hashKey = utils.hashKey;
 const Draggable = @import("Draggable.zig").Draggable;
 const onCreateNode = @import("Hooks.zig").onCreateNode;
 const Shadow = @import("Shadow.zig");
-
-const ButtonOptions = struct {
-    on_press: ?*const fn () void = null,
-    onRelease: ?*const fn () void = null,
-    aria_label: ?[]const u8 = null,
-};
+const Accessibility = @import("Accessibility.zig").Accessibility;
+const Edges = @import("Edges.zig").Edges;
 
 pub fn Builder(comptime state_type: types.StateType) type {
     return struct {
@@ -30,14 +26,14 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
         _elem_type: Vapor.ElementType,
         _aria_label: ?[]const u8 = null,
-        _options: ?ButtonOptions = null,
+        _on_press: ?*const fn () void = null,
         _ui_node: ?*UINode = null,
         _id: ?[]const u8 = null,
         _style: ?*const Vapor.Style = null,
         _element: ?*Element = null,
 
-        _animation_enter: ?*const Vapor.Animation = null,
-        _animation_exit: ?*const Vapor.Animation = null,
+        _animation_enter: ?[]const u8 = null,
+        _animation_exit: ?[]const u8 = null,
 
         // Style props
         _pos: ?types.Position = null,
@@ -56,11 +52,26 @@ pub fn Builder(comptime state_type: types.StateType) type {
         _scroll: ?types.Scroll = null,
         _transform_origin: ?types.TransformOrigin = null,
         _inlineStyle: ?[]const u8 = null,
+        _accessibility: ?Accessibility = null,
+        _used_style: bool = false,
+        _flex_type: types.FlexType = .flex,
 
-        pub fn Button(options: ButtonOptions) Self {
+        // In your component builder (e.g., ButtonBuilder.zig or Div builder)
+
+        _edges: ?[]const u8 = null,
+
+        pub fn edges(self: *const Self, edges_tag: ?[]const u8) Self {
+            if (edges_tag) |_edges| {
+                var new_self: Self = self.*;
+                new_self._edges = _edges;
+                return new_self;
+            }
+            return self.*;
+        }
+
+        pub fn Button(click_fn: ?*const fn () void) Self {
             const elem_decl = ElementDecl{
                 .elem_type = .Button,
-                .aria_label = options.aria_label,
             };
             const ui_node = LifeCycle.open(elem_decl) orelse {
                 Vapor.printlnSrcErr("Could not add component Link to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
@@ -69,9 +80,8 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
             return Self{
                 ._elem_type = .Button,
-                ._aria_label = options.aria_label,
-                ._options = options,
                 ._ui_node = ui_node,
+                ._on_press = click_fn,
             };
         }
 
@@ -89,6 +99,61 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 ._ui_node = ui_node,
             };
         }
+
+        const TapType = enum(u8) {
+            onPress,
+            onRelease,
+            onClick,
+            doubleClick,
+        };
+
+        // pub fn Tap(func: anytype, args: anytype, tap_type: TapType) Self {
+        //     const elem_decl = ElementDecl{
+        //         .state_type = _state_type,
+        //         .elem_type = .Tap,
+        //     };
+        //
+        //     const ui_node = LifeCycle.open(elem_decl) orelse {
+        //         Vapor.printlnSrcErr("LifeCycle open could not allocate {any}\n", .{error.CouldNotAllocate}, @src());
+        //         unreachable;
+        //     };
+        //
+        //     Vapor.attachEventCtxCallback(ui_node, , func, ctx) catch |err| {
+        //         Vapor.println("OnEventCtx: Could not attach event callback {any}\n", .{err});
+        //         unreachable;
+        //     };
+        //     return self;
+        //
+        //     const Args = @TypeOf(args);
+        //     const Closure = struct {
+        //         arguments: Args,
+        //         run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+        //         fn runFn(action: *Vapor.Action) void {
+        //             const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+        //             const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+        //             @call(.auto, func, closure.arguments);
+        //         }
+        //         fn deinitFn(_: *Vapor.Node) void {
+        //             // _ = @alignCast(@fieldParentPtr("run_node", node));
+        //             // Vapor.allocator_global.destroy(closure);
+        //         }
+        //     };
+        //
+        //     const closure = Vapor.arena(.frame).create(Closure) catch |err| {
+        //         println("Error could not create closure {any}\n ", .{err});
+        //         unreachable;
+        //     };
+        //     closure.* = .{
+        //         .arguments = args,
+        //     };
+        //
+        //     Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+        //         println("Button Function Registry {any}\n", .{err});
+        //         unreachable;
+        //     };
+        //
+        //     return Self{ ._elem_type = .CtxButton, ._ui_node = ui_node };
+        // }
 
         pub fn CtxButton(func: anytype, args: anytype) Self {
             const elem_decl = ElementDecl{
@@ -185,10 +250,84 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
             return new_self;
         }
+        // Add these methods:
 
+        /// Set full accessibility config
+        pub fn a11y(self: *const Self, accessibility: Accessibility) Self {
+            var new_self: Self = self.*;
+            new_self._accessibility = accessibility;
+            return new_self;
+        }
+
+        /// Shorthand: just set aria-label
         pub fn ariaLabel(self: *const Self, label: []const u8) Self {
             var new_self: Self = self.*;
-            new_self._aria_label = label;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.label = label;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: set role
+        pub fn role(self: *const Self, r: Accessibility.Role) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.role = r;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-expanded
+        pub fn ariaExpanded(self: *const Self, expanded: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.expanded = expanded;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-selected
+        pub fn ariaSelected(self: *const Self, selected: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.selected = selected;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-controls
+        pub fn ariaControls(self: *const Self, uuid: []const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.controls = uuid;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-activedescendant
+        pub fn ariaActiveDescendant(self: *const Self, uuid: ?[]const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.active_descendant = uuid;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-hidden
+        pub fn ariaHidden(self: *const Self, hidden_val: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.hidden = hidden_val;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: tabindex
+        pub fn tabIndex(self: *const Self, index: i16) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.tab_index = index;
+            new_self._accessibility = acc;
             return new_self;
         }
 
@@ -319,6 +458,14 @@ pub fn Builder(comptime state_type: types.StateType) type {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.font_size = font_size;
+            new_self._visual = visual;
+            return new_self;
+        }
+
+        pub fn textColor(self: *const Self, text_color: Vapor.Types.Color) Self {
+            var new_self: Self = self.*;
+            var visual = new_self._visual orelse types.Visual{};
+            visual.text_color = text_color;
             new_self._visual = visual;
             return new_self;
         }
@@ -465,8 +612,8 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn animationEnter(self: *const Self, animation_ptr: ?*const Vapor.Animation) Self {
-            if (animation_ptr) |_animation| {
+        pub fn animationEnter(self: *const Self, animation_tag: ?[]const u8) Self {
+            if (animation_tag) |_animation| {
                 var new_self: Self = self.*;
                 new_self._animation_enter = _animation;
                 return new_self;
@@ -474,8 +621,8 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return self.*;
         }
 
-        pub fn animation(self: *const Self, animation_ptr: ?*const Vapor.Animation) Self {
-            if (animation_ptr) |_animation| {
+        pub fn animation(self: *const Self, animation_tag: ?[]const u8) Self {
+            if (animation_tag) |_animation| {
                 var new_self: Self = self.*;
                 var visual = new_self._visual orelse types.Visual{};
                 visual.animation = _animation;
@@ -485,9 +632,9 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return self.*;
         }
 
-        pub fn animationExit(self: *const Self, animation_ptr: *const Vapor.Animation) Self {
+        pub fn animationExit(self: *const Self, animation_tag: ?[]const u8) Self {
             var new_self: Self = self.*;
-            new_self._animation_exit = animation_ptr;
+            new_self._animation_exit = animation_tag;
             return new_self;
         }
 
@@ -555,10 +702,16 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        /// This function takes a const pointer to a Style Struct, and returns the body function callback
-        /// This function is static, so any styles added via chaining methods will not be applied
-        /// Use baseStyle to keep all chained additions
-        pub fn style(self: *const Self, style_ptr: *const Vapor.Style) *const fn (void) void {
+        pub fn hidden(self: *const Self, hide: bool) Self {
+            var new_self: Self = self.*;
+            if (!hide) return new_self;
+            new_self._flex_type = .hidden;
+            return new_self;
+        }
+
+        pub fn style(self: *const Self, style_ptr: *const Vapor.Style) Self {
+            var new_self: Self = self.*;
+            new_self._used_style = true;
             var elem_decl = Vapor.ElementDecl{
                 .state_type = _state_type,
                 .elem_type = self._elem_type,
@@ -566,6 +719,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .aria_label = self._aria_label,
                 .animation_enter = self._animation_enter,
                 .animation_exit = self._animation_exit,
+                .accessibility = self._accessibility,
             };
 
             // if (self._tooltip) |_tooltip| {
@@ -587,7 +741,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
             if (self._ui_node == null) {
                 const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
                 if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
-                    if (self._options.?.on_press) |on_press| {
+                    if (self._on_press) |on_press| {
                         Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
                             println("Button Function Registry {any}\n", .{err});
                         };
@@ -604,7 +758,68 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 // }
             } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
                 const ui_node = self._ui_node orelse unreachable;
-                if (self._options.?.on_press) |on_press| {
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
+            Vapor.LifeCycle.configure(elem_decl);
+            return new_self;
+        }
+
+        /// This function takes a const pointer to a Style Struct, and returns the body function callback
+        /// This function is static, so any styles added via chaining methods will not be applied
+        /// Use baseStyle to keep all chained additions
+        pub fn styleOld(self: *const Self, style_ptr: *const Vapor.Style) *const fn (void) void {
+            var elem_decl = Vapor.ElementDecl{
+                .state_type = _state_type,
+                .elem_type = self._elem_type,
+                .style = style_ptr,
+                .aria_label = self._aria_label,
+                .animation_enter = self._animation_enter,
+                .animation_exit = self._animation_exit,
+                .accessibility = self._accessibility,
+            };
+
+            // if (self._tooltip) |_tooltip| {
+            //     elem_decl.tooltip = &_tooltip;
+            // }
+
+            if (self._id) |_id| {
+                var mutable_style = style_ptr.*;
+                mutable_style.id = _id;
+                elem_decl.style = &mutable_style;
+            }
+
+            if (self._class) |_class| {
+                var mutable_style = style_ptr.*;
+                mutable_style.style_id = _class;
+                elem_decl.style = &mutable_style;
+            }
+
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // const ui_node = self._ui_node orelse unreachable;
+                // if (style_ptr.id) |element_id| {
+                //     const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
+                //     Vapor.ctx_callback_registry.put(hashKey(element_id), kv.value) catch |err| {
+                //         println("Button Function Registry {any}\n", .{err});
+                //         unreachable;
+                //     };
+                // }
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
                     Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
                         println("Button Function Registry {any}\n", .{err});
                     };
@@ -673,10 +888,11 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn outline(self: *const Self, value: types.Outline) Self {
+        pub fn outline(self: *const Self, value: types.Outline, color: ?Color) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.outline = value;
+            visual.outline_color = color;
             new_self._visual = visual;
             return new_self;
         }
@@ -689,15 +905,25 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn newShadow(self: *const Self, value: Shadow) Self {
+        pub fn newShadow(self: *const Self, value: ?Shadow) Self {
+            if (value == null) return self.*;
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
-            visual.new_shadow = value;
+            visual.new_shadow = value.?;
             new_self._visual = visual;
             return new_self;
         }
 
-        pub fn layer(self: *const Self, value: types.BackgroundLayer) Self {
+        pub fn opacity(self: *const Self, value: f16) Self {
+            var new_self: Self = self.*;
+            var visual = new_self._visual orelse types.Visual{};
+            visual.opacity = value;
+            new_self._visual = visual;
+            return new_self;
+        }
+
+        pub fn layer(self: *const Self, value: ?types.BackgroundLayer) Self {
+            if (value == null) return self.*;
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.layer = value;
@@ -929,7 +1155,9 @@ pub fn Builder(comptime state_type: types.StateType) type {
         pub fn radius(self: *const Self, value: types.BorderRadius) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
-            visual.border_radius = value;
+            var old_border = visual.border orelse types.BorderGrouped{ .color = null, .thickness = .all(0) };
+            old_border.radius = value;
+            visual.border = old_border;
             new_self._visual = visual;
             return new_self;
         }
@@ -979,12 +1207,13 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .aria_label = self._aria_label,
                 .animation_enter = self._animation_enter,
                 .animation_exit = self._animation_exit,
+                .accessibility = self._accessibility,
             };
 
             if (self._ui_node == null) {
                 const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
                 if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
-                    if (self._options.?.on_press) |on_press| {
+                    if (self._on_press) |on_press| {
                         Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
                             println("Button Function Registry {any}\n", .{err});
                         };
@@ -1001,7 +1230,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 // }
             } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
                 const ui_node = self._ui_node orelse unreachable;
-                if (self._options.?.on_press) |on_press| {
+                if (self._on_press) |on_press| {
                     Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
                         println("Button Function Registry {any}\n", .{err});
                     };
@@ -1013,6 +1242,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
         }
 
         pub fn children(self: *const Self, _: void) void {
+            if (self._used_style) return Vapor.LifeCycle.close({});
             var mutable_style = Style{};
             if (self._style) |style_ptr| {
                 mutable_style = style_ptr.*;
@@ -1039,15 +1269,19 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 if (_visual.ellipsis != null) visual.ellipsis = _visual.ellipsis;
                 if (_visual.shadow != null) visual.shadow = _visual.shadow;
                 if (_visual.cursor != null) visual.cursor = _visual.cursor;
+                if (self._edges != null) visual.edges = self._edges;
+
                 mutable_style.visual = visual;
             } else if (self._visual) |_visual| {
                 mutable_style.visual = _visual;
+                mutable_style.visual.?.edges = self._edges;
             }
 
             if (mutable_style.interactive == null) mutable_style.interactive = self._interactive;
             if (mutable_style.child_gap == null) mutable_style.child_gap = self._child_gap;
             if (mutable_style.transform_origin == null) mutable_style.transform_origin = self._transform_origin;
             if (mutable_style.padding == null) mutable_style.padding = self._padding;
+            if (mutable_style.flex_type == .default) mutable_style.flex_type = self._flex_type;
             if (mutable_style.layout != null) {
                 if (self._layout) |_layout| {
                     mutable_style.layout = _layout;
@@ -1091,12 +1325,13 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .animation_enter = self._animation_enter,
                 .animation_exit = self._animation_exit,
                 .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
             };
 
             if (self._ui_node == null) {
                 const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
                 if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
-                    if (self._options.?.on_press) |on_press| {
+                    if (self._on_press) |on_press| {
                         Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
                             println("Button Function Registry {any}\n", .{err});
                         };
@@ -1110,7 +1345,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
             } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
                 const ui_node = self._ui_node orelse unreachable;
-                if (self._options.?.on_press) |on_press| {
+                if (self._on_press) |on_press| {
                     Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
                         println("Button Function Registry {any}\n", .{err});
                     };

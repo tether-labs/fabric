@@ -16,10 +16,14 @@ pub var packed_interactive: types.PackedInteractive = .{};
 pub var packed_transition: types.PackedTransition = .{};
 pub var packed_layer: types.PackedLayer = .{ .Grid = .{} };
 pub var packed_transforms: types.PackedTransforms = .{};
+const hashStyle = @import("HashStyle.zig").hashStyle;
+const StringTable = @import("StringTable.zig").StringTable;
 
 const PackedFieldPtrs = @import("UITree.zig").PackedFieldPtrs;
 const Packer = @import("Packer.zig");
 const buildClassString = @import("UITree.zig").buildClassString;
+
+const Accessibility = @import("Accessibility.zig");
 
 /// Helper to pack a color union (`.Literal` or `.Thematic`) into a PackedColor struct.
 fn packColor(source_color: types.Color, packed_color: *types.PackedColor) void {
@@ -45,7 +49,7 @@ fn getOrPutAndUpdateHash(hash: u32, comptime T: type, data: T, cache: anytype, p
         // lives in the frame arena. Since the arena is wiped every frame, the address of that data changes every
         // single frame (e.g., from 0xAAAA in Frame 1 to 0xBBBB in Frame 2).
         //
-        // If you returned the cached pointer without updating the data, your persistent ptr would point to 0xAAAA (Frame 1's memory), which is now garbage/overwritten.
+        // If you returned the cached pointer without updating the data, your frameent ptr would point to 0xAAAA (Frame 1's memory), which is now garbage/overwritten.
         // "Stable Container, Volatile Content" (or "Flyweight with Frame-Local Backing").
         // We replace the current value with the new generated one, as during transition creation we only allcoate on the frame,
         // so if we create a new style with new transition, then the old one will be used if we do not update the data
@@ -65,7 +69,16 @@ fn getOrPutAndUpdateHash(hash: u32, comptime T: type, data: T, cache: anytype, p
 
 fn configureLayouts(ui_node: *UINode, style: *const Vapor.Style) u32 {
     var hash_l: u32 = 0;
-    if (style.layout) |layout| {
+
+    if (ui_node.parent) |parent| {
+        if (parent.direction == .column) {
+            packed_layout.parent_direction = .column;
+        }
+    }
+
+    if (style.flex_type == .hidden) {
+        packed_layout.flex = .hidden;
+    } else if (style.layout) |layout| {
         if (layout.x == .in_line and layout.y == .in_line) {
             packed_layout.flex = .flow;
             packed_layout.layout = layout;
@@ -189,8 +202,11 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             for (gradient.colors, 0..) |color, j| {
                 packColor(color, &gradient_colors[j]);
             }
-            packed_layer.Gradient.colors_ptr = gradient_colors.ptr;
-            packed_layer.Gradient.colors_len = gradient_colors.len;
+            const count = Vapor.packed_colors.count() + 1;
+            Vapor.packed_colors.put(count, gradient_colors) catch unreachable;
+            packed_layer.Gradient.colors_ptr = count;
+            packed_layer.Gradient.colors_len = @intCast(gradient_colors.len);
+            packed_layer.Gradient.clip = gradient.clip;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
         },
         else => {
@@ -216,8 +232,10 @@ fn configureLayers(visual: *const Vapor.Types.Visual, current_hash_v: u32) u32 {
     } else {
         return hash_v;
     }
-    packed_visual.packed_layers.items_ptr = packed_layers.ptr;
-    packed_visual.packed_layers.len = packed_layers.len;
+    const count = Vapor.packed_layers.count() + 1;
+    Vapor.packed_layers.put(count, packed_layers) catch unreachable;
+    packed_visual.packed_layers.items_ptr = count;
+    packed_visual.packed_layers.len = @intCast(packed_layers.len);
     return hash_v;
 }
 
@@ -232,7 +250,7 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     if (style.visual) |visual| {
-        checkVisual(&visual, &packed_visual, ui_node.type);
+        checkVisual(&visual, &packed_visual, ui_node.type, &hash_v);
     }
 
     if (style.list_style) |list_style| packed_visual.list_style = list_style;
@@ -240,19 +258,28 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
     hash_v = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_visual));
 
     if (style.font_family) |font_family| {
-        if (font_family.len > 0) {
-            hash_v +%= hashKey(font_family);
-        }
+        hash_v +%= hashKey(font_family);
+    }
+
+    if (style.font_family) |font_family| {
+        packed_visual.font_family_handle = Vapor.string_table.intern(font_family) catch StringTable.null_handle;
+        hash_v +%= hashKey(font_family);
     }
 
     if (style.visual) |visual| {
         if (visual.animation) |animation| {
-            packed_visual.animation = animation;
+            packed_visual.animation = Vapor.string_table.intern(animation) catch StringTable.null_handle;
+            hash_v +%= hashKey(animation);
         }
         if (visual.animation_name) |animation_name| {
             if (animation_name.len > 0) {
                 hash_v +%= hashKey(animation_name);
+                packed_visual.animation_name_handle = Vapor.string_table.intern(animation_name) catch StringTable.null_handle;
             }
+        }
+        if (visual.edges) |edges| {
+            packed_visual.edges_handle = Vapor.string_table.intern(edges) catch StringTable.null_handle;
+            hash_v +%= hashKey(edges);
         }
     }
 
@@ -261,36 +288,11 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
         packed_transition.delay = transition.delay;
         packed_transition.duration = transition.duration;
         packed_transition.timing = transition.timing;
-        packed_transition.properties_len = transition.properties.len;
-        packed_transition.properties_ptr = null;
+        packed_transition.properties_len = @intCast(transition.properties.len);
+        packed_transition.properties_ptr = 0;
         packed_visual.transitions = packed_transition;
         for (transition.properties) |property| {
             hash_v +%= hashKey(@tagName(property));
-        }
-    }
-
-    if (style.font_family) |font_family| {
-        if (font_family.len > 0) {
-            const ff_slice = Vapor.arena(.frame).dupe(u8, font_family) catch |err| {
-                Vapor.printlnErr("Could not allocate font family {any}\n", .{err});
-                unreachable;
-            };
-            packed_visual.font_family_ptr = ff_slice.ptr;
-            packed_visual.font_family_len = ff_slice.len;
-        }
-    }
-
-    if (style.visual) |visual| {
-        if (visual.animation_name) |animation_name| {
-            Vapor.println("Animation name {s}", .{animation_name});
-            if (animation_name.len > 0) {
-                const anim_name_slice = Vapor.arena(.frame).dupe(u8, animation_name) catch |err| {
-                    Vapor.printlnErr("Could not allocate animation name {any}\n", .{err});
-                    unreachable;
-                };
-                packed_visual.animation_name_ptr = anim_name_slice.ptr;
-                packed_visual.animation_name_len = anim_name_slice.len;
-            }
         }
     }
 
@@ -325,14 +327,13 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
 fn configurePositions(ui_node: *UINode, style: *const Vapor.Style) u32 {
     var hash_p: u32 = 0;
     if (style.anchor) |anchor| {
-        const anchor_slice = Vapor.arena(.frame).dupe(u8, anchor) catch |err| {
-            Vapor.printlnErr("Could not allocate anchor {any}\n", .{err});
-            unreachable;
-        };
-        packed_position.anchor_name_ptr = anchor_slice.ptr;
-        packed_position.anchor_name_len = anchor_slice.len;
-        const hash = hashKey(anchor);
-        hash_p +%= hash;
+        if (ui_node.type == .Anchor) {
+            packed_position.position_anchor_handle = Vapor.string_table.intern(anchor) catch StringTable.null_handle;
+            hash_p +%= hashKey(anchor);
+        } else {
+            packed_position.anchor_name_handle = Vapor.string_table.intern(anchor) catch StringTable.null_handle;
+            hash_p +%= hashKey(anchor);
+        }
     }
 
     if (style.position) |position| {
@@ -398,7 +399,7 @@ fn handleTransform(transform: types.Transform, hash: *u32) types.PackedTransform
     packed_transform.y = transform.y;
     packed_transform.z = transform.z;
     packed_transform.opacity = transform.opacity;
-    packed_transform.type_ptr = null;
+    packed_transform.type_ptr = 0;
     packed_transform.type_len = transform.type.len;
     for (transform.type) |property| {
         hash.* +%= @intFromEnum(property);
@@ -414,13 +415,15 @@ fn configureAnimations(ui_node: *UINode, elem_decl: ElemDecl) u32 {
 
     if (elem_decl.animation_enter) |animation_enter| {
         packed_animations.has_animation_enter = true;
-        packed_animations.animation_enter = animation_enter;
+        packed_animations.animation_enter = Vapor.string_table.intern(animation_enter) catch StringTable.null_handle;
+        hash_a +%= hashKey(animation_enter);
     }
 
     if (elem_decl.animation_exit) |animation_exit| {
         ui_node.animation_exit = animation_exit;
         packed_animations.has_animation_exit = true;
-        packed_animations.animation_exit = animation_exit;
+        packed_animations.animation_exit = Vapor.string_table.intern(animation_exit) catch StringTable.null_handle;
+        hash_a +%= hashKey(animation_exit);
     }
 
     if (!packed_animations.has_animation_enter and !packed_animations.has_animation_exit) return 0;
@@ -449,7 +452,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
     const interactive = style.interactive orelse return hash_i;
     if (interactive.hover) |hover| {
         var packed_hover: types.PackedVisual = .{};
-        checkVisual(&hover, &packed_hover, ui_node.type);
+        checkVisual(&hover, &packed_hover, ui_node.type, &hash_i);
         packed_interactive.has_hover = true;
         packed_interactive.hover = packed_hover;
 
@@ -472,7 +475,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
 
     if (interactive.focus) |focus| {
         var packed_focus: types.PackedVisual = .{};
-        checkVisual(&focus, &packed_focus, ui_node.type);
+        checkVisual(&focus, &packed_focus, ui_node.type, &hash_i);
         packed_interactive.has_focus = true;
         packed_interactive.focus = packed_focus;
     }
@@ -481,31 +484,20 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
 
     if (interactive.hover) |hover| {
         if (hover.animation) |animation| {
-            packed_interactive.hover.animation = animation;
+            packed_interactive.hover.animation = Vapor.string_table.intern(animation) catch StringTable.null_handle;
+            hash_i +%= hashKey(animation);
         }
 
         if (hover.animation_name) |animation_name| {
             if (animation_name.len > 0) {
                 hash_i +%= hashKey(animation_name);
+                packed_interactive.hover.animation_name_handle = Vapor.string_table.intern(animation_name) catch StringTable.null_handle;
             }
         }
         if (hover.transform) |transform| {
             var packed_transform: types.PackedTransform = undefined;
             packed_transform.set(&transform);
             packed_interactive.hover_transform = packed_transform;
-        }
-    }
-
-    if (interactive.hover) |hover| {
-        if (hover.animation_name) |animation_name| {
-            if (animation_name.len > 0) {
-                const anim_name_slice = Vapor.arena(.frame).dupe(u8, animation_name) catch |err| {
-                    Vapor.printlnErr("Could not allocate animation name {any}\n", .{err});
-                    unreachable;
-                };
-                packed_interactive.hover.animation_name_ptr = anim_name_slice.ptr;
-                packed_interactive.hover.animation_name_len = anim_name_slice.len;
-            }
         }
     }
 
@@ -526,12 +518,15 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
 }
 
 var hash_id: bool = false;
+const style_hash_null: u32 = 2316552965;
 pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     hash_id = false;
     const stack = ui_ctx.stack orelse unreachable;
     const current_open = stack.ptr orelse unreachable;
     const parent = current_open.parent orelse unreachable;
     const style = elem_decl.style;
+
+    // Early exit if style hasn't changed
 
     if (elem_decl.elem_type == .ListItem) {
         if (parent.type != .List) {
@@ -581,6 +576,14 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         }
     }
 
+    if (elem_decl.accessibility) |accessibility| {
+        Accessibility.a11y_map.put(hashKey(current_open.uuid), accessibility) catch |err| {
+            std.log.err("Error adding accessibility {any}\n", .{err});
+        };
+        current_open.accessibility = true;
+        current_open.finger_print +%= hashKey(Accessibility.toAttributeString(accessibility));
+    }
+
     current_open.href = elem_decl.href;
     current_open.type = elem_decl.elem_type;
     current_open.name = elem_decl.name;
@@ -592,26 +595,55 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     if (elem_decl.inlineStyle) |inlineStyle| {
         current_open.inlineStyle = inlineStyle;
         current_open.style_hash +%= hashKey(inlineStyle);
-        current_open.finger_print +%= hashKey(inlineStyle);
     }
 
-    // if (elem_decl.video) |video| {
-    //     current_open.video = video.*;
-    //     if (video.src) |src| {
-    //         current_open.finger_print +%= hashKey(src);
-    //     }
-    //     current_open.finger_print +%= @intFromBool(video.autoplay);
-    //     current_open.finger_print +%= @intFromBool(video.muted);
-    //     current_open.finger_print +%= @intFromBool(video.loop);
-    //     current_open.finger_print +%= @intFromBool(video.controls);
-    // }
+    if (elem_decl.video) |video| {
+        current_open.video = video;
+        if (video.src) |src| {
+            current_open.finger_print +%= hashKey(src);
+        }
+        current_open.finger_print +%= @intFromBool(video.autoplay);
+        current_open.finger_print +%= @intFromBool(video.muted);
+        current_open.finger_print +%= @intFromBool(video.loop);
+        current_open.finger_print +%= @intFromBool(video.controls);
+    }
 
-    current_open.hash = hashKey(current_open.uuid);
     current_open.props_hash = current_open.finger_print;
     // current_open.finger_print +%= hashKey(current_open.uuid);
 
     // this adds 60ms
-    if (style) |s| {
+    if (style) |s| outer_style: {
+
+        // const ptr_key = @intFromPtr(s);
+        // Vapor.print("Cache Miss {d}", .{ptr_key});
+        // const new_hash = hashStyle(s);
+        // current_open.prev_style_hash_computed = new_hash;
+        //
+        // // Try to reuse cached style info
+        // // Case 1: Style unchanged from previous frame (prev_style_hash matches new_hash)
+        // // Case 2: This exact style was computed before (exists in style_info_map)
+        // if (UIContext.style_info_map.get(new_hash)) |style_info| {
+        //     // We have cached data for this style configuration
+        //     current_open.packed_field_ptrs = style_info.packed_field_ptrs;
+        //     current_open.style_hashes = style_info.style_hashes;
+        //     current_open.style_hash = style_info.style_hash;
+        //     current_open.class = style_info.class;
+        //
+        //     // Still need to set class if present
+        //     if (s.style_id) |class| {
+        //         current_open.class = class;
+        //     }
+        //
+        //     // Don't forget to update finger_print!
+        //     current_open.finger_print +%= current_open.style_hash;
+        //
+        //     current_open.state_type = elem_decl.state_type;
+        //     current_open.aria_label = elem_decl.aria_label;
+        //     current_open.alt = elem_decl.alt;
+        //     UIContext.cache_count += 1;
+        //     return current_open;
+        // }
+
         var hash_l: u32 = 0;
         var hash_v: u32 = 0;
         var hash_p: u32 = 0;
@@ -634,6 +666,15 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         if (s.style_id != null) {
             hash_id = true;
             current_open.class = s.style_id.?;
+            // current_open.style_hash +%= hashKey(s.style_id.?);
+        }
+
+        var additonal_classes: ?[]const u8 = null;
+
+        if (s.visual) |visual| {
+            if (visual.edges) |e| {
+                additonal_classes = e;
+            }
         }
 
         hash_l = configureLayouts(current_open, s);
@@ -646,14 +687,6 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
 
         // ** Packed Animations and Interactive **
 
-        current_open.finger_print +%= hash_l;
-        current_open.finger_print +%= hash_p;
-        current_open.finger_print +%= hash_mp;
-        current_open.finger_print +%= hash_v;
-        current_open.finger_print +%= hash_a;
-        current_open.finger_print +%= hash_i;
-        current_open.finger_print +%= hash_t;
-
         current_open.style_hash +%= hash_l;
         current_open.style_hash +%= hash_p;
         current_open.style_hash +%= hash_mp;
@@ -661,6 +694,11 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         current_open.style_hash +%= hash_a;
         current_open.style_hash +%= hash_i;
         current_open.style_hash +%= hash_t;
+
+        // if (2316552965 == current_open.style_hash) {
+        //     std.log.debug("{?s} {any}", .{ current_open.class, current_open.finger_print });
+        //     break :outer_style;
+        // }
 
         // This adds 40ms for 10000 rows
         if (s.style_id != null) {
@@ -671,6 +709,11 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
                 Vapor.generator.writeNodeStyle(current_open);
             };
         } else {
+            if (2316552965 == current_open.style_hash) {
+                current_open.class = "";
+                current_open.style_hash = 0;
+                break :outer_style;
+            }
             // This adds 2ms for 10000 nodes
             buildClassString(
                 &current_open.packed_field_ptrs.?,
@@ -682,36 +725,41 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
                 hash_a,
                 hash_i,
                 hash_t,
+                additonal_classes,
             ) catch |err| {
                 Vapor.printlnErr("Could not build class string {any}\n", .{err});
             };
         }
     }
 
-    // if (current_open.type == .Hooks or current_open.type == .HooksCtx) {
-    //     current_open.hooks = elem_decl.hooks;
-    // }
     current_open.state_type = elem_decl.state_type;
     current_open.aria_label = elem_decl.aria_label;
     current_open.alt = elem_decl.alt;
 
+    current_open.finger_print +%= current_open.style_hash;
+
     return current_open;
 }
 
-pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisual, _: types.ElementType) void {
+pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisual, _: types.ElementType, hash_v: *u32) void {
     // Refactored to use the packColor helper
     if (visual.background) |background| {
-        if (background.color) |color| {
+        if (background.layer_count > 0) {
+            var packed_layers: []types.PackedLayer = undefined;
+            packed_layers = Vapor.arena(.frame).alloc(types.PackedLayer, background.layer_count) catch unreachable;
+            for (background.layers, 0..) |layer, i| {
+                if (layer == null) continue;
+                packed_layers[i] = createPackedLayer(layer.?, hash_v);
+            }
+
+            const count = Vapor.packed_layers.count() + 1;
+            Vapor.packed_layers.put(count, packed_layers) catch unreachable;
+            packed_visual.background_layers.items_ptr = count;
+            packed_visual.background_layers.len = @intCast(packed_layers.len);
+        } else if (background.color) |color| {
             var background_color = packet_visual.background;
             packColor(color, &background_color);
             packet_visual.background = background_color;
-        } else if (background.layer) |layer| {
-            switch (layer) {
-                .Image => {},
-                else => {
-                    Vapor.printlnSrcErr("Not implemented yet", .{}, @src());
-                },
-            }
         }
     }
 
@@ -740,6 +788,7 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
             packet_visual.has_border_radius = true;
             packet_visual.border_radius = radius;
         }
+        packet_visual.border_style = border.style;
     }
 
     if (visual.font_size) |font_size| {
@@ -751,6 +800,13 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
 
     if (visual.outline) |outline| {
         packet_visual.outline = outline;
+    }
+
+    if (visual.outline_color) |color| {
+        packet_visual.has_outline_color = true;
+        var outline_color = packet_visual.outline_color;
+        packColor(color, &outline_color);
+        packet_visual.outline_color = outline_color;
     }
 
     if (visual.font_style) |font_style| {
@@ -824,8 +880,9 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
     }
 
     if (visual.new_shadow) |new_shadow| {
-        const shadow_ptr = Vapor.arena(.frame).create(Shadow) catch unreachable;
-        shadow_ptr.* = new_shadow;
-        packet_visual.new_shadow = shadow_ptr;
+        var count = Vapor.shadows.count();
+        count += 1;
+        packet_visual.new_shadow = count;
+        Vapor.shadows.put(count, new_shadow) catch unreachable;
     }
 }

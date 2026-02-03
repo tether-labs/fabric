@@ -28,6 +28,8 @@ const Cursor = Types.Cursor;
 const Color = Types.Color;
 const Writer = @import("Writer.zig");
 const Theme = @import("theme");
+const StringTable = @import("StringTable.zig").StringTable;
+const Edges = @import("Edges.zig").Edges;
 
 const writer_t = *Writer;
 // Global buffer to store the CSS string for returning to JavaScript
@@ -70,6 +72,7 @@ const PropValue = struct {
         aspect_ratio,
         gradient,
         layers,
+        background_layers,
         caret,
         resize,
     };
@@ -107,6 +110,7 @@ const PropValue = struct {
         aspect_ratio: Types.AspectRatio,
         gradient: Types.PackedGradient,
         layers: Types.PackedLayers,
+        background_layers: Types.PackedLayers,
         caret: Types.PackedCaret,
         resize: Types.Resize,
     };
@@ -114,7 +118,7 @@ const PropValue = struct {
 
 /// Writes a CSS property and its value to the writer.
 /// This function uses a tagged union (PropValue) to prevent code bloat from monomorphization.
-fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void {
+pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void {
     writer.write(prop) catch return;
     writer.writeByte(':') catch return;
 
@@ -137,8 +141,8 @@ fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void {
         .cursor => cursorToCSS(value.data.cursor, writer) catch {},
         .appearance => appearanceToCSS(value.data.appearance, writer) catch {},
         .transform_type => {
+            const slice = Vapor.packed_transforms.get(value.data.transform_type.type_ptr) orelse return;
             const transform = value.data.transform_type;
-            const slice = transform.type_ptr.?.*[0..transform.type_len];
             for (slice) |t| {
                 switch (t) {
                     .scale => {
@@ -225,6 +229,7 @@ fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void {
         .dots => dotsToCSS(value.data.dots, writer) catch {},
         .gradient => gradientToCSS(value.data.gradient, writer) catch {},
         .layers => layersToCSS(value.data.layers, writer) catch {},
+        .background_layers => backgroundLayersToCSS(value.data.background_layers, writer) catch {},
         .color => colorToCSS(value.data.color, writer) catch {},
         .list_style => listStyleToCSS(value.data.list_style, writer) catch {},
         .outline => outlineStyleToCSS(value.data.outline, writer) catch {},
@@ -295,7 +300,14 @@ const box_sizing_map = [_][]const u8{ "content-box", "border-box", "padding-box"
 const list_style_map = [_][]const u8{ "default", "none", "disc", "circle", "square", "decimal", "decimal-leading-zero", "lower-roman", "upper-roman", "lower-alpha", "upper-alpha", "lower-greek", "armenian", "georgian", "inherit", "initial", "revert", "unset" };
 const flex_wrap_map = [_][]const u8{ "none", "nowrap", "wrap", "wrap-reverse", "inherit", "initial", "revert", "unset" };
 const white_space_map = [_][]const u8{ "default", "normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces", "inherit", "initial", "revert", "unset" };
-const flex_type_map = [_][]const u8{ "default", "flex", "inline", "block", "inline-block" };
+const flex_type_map = [_][]const u8{
+    "default",
+    "flex",
+    "inline",
+    "block",
+    "inline-block",
+    "none",
+};
 const timing_function_map = [_][]const u8{ "ease", "linear", "ease-in", "ease-out", "ease-in-out", "bounce", "elastic" };
 const animation_direction_map = [_][]const u8{ "normal ", "reverse ", "forwards ", "alternate " };
 const font_style_map = [_][]const u8{ "default", "normal", "italic" };
@@ -528,20 +540,25 @@ fn gradientToCSS(gradient: Types.PackedGradient, writer: writer_t) !void {
         .to_bottom => writer.write("to bottom") catch {},
         .to_left => writer.write("to left") catch {},
         .to_right => writer.write("to right") catch {},
+        .to_top_left => writer.write("to top left") catch {},
+        .to_top_right => writer.write("to top right") catch {},
         .angle => {
             writer.writeF32(gradient.direction.angle) catch {};
             writer.write("deg") catch {};
         },
         .none => {},
     }
-    var colors = gradient.colors_ptr orelse {
-        Vapor.printlnSrcErr("Colors ptr is null", .{}, @src());
-        return;
-    };
-    for (colors[0..gradient.colors_len]) |color| {
-        writer.write(", ") catch {};
-        colorToCSS(color, writer) catch {};
+    if (gradient.colors_ptr > 0) {
+        const colors = Vapor.packed_colors.get(gradient.colors_ptr) orelse {
+            Vapor.printlnSrcErr("Colors ptr is null", .{}, @src());
+            return;
+        };
+        for (colors) |color| {
+            writer.write(", ") catch {};
+            colorToCSS(color, writer) catch {};
+        }
     }
+
     writer.write(")") catch {};
 }
 
@@ -581,9 +598,34 @@ fn linesToCSS(lines: Types.PackedLines, writer: anytype) !void {
     writer.write("px)") catch {};
 }
 
+fn backgroundLayersToCSS(packed_layers: Types.PackedLayers, writer: writer_t) !void {
+    const layers = Vapor.packed_layers.get(packed_layers.items_ptr) orelse unreachable;
+
+    for (layers, 0..) |layer, i| {
+        switch (layer) {
+            .Gradient => |gradient| {
+                try gradientToCSS(gradient, writer);
+
+                // Write clip directly after the gradient
+                if (gradient.clip != .none) {
+                    writer.write(" ") catch {};
+                    writer.write(gradient.clip.toCss()) catch {};
+                }
+            },
+            else => {},
+        }
+        if (i < packed_layers.len - 1) {
+            writer.write(", ") catch {};
+        }
+    }
+    writer.write(";\n") catch {};
+}
+
 fn layersToCSS(packed_layers: Types.PackedLayers, writer: writer_t) !void {
-    // const start = writer.pos;
-    for (packed_layers.items_ptr.?[0..packed_layers.len], 0..) |layer, i| {
+    const layers = Vapor.packed_layers.get(packed_layers.items_ptr) orelse unreachable;
+
+    // First pass: write background-image
+    for (layers, 0..) |layer, i| {
         switch (layer) {
             .Grid => |grid| {
                 try gridToCSS(grid, writer);
@@ -605,7 +647,45 @@ fn layersToCSS(packed_layers: Types.PackedLayers, writer: writer_t) !void {
         }
     }
 
-    for (packed_layers.items_ptr.?[0..packed_layers.len], 0..) |layer, i| {
+    // Second pass: write background-clip
+    var has_clip = false;
+    for (layers) |layer| {
+        switch (layer) {
+            .Gradient => |gradient| {
+                if (gradient.clip != .none) {
+                    has_clip = true;
+                    break;
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (has_clip) {
+        writer.write("background-clip: ") catch {};
+        for (layers, 0..) |layer, i| {
+            const clip: Vapor.Types.BackgroundClip = switch (layer) {
+                .Gradient => |gradient| gradient.clip,
+                // Default to border-box for non-gradient layers
+                else => .borderBox,
+            };
+
+            if (clip != .none) {
+                writer.write(clip.toCss()) catch {};
+            } else {
+                writer.write("border-box") catch {};
+            }
+
+            if (i < packed_layers.len - 1) {
+                writer.write(", ") catch {};
+            } else {
+                writer.write(";\n") catch {};
+            }
+        }
+    }
+
+    // Third pass: write background-size
+    for (layers, 0..) |layer, i| {
         switch (layer) {
             .Grid => |grid| {
                 writer.write("background-size: ") catch {};
@@ -621,10 +701,6 @@ fn layersToCSS(packed_layers: Types.PackedLayers, writer: writer_t) !void {
             },
             .Lines => |_| {
                 break;
-                // writer.writeU16(lines.spacing) catch {};
-                // writer.write("px ") catch {};
-                // writer.writeU16(lines.spacing) catch {};
-                // writer.write("px") catch {};
             },
             .Dot => |dots| {
                 writer.write("background-size: ") catch {};
@@ -646,9 +722,7 @@ fn layersToCSS(packed_layers: Types.PackedLayers, writer: writer_t) !void {
     }
 
     writer.write("background-position: center center") catch {};
-    // Vapor.printlnSrcErr("GradientToCSS {s}", .{writer.buffer[start..writer.pos]}, @src());
 }
-
 fn appearanceToCSS(appearance: Appearance, writer: anytype) !void {
     try writeMappedString(Appearance, appearance, &appearance_map, writer);
 }
@@ -659,9 +733,8 @@ fn outlineStyleToCSS(outline: Outline, writer: anytype) !void {
 }
 
 fn transitionStyleToCSS(style: PackedTransition, writer: writer_t) void {
-    const properties = style.properties_ptr orelse return;
-    const slice = properties[0..style.properties_len];
-    for (slice, 0..) |p, i| {
+    const properties = Vapor.packed_transitions.get(style.properties_ptr) orelse return;
+    for (properties, 0..) |p, i| {
         switch (p) {
             // .transform => {
             //     const tag_name = @tagName(p);
@@ -755,7 +828,7 @@ fn transitionStyleToCSS(style: PackedTransition, writer: writer_t) void {
                 writer.write(css) catch return;
             },
         }
-        if (i < slice.len - 1) {
+        if (i < properties.len - 1) {
             writer.write(", ") catch return;
         }
     }
@@ -767,9 +840,12 @@ fn cursorToCSS(cursor_type: Cursor, writer: anytype) !void {
 }
 
 fn caretToCSS(caret: Types.PackedCaret, writer: anytype) !void {
-    // try writeMappedString(Types.CaretType, caret.type, &caret_map, writer);
-    // writer.writeByte(' ') catch {};
     colorToCSS(caret.color, writer) catch {};
+    // writer.write(";\n") catch {};
+
+    // writer.write("caret-shape: ") catch {};
+    // try writeMappedString(Types.CaretType, caret.type, &caret_map, writer);
+    // writer.write(";\n") catch {};
 }
 
 fn resizeToCSS(resize: Types.Resize, writer: anytype) !void {
@@ -856,6 +932,24 @@ pub fn writeStyleField(field: Types.StyleFields, visual: *const Types.PackedVisu
                 writePropValue("color", .{ .tag = .color, .data = .{ .color = color } }, writer);
             }
         },
+        .fill => {
+            if (visual.fill.has_color or visual.fill.has_token) {
+                const color = visual.fill;
+                writePropValue("fill", .{ .tag = .color, .data = .{ .color = color } }, writer);
+            }
+        },
+        .stroke => {
+            if (visual.stroke.has_color or visual.stroke.has_token) {
+                const color = visual.stroke;
+                writePropValue("stroke", .{ .tag = .color, .data = .{ .color = color } }, writer);
+            }
+        },
+        .background => {
+            if (visual.background.has_color or visual.background.has_token) {
+                const color = visual.background;
+                writePropValue("background", .{ .tag = .color, .data = .{ .color = color } }, writer);
+            }
+        },
         else => {
             Vapor.printlnErr("StyleField not implemented {any}", .{field});
             unreachable;
@@ -867,6 +961,8 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     // Color color
     if (visual.background.has_color or visual.background.has_token) {
         writePropValue("background-color", .{ .tag = .color, .data = .{ .color = visual.background } }, writer);
+    } else if (visual.background_layers.len > 0) {
+        writePropValue("background", .{ .tag = .background_layers, .data = .{ .background_layers = visual.background_layers } }, writer);
     }
     // if (visual.background_gradient.type != .none) {
     //     writePropValue("background-image", .{ .tag = .gradient, .data = .{ .gradient = visual.background_gradient } }, writer);
@@ -877,7 +973,7 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     //     writePropValue("background-image", .{ .tag = .dots, .data = .{ .dots = visual.background_dots } }, writer);
     // }
 
-    if (visual.packed_layers.items_ptr != null) {
+    if (visual.packed_layers.items_ptr > 0) {
         writePropValue("background-image", .{ .tag = .layers, .data = .{ .layers = visual.packed_layers } }, writer);
 
         if (visual.is_text_gradient) {
@@ -931,18 +1027,13 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     //     writer.write("px;\n") catch {};
     // }
 
-    if (visual.font_family_ptr) |font_family_ptr| {
-        writer.write("font-family:") catch {};
-        const font_family = font_family_ptr[0..visual.font_family_len];
-        writer.write(font_family) catch {};
-        writer.write(";\n") catch {};
-    }
-
-    if (visual.animation_name_ptr) |animation_name_ptr| {
-        writer.write("animation-name:") catch {};
-        const animation_name = animation_name_ptr[0..visual.animation_name_len];
-        writer.write(animation_name) catch {};
-        writer.write(";\n") catch {};
+    if (visual.font_family_handle != StringTable.null_handle) {
+        const font_family = Vapor.string_table.get(visual.font_family_handle);
+        if (font_family) |name| {
+            writer.write("font-family:") catch {};
+            writer.write(name) catch {};
+            writer.write(";\n") catch {};
+        }
     }
 
     if (visual.fill.has_color or visual.fill.has_token) {
@@ -955,7 +1046,7 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
 
     if (visual.font_weight > 0) {
         writer.write("font-weight:") catch {};
-        writer.writeUsize(visual.font_weight) catch {};
+        writer.writeU16(visual.font_weight) catch {};
         writer.write(";\n") catch {};
     }
 
@@ -966,8 +1057,9 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     if (visual.has_border_thickeness) {
         const border_thickness = visual.border_thickness;
         writePropValue("border-width", .{ .tag = .border, .data = .{ .border = border_thickness } }, writer);
-        writer.write("border-style: solid;\n") catch {};
+        // writer.write("border-style: solid;\n") catch {};
     }
+
     // else if (ptr.type == .Button or ptr.type == .CtxButton) {
     //     _ = writer.write("border:none;\n") catch {};
     // }
@@ -978,6 +1070,12 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     if (visual.has_border_radius) {
         const border_radius = visual.border_radius;
         writePropValue("border-radius", .{ .tag = .border_radius, .data = .{ .border_radius = border_radius } }, writer);
+    }
+
+    if (visual.border_style != .default) {
+        writer.write("border-style: ") catch {};
+        writer.write(@tagName(visual.border_style)) catch {};
+        writer.write(";\n") catch {};
     }
 
     // Text color
@@ -994,6 +1092,11 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         writePropValue("outline", .{ .tag = .outline, .data = .{ .outline = visual.outline } }, writer);
     }
 
+    if (visual.has_outline_color) {
+        const outline_color = visual.outline_color;
+        writePropValue("outline-color", .{ .tag = .color, .data = .{ .color = outline_color } }, writer);
+    }
+
     // Shadow
     if (visual.shadow.blur > 0 or visual.shadow.spread > 0 or
         visual.shadow.top != 0 or visual.shadow.left != 0)
@@ -1001,9 +1104,10 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         writePropValue("box-shadow", .{ .tag = .shadow, .data = .{ .shadow = visual.shadow } }, writer);
     }
 
-    if (visual.new_shadow) |new_shadow| {
+    if (visual.new_shadow > 0) {
+        const shadow = Vapor.shadows.get(visual.new_shadow) orelse unreachable;
         writer.write("box-shadow:") catch {};
-        new_shadow.writeCss(writer) catch {};
+        shadow.writeCss(writer) catch {};
         writer.write(";") catch {};
     }
 
@@ -1021,7 +1125,7 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         writePropValue("white-space", .{ .tag = .white_space, .data = .{ .white_space = visual.white_space } }, writer);
     }
 
-    if (visual.has_transitions and visual.transitions.properties_ptr != null) {
+    if (visual.has_transitions and visual.transitions.properties_ptr > 0) {
         writePropValue("transition", .{ .tag = .transition, .data = .{ .transition = visual.transitions } }, writer);
     }
 
@@ -1033,10 +1137,26 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     if (visual.resize != .default) {
         writePropValue("resize", .{ .tag = .resize, .data = .{ .resize = visual.resize } }, writer);
     }
-    if (visual.animation) |animations| {
-        writer.write("animation:") catch {};
-        generateAnimation(animations, writer);
-        writer.write(";\n") catch {};
+
+    if (visual.animation_name_handle != StringTable.null_handle) {
+        const animation_name = Vapor.string_table.get(visual.animation_name_handle);
+        if (animation_name) |name| {
+            writer.write("animation-name:") catch {};
+            writer.write(name) catch {};
+            writer.write(";\n") catch {};
+        }
+    }
+
+    if (visual.animation > 0) {
+        if (Vapor.string_table.get(visual.animation)) |name| {
+            const animation = Vapor.animations.get(name) orelse {
+                Vapor.printlnSrcErr("Animations stringtable not found, please remember to run .build() on the animation within init", .{}, @src());
+                return;
+            };
+            writer.write("animation:") catch {};
+            generateAnimation(&animation, writer);
+            writer.write(";\n") catch {};
+        }
     }
 }
 
@@ -1048,9 +1168,14 @@ var show_scrollbar: bool = true;
 // adds 20kb
 
 pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) void {
+    var parent_direction_row: bool = true;
+    if (layout_ptr.parent_direction == .column) {
+        parent_direction_row = false;
+    }
     const layout = layout_ptr.layout;
     const placement = layout_ptr.placement;
     const direction = layout_ptr.direction;
+
     if (layout_ptr.flex != .default) {
         writePropValue("display", .{ .tag = .flex_type, .data = .{ .flex_type = layout_ptr.flex } }, writer);
         writePropValue("flex-direction", .{ .tag = .direction, .data = .{ .direction = direction } }, writer);
@@ -1067,14 +1192,20 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
         writePropValue("text-align", .{ .tag = .alignment, .data = .{ .alignment = layout_ptr.text_align.x } }, writer);
     }
 
-    if (placement.x != .none and placement.y != .none) {
-        if (direction == .row) {
-            writePropValue("justify-self", .{ .tag = .alignment, .data = .{ .alignment = placement.x } }, writer);
-            writePropValue("align-self", .{ .tag = .alignment, .data = .{ .alignment = placement.y } }, writer);
-        } else {
-            writePropValue("align-self", .{ .tag = .alignment, .data = .{ .alignment = placement.x } }, writer);
-            writePropValue("justify-self", .{ .tag = .alignment, .data = .{ .alignment = placement.y } }, writer);
-        }
+    // if (placement.x != .none and placement.y != .none) {
+    //     if (direction == .row) {
+    //         writePropValue("justify-self", .{ .tag = .alignment, .data = .{ .alignment = placement.x } }, writer);
+    //         writePropValue("align-self", .{ .tag = .alignment, .data = .{ .alignment = placement.y } }, writer);
+    //     } else {
+    //         writePropValue("align-self", .{ .tag = .alignment, .data = .{ .alignment = placement.x } }, writer);
+    //         writePropValue("justify-self", .{ .tag = .alignment, .data = .{ .alignment = placement.y } }, writer);
+    //     }
+    // }
+
+    if (placement != .none) {
+        writer.write("position: fixed; position-area: ") catch {};
+        writer.write(placement.toPositionArea()) catch {};
+        writer.write("; ") catch {};
     }
 
     // Alignment
@@ -1110,13 +1241,39 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
         } else {
             writePropValue("width", .{ .tag = .sizing, .data = .{ .sizing = size.width } }, writer);
         }
+
+        if (layout_ptr.flex != .default) {
+            writer.write("flex-shrink: 0;\n") catch {};
+        }
     } else if (size.width.type == .grow) {
-        writer.write("flex: 1;\n") catch {};
-        // writer.write("min-width: 0;\n") catch {};
+        if (parent_direction_row) {
+            writer.write("flex: 1;\n") catch {};
+        } else {
+            writer.write("align-self: stretch;\n") catch {};
+        }
+        // GROW LOGIC:
+        // 1. flex: 1 allows it to take up space.
+        // 2. min-width: 0 is CRITICAL. It prevents the element from
+        //    expanding past the parent if it contains long text or images.
     }
 
     if (size.height.type != .none and size.height.type != .grow) {
-        if (size.height.type == .min_max_vp) {
+        if (size.height.type == .clamp_px) {
+            writer.write("max-height:") catch {};
+            writer.writeF32(size.height.size.max) catch {};
+            writer.write("px;\n") catch {};
+            writer.write("height:") catch {};
+            writer.writeF32(size.height.size.preferred) catch {};
+            writer.write("px;\n") catch {};
+            writer.write("min-height:") catch {};
+            writer.writeF32(size.height.size.min) catch {};
+            writer.write("px;\n") catch {};
+        } else if (size.height.type == .min_px) {
+            std.log.err("min_px", .{});
+            writer.write("min-height:") catch {};
+            writer.writeF32(size.height.size.min) catch {};
+            writer.write("px;\n") catch {};
+        } else if (size.height.type == .min_max_vp) {
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};
             writer.write("vh;\n") catch {};
@@ -1127,15 +1284,23 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("max-height:") catch {};
             writer.writeF32(size.height.size.max) catch {};
             writer.write("px;\n") catch {};
+            writer.write("height: auto;\n") catch {};
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};
             writer.write("px;\n") catch {};
         } else {
             writePropValue("height", .{ .tag = .sizing, .data = .{ .sizing = size.height } }, writer);
         }
+
+        if (layout_ptr.flex != .default) {
+            writer.write("flex-shrink: 0;\n") catch {};
+        }
     } else if (size.height.type == .grow) {
-        writer.write("flex: 1;\n") catch {};
-        // writer.write("min-height: 0;\n") catch {};
+        if (parent_direction_row) {
+            writer.write("align-self: stretch;\n") catch {};
+        } else {
+            writer.write("flex: 1;\n") catch {};
+        }
     }
     const scroll = layout_ptr.scroll;
     switch (scroll.x) {
@@ -1154,7 +1319,7 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
 
     if (layout_ptr.aspect_ratio != .none) {
         writePropValue("aspect-ratio", .{ .tag = .aspect_ratio, .data = .{ .aspect_ratio = layout_ptr.aspect_ratio } }, writer);
-        writer.write("object-fit: cover;\n") catch {};
+        // writer.write("object-fit: cover;\n") catch {};
     }
 }
 
@@ -1175,10 +1340,22 @@ pub fn generatePositions(position: *const Types.PackedPosition, writer: *Writer)
         writePropValue("left", .{ .tag = .pos, .data = .{ .pos = position.left } }, writer);
     }
 
-    if (position.anchor_name_ptr) |anchor_name_ptr| {
-        writer.write("anchor-name:--") catch {};
-        writer.write(anchor_name_ptr[0..position.anchor_name_len]) catch {};
-        writer.write(";\n") catch {};
+    if (position.anchor_name_handle != StringTable.null_handle) {
+        const anchor_name = Vapor.string_table.get(position.anchor_name_handle);
+        if (anchor_name) |name| {
+            writer.write("anchor-name:--") catch {};
+            writer.write(name) catch {};
+            writer.write(";\n") catch {};
+        }
+    }
+
+    if (position.position_anchor_handle != StringTable.null_handle) {
+        const anchor_name = Vapor.string_table.get(position.position_anchor_handle);
+        if (anchor_name) |name| {
+            writer.write("position-anchor:--") catch {};
+            writer.write(name) catch {};
+            writer.write(";\n") catch {};
+        }
     }
 
     if (position.z_index > 0) {
@@ -1247,14 +1424,17 @@ pub fn generateAnimations(animations: *const Types.PackedAnimations, writer: any
     // Transform
 
     if (animations.has_animation_enter) {
-        writer.write("animation:") catch {};
-        generateAnimation(animations.animation_enter.?, writer);
-        writer.write(";\n") catch {};
+        if (Vapor.string_table.get(animations.animation_enter)) |name| {
+            const animation = Vapor.animations.get(name) orelse unreachable;
+            writer.write("animation:") catch {};
+            generateAnimation(&animation, writer);
+            writer.write(";\n") catch {};
+        }
     }
 }
 
 pub fn generateTransforms(transform_ptr: *const Types.PackedTransforms, writer: anytype) void {
-    if (transform_ptr.has_transform and transform_ptr.transform.type_ptr != null) {
+    if (transform_ptr.has_transform and transform_ptr.transform.type_ptr > 0) {
         writePropValue("transform", .{ .tag = .transform_type, .data = .{ .transform_type = transform_ptr.transform } }, writer);
     }
 
@@ -1298,9 +1478,10 @@ pub fn generateStylePass(ptr: ?*UINode, writer: *Writer) void {
         generatePositions(position_ptr, writer);
 
         if (node_ptr.type == .Anchor) {
-            if (position_ptr.anchor_name_ptr) |anchor_name_ptr| {
+            const anchor_name = Vapor.string_table.get(position_ptr.anchor_name_handle);
+            if (anchor_name) |name| {
                 writer.write("position-anchor:--") catch {};
-                writer.write(anchor_name_ptr[0..position_ptr.anchor_name_len]) catch {};
+                writer.write(name) catch {};
                 writer.write(";\n") catch {};
             }
         }
@@ -1330,22 +1511,10 @@ pub fn generateAnimation(animation: *const Animation, writer: *Writer) void {
     writer.writeByte(' ') catch {};
     writer.writeU32(animation.duration_ms) catch {};
     writer.write("ms ") catch {};
-    switch (animation.easing_fn) {
-        .linear => {
-            writer.write("linear") catch {};
-        },
-        .easeIn => {
-            writer.write("ease-in") catch {};
-        },
-        .easeOut => {
-            writer.write("ease-out") catch {};
-        },
-        .easeInOut => {
-            writer.write("ease-in-out") catch {};
-        },
-        else => {},
-    }
-
+    writer.write(animation.easing_fn.toCss()) catch {};
+    writer.writeByte(' ') catch {};
+    writer.write(animation.direction.toCss()) catch {};
+    writer.writeByte(' ') catch {};
     if (animation.iteration_count) |count| {
         writer.writeByte(' ') catch {};
         writer.writeU32(count) catch {};
@@ -1375,9 +1544,10 @@ pub export fn getStyle(ptr: ?*UINode) ?[*]const u8 {
         generatePositions(position_ptr, &writer);
 
         if (node_ptr.type == .Anchor) {
-            if (position_ptr.anchor_name_ptr) |anchor_name_ptr| {
+            const anchor_name = Vapor.string_table.get(position_ptr.anchor_name_handle);
+            if (anchor_name) |name| {
                 writer.write("position-anchor:--") catch {};
-                writer.write(anchor_name_ptr[0..position_ptr.anchor_name_len]) catch {};
+                writer.write(name) catch {};
                 writer.write(";\n") catch {};
             }
         }
@@ -1389,9 +1559,12 @@ pub export fn getStyle(ptr: ?*UINode) ?[*]const u8 {
 
     if (packed_field_ptrs.animations_ptr) |animations_ptr| {
         if (animations_ptr.has_animation_enter) {
-            writer.write("animation:") catch {};
-            generateAnimation(animations_ptr.animation_enter.?, &writer);
-            writer.write(";\n") catch {};
+            if (Vapor.string_table.get(animations_ptr.animation_enter)) |name| {
+                const animation = Vapor.animations.get(name) orelse unreachable;
+                writer.write("animation:") catch {};
+                generateAnimation(&animation, &writer);
+                writer.write(";\n") catch {};
+            }
         }
     }
 
@@ -1555,6 +1728,62 @@ export fn getVisualLen() usize {
     return visual_style.len;
 }
 
+var inherited_style: []const u8 = "";
+export fn getInheritedStyle(ptr: ?*UINode) ?[*]const u8 {
+    const node = ptr orelse return null;
+    const packed_fields = node.packed_field_ptrs orelse return null;
+
+    var writer: Writer = undefined;
+    writer.init(&css_buffer);
+    var did_write: bool = false;
+
+    // This area checks if the current node has a hover style
+    // if it does, we then check if the children of the node inherit the hover style
+    if (packed_fields.interactive_ptr) |interactive_ptr| {
+        if (interactive_ptr.has_hover) {
+            if (node.children_count > 0) {
+                const hover = interactive_ptr.hover;
+                writer.writeByte('.') catch {};
+                writer.write(node.class.?) catch {};
+                writer.write(":hover") catch {};
+                var children = node.children();
+                while (children.next()) |child| {
+                    if (child.hover_style_fields) |fields| {
+                        if (child.class) |class| {
+                            did_write = true;
+                            writer.writeByte(' ') catch {};
+                            writer.writeByte('.') catch {};
+                            writer.write(class) catch {};
+
+                            writer.write("{\n") catch {};
+                            for (fields.*) |field| {
+                                writeStyleField(field, &hover, &writer);
+                            }
+                            writer.writeByte('}') catch {};
+                            writer.writeByte('\n') catch {};
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!did_write) {
+        return null;
+    }
+    // Null-terminate the string
+    const len: usize = writer.pos;
+    css_buffer[len] = 0;
+    inherited_style = css_buffer[0..len];
+
+    // Return a pointer to the CSS string
+    return inherited_style.ptr;
+}
+
+export fn getInheritedLen() usize {
+    return inherited_style.len;
+}
+
 var position_style: []const u8 = "";
 export fn getPositionStyle(ptr: ?*UINode) ?[*]const u8 {
     const node_ptr = ptr orelse return null;
@@ -1565,10 +1794,13 @@ export fn getPositionStyle(ptr: ?*UINode) ?[*]const u8 {
     generatePositions(packed_position, &writer);
 
     if (node_ptr.type == .Anchor) {
-        if (packed_position.anchor_name_ptr) |anchor_name_ptr| {
-            writer.write("position-anchor:--") catch {};
-            writer.write(anchor_name_ptr[0..packed_position.anchor_name_len]) catch {};
-            writer.write(";\n") catch {};
+        if (packed_position.anchor_name_handle != StringTable.null_handle) {
+            const anchor_name = Vapor.string_table.get(packed_position.anchor_name_handle);
+            if (anchor_name) |name| {
+                writer.write("position-anchor:--") catch {};
+                writer.write(name) catch {};
+                writer.write(";\n") catch {};
+            }
         }
     }
 
@@ -1637,9 +1869,15 @@ export fn getAnimationStyle(ptr: ?*UINode) ?[*]const u8 {
     var writer: Writer = undefined;
     writer.init(&css_buffer);
     if (packed_animations.has_animation_enter) {
-        writer.write("animation:") catch {};
-        generateAnimation(packed_animations.animation_enter.?, &writer);
-        writer.write(";\n") catch {};
+        if (Vapor.string_table.get(packed_animations.animation_enter)) |name| {
+            const animation = Vapor.animations.get(name) orelse {
+                Vapor.printErr("Animation not found in animations.zig; Please make sure to Run .build() on the animation", .{});
+                return null;
+            };
+            writer.write("animation:") catch {};
+            generateAnimation(&animation, &writer);
+            writer.write(";\n") catch {};
+        }
     }
     // Null-terminate the string
     const len: usize = writer.pos;
@@ -1657,7 +1895,13 @@ pub export fn getExitAnimationStyle(ptr: ?*UINode) ?[*]const u8 {
     var writer: Writer = undefined;
     writer.init(&css_buffer);
     if (packed_animations.has_animation_exit) {
-        generateAnimation(packed_animations.animation_exit.?, &writer);
+        if (Vapor.string_table.get(packed_animations.animation_exit)) |name| {
+            const animation = Vapor.animations.get(name) orelse {
+                Vapor.printErr("Exit Animation not found in animations.zig; Please make sure to Run .build() on the animation", .{});
+                return null;
+            };
+            generateAnimation(&animation, &writer);
+        }
     }
     // Null-terminate the string
     const len: usize = writer.pos;
@@ -1697,47 +1941,70 @@ export fn getTooltipStyleLen() usize {
     return tooltip_style.len;
 }
 
+fn generateEdges(writer: *Writer) void {
+    var it = Vapor.edges_table.iterator();
+    while (it.next()) |entry| {
+        const edges = entry.value_ptr.*;
+        edges.writeCss(writer);
+    }
+}
+
+var edges_str: []const u8 = "";
+export fn getEdgesPtr() ?[*]const u8 {
+    // Reset writer cursor
+    var writer: Writer = undefined;
+    var buffer: [8192]u8 = undefined;
+    writer.init(&buffer);
+
+    // Generate the CSS
+    generateEdges(&writer);
+
+    const len: usize = writer.pos;
+    buffer[len] = 0;
+    edges_str = buffer[0..len];
+    return edges_str.ptr;
+}
+
+export fn getEdgesLen() usize {
+    return edges_str.len;
+}
+
+fn generatePolygons(writer: *Writer) void {
+    var it = Vapor.polygons_table.iterator();
+    while (it.next()) |entry| {
+        const polygons = entry.value_ptr.*;
+        polygons.writeCss(writer);
+    }
+}
+
+var polygons_str: []const u8 = "";
+export fn getPolygonsPtr() ?[*]const u8 {
+    // Reset writer cursor
+    var writer: Writer = undefined;
+    var buffer: [8192]u8 = undefined;
+    writer.init(&buffer);
+
+    // Generate the CSS
+    generatePolygons(&writer);
+    const len: usize = writer.pos;
+    buffer[len] = 0;
+    polygons_str = buffer[0..len];
+    return polygons_str.ptr;
+}
+
+export fn getPolygonsLen() usize {
+    return polygons_str.len;
+}
+
 var animations_str: []const u8 = "";
 pub export fn getAnimationsPtr() ?[*]const u8 {
     // Reset writer cursor
     var writer: Writer = undefined;
-    var buffer: [4096]u8 = undefined;
+    var buffer: [8192]u8 = undefined;
     writer.init(&buffer);
 
     // Generate the CSS
     generateAnimationsFrames(&writer);
-
-    // Null terminate
-    // const len = writer.pos;
-    // if (len < css_buffer.len) {
-    //     css_buffer[len] = 0;
-    //     return css_buffer[0..len].ptr;
-    // }
-    // return null;
-
-    // var animations = Vapor.animations.iterator();
-    //
-    // //
-    // while (animations.next()) |entry| {
-    //     const animation = entry.value_ptr.*;
-    //
-    //     writer.write("@keyframes ") catch {};
-    //     writer.write(animation._name) catch {};
-    //     writer.write(" {\n") catch {};
-    //
-    //     // From (0%)
-    //     writer.write("from { ") catch {};
-    //     writePropertiesAtValue(&writer, animation, .from);
-    //     writer.write("}\n") catch {};
-    //
-    //     // To (100%)
-    //     writer.write("to { ") catch {};
-    //     writePropertiesAtValue(&writer, animation, .to);
-    //     writer.write("}\n") catch {};
-    //
-    //     writer.write("}\n") catch {};
-    // }
-    //
     const len: usize = writer.pos;
     buffer[len] = 0;
     animations_str = buffer[0..len];
@@ -1766,7 +2033,7 @@ fn writeKeyframesBlock(anim: Animation, writer: writer_t) void {
     if (anim.frame_count > 0) {
         for (anim.frames) |maybe_frame| {
             if (maybe_frame) |frame| {
-                writer.writeU8Num(frame.percent) catch {};
+                writer.writeF32(frame.percent) catch {};
                 writer.write("% {\n") catch {};
                 writeFrameProperties(frame, writer);
                 writer.write("}\n") catch {};
@@ -1868,6 +2135,14 @@ fn writeAnimTransformValue(p: Animation.PropValue, writer: writer_t) void {
             // OR if using PackedColor helper:
             // colorToCSS(.{ .color = col, .has_color = true }, writer) catch {};
         },
+        .shadow => |shadow| {
+            // Use your existing colorToCSS helper from your style system
+            // You might need to wrap the Color in PackedColor if your helper expects that
+            // Or just call writeRgba directly if it's a raw Color struct
+
+            // Assuming `col` is your standard Color struct:
+            shadow.toCss(writer) catch {};
+        },
     }
 
     writer.writeByte(')') catch {};
@@ -1897,6 +2172,14 @@ fn writeAnimStandardValue(p: Animation.PropValue, writer: writer_t) void {
             col.toCss(writer) catch {};
             // OR if using PackedColor helper:
             // colorToCSS(.{ .color = col, .has_color = true }, writer) catch {};
+        },
+        .shadow => |shadow| {
+            // Use your existing colorToCSS helper from your style system
+            // You might need to wrap the Color in PackedColor if your helper expects that
+            // Or just call writeRgba directly if it's a raw Color struct
+
+            // Assuming `col` is your standard Color struct:
+            shadow.toCss(writer) catch {};
         },
     }
 }
@@ -2124,9 +2407,9 @@ export fn getInheritedStyles(node: *UINode) ?[*]const u8 {
     return hover_style.ptr;
 }
 
-export fn getInheritedStyleLen() usize {
-    return hover_style.len;
-}
+// export fn getInheritedStyleLen() usize {
+//     return hover_style.len;
+// }
 
 export fn getInlineStyle(node_ptr: ?*UINode) ?[*]const u8 {
     const node = node_ptr orelse return null;

@@ -11,6 +11,7 @@ const Element = @import("Element.zig").Element;
 const utils = @import("utils.zig");
 const hashKey = utils.hashKey;
 const DynamicObject = @import("Dynamic.zig");
+const Accessibility = @import("Accessibility.zig").Accessibility;
 
 pub fn BuilderClose(comptime state_type: types.StateType) type {
     return struct {
@@ -31,9 +32,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         _style: ?*const Vapor.Style = null,
         _element: ?*Element = null,
 
-        _animation_enter: ?*const Vapor.Animation = null,
-        _animation_exit: ?*const Vapor.Animation = null,
+        _animation_enter: ?[]const u8 = null,
+        _animation_exit: ?[]const u8 = null,
         _name: ?[]const u8 = null,
+        _used_style: bool = false,
 
         // Style props
         _pos: ?types.Position = null,
@@ -48,6 +50,24 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         _interactive: ?types.Interactive = null,
         _transition: ?types.Transition = null,
         _direction: types.Direction = .row,
+        _scroll: ?types.Scroll = null,
+        _inlineStyle: ?[]const u8 = null,
+        _accessibility: ?Accessibility = null,
+
+        // Extract to helper:
+        fn getOrCreateNode(self: *const Self, new_self: *Self) *UINode {
+            if (self._ui_node) |node| return node;
+
+            const node = LifeCycle.open(ElementDecl{
+                .state_type = _state_type,
+                .elem_type = self._elem_type,
+            }) orelse {
+                Vapor.printlnSrcErr("Node is null", .{}, @src());
+                unreachable;
+            };
+            new_self._ui_node = node;
+            return node;
+        }
 
         pub fn ellipsis(self: *const Self, value: types.Ellipsis) Self {
             if (self._elem_type != .Text) {
@@ -61,19 +81,13 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        pub fn scroll(self: *const Self, scroll_type: types.Scroll) Self {
+            var new_self: Self = self.*;
+            new_self._scroll = scroll_type;
+            return new_self;
+        }
+
         pub fn TextArea() Self {
-            // const text = blk: switch (@typeInfo(@TypeOf(value))) {
-            //     .pointer => |_| {
-            //         break :blk value;
-            //     },
-            //     .int => {
-            //         break :blk Vapor.fmtln("{any}", .{value});
-            //     },
-            //     else => {
-            //         Vapor.printlnErr("Text only accepts []const u8 or number types, NOT {any}", .{@TypeOf(value)});
-            //         return Self{ ._elem_type = .Text, .text = "" };
-            //     },
-            // };
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
                 .elem_type = .Text,
@@ -151,6 +165,14 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         ._text_field_params = .{ .file = .{} },
                     };
                 },
+                .float => {
+                    return Self{
+                        ._elem_type = .TextField,
+                        ._ui_node = ui_node,
+                        ._text_field_type = .float,
+                        ._text_field_params = .{ .float = .{} },
+                    };
+                },
                 else => {
                     Vapor.printlnSrcErr("Error: TextField only accepts valid types, Not valid: {any}", .{textfield_type}, @src());
                     unreachable;
@@ -198,7 +220,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                                 text_field_params.file.default_len = value.len;
                             },
                             else => {
-                                Vapor.printlnSrcErr("Error: TextField only accepts valid types, Not valid: {any}", .{self._text_field_type}, @src());
+                                Vapor.printlnSrcErr("Error: Placeholder and TextField Type mismatch TextFieldType: {any} PlaceholderType: {any}", .{ self._text_field_type, V }, @src());
                                 unreachable;
                                 // @compileError("TextField only accepts []const u8 or TextInput");
                             },
@@ -218,6 +240,17 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                             Vapor.printlnErr("Cannot set integer placeholder on type: " ++ @typeName(V), .{});
                         },
                         // else => @compileError("Cannot set integer placeholder on type: " ++ @typeName(V)),
+                    }
+                },
+                .float => {
+                    switch (self._text_field_type) {
+                        .float => {
+                            text_field_params.float.default = value;
+                        },
+                        else => {
+                            Vapor.printlnErr("Cannot set float placeholder on type: " ++ @typeName(V), .{});
+                        },
+                        // else => @compileError("Cannot set float placeholder on type: " ++ @typeName(V)),
                     }
                 },
                 // Add other types (e.g., .Float for float input fields) as needed
@@ -258,8 +291,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("val and TextField type mismatch", .{});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
 
                     new_self._text_field_params.?.password.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.password.value_len = value.*.len;
@@ -269,8 +304,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("val and TextField type mismatch", .{});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
 
                     new_self._text_field_params.?.email.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.email.value_len = value.*.len;
@@ -280,8 +317,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("val and TextField type mismatch {any} != []const u8", .{@TypeOf(value.*)});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
 
                     new_self._text_field_params.?.string.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.string.value_len = value.*.len;
@@ -291,24 +330,29 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("val and TextField type mismatch", .{});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
 
                     new_self._text_field_params.?.telephone.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.telephone.value_len = value.*.len;
                 },
 
                 .int => {
-                    if (@TypeOf(value.*) != i32 or @TypeOf(value.*) != i64 or @TypeOf(value.*) != u32 or @TypeOf(value.*) != u64) {
-                        Vapor.printlnErr("val and TextField type mismatch", .{});
+                    if (@TypeOf(value.*) != i32) {
+                        Vapor.printlnErr("val and TextField type mismatch {any}", .{@TypeOf(value.*)});
                         return self.*;
                     }
+                    new_self._text_field_params.?.int.value = value.*;
+                    new_self._text_field_params.?.int.default = value.*;
                 },
                 .float => {
                     if (@TypeOf(value.*) != f32) {
                         Vapor.printlnErr("val and TextField type mismatch", .{});
                         return self.*;
                     }
+                    new_self._text_field_params.?.float.value = value.*;
                 },
                 else => {
                     Vapor.printlnErr("NOT IMPLEMENTED", .{});
@@ -342,8 +386,11 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("Password bindValue and TextField type mismatch", .{});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
+
                     new_self._text_field_params.?.password.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.password.value_len = value.*.len;
                     Vapor.attachEventCtxCallback(ui_node, .input, struct {
@@ -360,8 +407,11 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("Email bindValue and TextField type mismatch", .{});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
+
                     new_self._text_field_params.?.email.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.email.value_len = value.*.len;
                     Vapor.attachEventCtxCallback(ui_node, .input, struct {
@@ -378,6 +428,11 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("Telephone bindValue and TextField type mismatch", .{});
                         return self.*;
                     }
+                    _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                        std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                        unreachable;
+                    };
+
                     new_self._text_field_params.?.telephone.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.telephone.value_len = value.*.len;
                     Vapor.attachEventCtxCallback(ui_node, .input, struct {
@@ -390,12 +445,19 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                     };
                 },
                 .string => {
-                    if (@TypeOf(value.*) != []const u8) {
-                        Vapor.printlnErr("String bindValue and TextField type mismatch", .{});
+                    if (@TypeOf(value.*) == []u8) {
+                        Vapor.printlnErr("String bindValue and TextField type mismatch {any}", .{@typeInfo(@TypeOf(value.*))});
+                        return self.*;
+                    } else if (@TypeOf(value.*) == []const u8) {
+                        _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                            std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                            unreachable;
+                        };
+                    } else {
+                        Vapor.printlnErr("String bindValue and TextField type mismatch {any}", .{@typeInfo(@TypeOf(value.*))});
                         return self.*;
                     }
-                    const value_alloc = Vapor.fmtln("{s}", .{value.*});
-                    value.* = value_alloc;
+
                     new_self._text_field_params.?.string.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.string.value_len = value.*.len;
                     Vapor.attachEventCtxCallback(ui_node, .input, struct {
@@ -412,6 +474,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("int bindValue and TextField type mismatch {any}", .{@TypeOf(value.*)});
                         return self.*;
                     }
+
                     new_self._text_field_params.?.int.value = value.*;
                     Vapor.attachEventCtxCallback(ui_node, .input, struct {
                         pub fn updateText(value_type: *i32, evt: *Vapor.Event) void {
@@ -518,7 +581,20 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return self;
         }
 
+        pub fn onEvent(self: *const Self, event: types.EventType, cb: *const fn (*Vapor.Event) void) Self {
+            var new_self: Self = self.*;
+
+            const ui_node = self.getOrCreateNode(&new_self);
+            Vapor.attachEventCallback(ui_node, event, cb) catch |err| {
+                Vapor.println("ONLEAVE: Could not attach event callback {any}\n", .{err});
+                unreachable;
+            };
+
+            return new_self;
+        }
+
         pub fn onEventCtx(self: *const Self, event: types.EventType, func: anytype, ctx: anytype) *const Self {
+            if (!Vapor.isWasi) return self;
             const ui_node = self._ui_node orelse {
                 Vapor.printlnSrcErr("Node is null", .{}, @src());
                 unreachable;
@@ -740,15 +816,29 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn animationEnter(self: *const Self, animation_ptr: *const Vapor.Animation) Self {
-            var new_self: Self = self.*;
-            new_self._animation_enter = animation_ptr;
-            return new_self;
+        pub fn animationEnter(self: *const Self, animation_tag: ?[]const u8) Self {
+            if (animation_tag) |_animation| {
+                var new_self: Self = self.*;
+                new_self._animation_enter = _animation;
+                return new_self;
+            }
+            return self.*;
         }
 
-        pub fn animationExit(self: *const Self, animation_ptr: *const Vapor.Animation) Self {
+        pub fn animation(self: *const Self, animation_tag: ?[]const u8) Self {
+            if (animation_tag) |_animation| {
+                var new_self: Self = self.*;
+                var visual = new_self._visual orelse types.Visual{};
+                visual.animation = _animation;
+                new_self._visual = visual;
+                return new_self;
+            }
+            return self.*;
+        }
+
+        pub fn animationExit(self: *const Self, animation_tag: ?[]const u8) Self {
             var new_self: Self = self.*;
-            new_self._animation_exit = animation_ptr;
+            new_self._animation_exit = animation_tag;
             return new_self;
         }
 
@@ -789,10 +879,93 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        // Add these methods:
+
+        /// Set full accessibility config
+        pub fn a11y(self: *const Self, accessibility: Accessibility) Self {
+            var new_self: Self = self.*;
+            new_self._accessibility = accessibility;
+            return new_self;
+        }
+
+        /// Shorthand: just set aria-label
+        pub fn ariaLabel(self: *const Self, label: []const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.label = label;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: set role
+        pub fn role(self: *const Self, r: Accessibility.Role) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.role = r;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-expanded
+        pub fn ariaExpanded(self: *const Self, expanded: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.expanded = expanded;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-selected
+        pub fn ariaSelected(self: *const Self, selected: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.selected = selected;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-controls
+        pub fn ariaControls(self: *const Self, uuid: []const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.controls = uuid;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-activedescendant
+        pub fn ariaActiveDescendant(self: *const Self, uuid: ?[]const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.active_descendant = uuid;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-hidden
+        pub fn ariaHidden(self: *const Self, hidden_val: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.hidden = hidden_val;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: tabindex
+        pub fn tabIndex(self: *const Self, index: i16) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.tab_index = index;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
         /// This function takes a const pointer to a Style Struct, and returns the body function callback
         /// This function is static, so any styles added via chaining methods will not be applied
         /// Use baseStyle to keep all chained additions
-        pub fn style(self: *const Self, style_ptr: *const Vapor.Style) void {
+        pub fn style(self: *const Self, style_ptr: *const Vapor.Style) Self {
+            var new_self: Self = self.*;
+            new_self._used_style = true;
             var elem_decl = Vapor.ElementDecl{
                 .state_type = _state_type,
                 .elem_type = self._elem_type,
@@ -816,7 +989,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             }
 
             Vapor.LifeCycle.configure(elem_decl);
-            return Vapor.LifeCycle.close({});
+            return new_self;
         }
 
         pub fn font(self: *const Self, font_size: u8, weight: ?u16, color: ?Color) Self {
@@ -1117,7 +1290,24 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        pub fn inlineStyle(self: *const Self, comptime fmt: []const u8, args: anytype) Self {
+            var new_self: Self = self.*;
+            const allocator = Vapor.arena(.frame);
+            const text = std.fmt.allocPrint(allocator, fmt, args) catch |err| {
+                Vapor.printlnColor(
+                    \\Error formatting text: {any}\n"
+                    \\FMT: {s}\n"
+                    \\ARGS: {any}\n"
+                , .{ err, fmt, args }, .hex("#FF3029"));
+                return new_self;
+            };
+            Vapor.frame_arena.addBytesUsed(text.len);
+            new_self._inlineStyle = text;
+            return new_self;
+        }
+
         pub fn end(self: *const Self) void {
+            if (self._used_style) return Vapor.LifeCycle.close({});
             var mutable_style = Style{};
             if (self._style) |style_ptr| {
                 mutable_style = style_ptr.*;
@@ -1134,6 +1324,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             if (mutable_style.flex_wrap == null) mutable_style.flex_wrap = self._flex_wrap;
             mutable_style.direction = self._direction;
             if (mutable_style.font_family == null) mutable_style.font_family = self._font_family;
+            if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
 
             if (self._id) |_id| {
                 mutable_style.id = _id;
@@ -1149,6 +1340,8 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 .animation_enter = self._animation_enter,
                 .animation_exit = self._animation_exit,
                 .name = self._name,
+                .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
             };
 
             if (self._text_field_params) |params| {
@@ -1169,6 +1362,14 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             Vapor.LifeCycle.configure(elem_decl);
             Vapor.LifeCycle.close({});
         }
+
+        pub fn getUUID(self: *const Self) []const u8 {
+            if (self._ui_node == null) {
+                Vapor.printlnSrcErr("getUUID Failed: Node is null", .{}, @src());
+                return "";
+            }
+            return self._ui_node.?.uuid;
+        }
     };
 }
 
@@ -1179,6 +1380,7 @@ const FieldExportPassword = DynamicObject.exportStruct(types.InputParamsPassword
 const FieldExportEmail = DynamicObject.exportStruct(types.InputParamsEmail);
 const FieldExportTelephone = DynamicObject.exportStruct(types.InputParamsTelephone);
 const FieldExportFile = DynamicObject.exportStruct(types.InputParamsFile);
+const FieldExportFloat = DynamicObject.exportStruct(types.InputParamsFloat);
 
 const API = struct {
     pub fn getFieldName(node_ptr: *UINode) callconv(.c) ?[*]const u8 {
@@ -1226,6 +1428,11 @@ const API = struct {
                 FieldExportFile.instance = file;
                 return FieldExportFile.getInstancePtr();
             },
+            .float => |float| {
+                FieldExportFloat.init();
+                FieldExportFloat.instance = float;
+                return FieldExportFloat.getInstancePtr();
+            },
         }
         return null;
     }
@@ -1254,6 +1461,9 @@ const API = struct {
             .file => {
                 return FieldExportFile.getFieldCount();
             },
+            .float => {
+                return FieldExportFloat.getFieldCount();
+            },
         }
         return 0;
     }
@@ -1278,6 +1488,9 @@ const API = struct {
             },
             .file => {
                 return FieldExportFile.getFieldDescriptor(index);
+            },
+            .float => {
+                return FieldExportFloat.getFieldDescriptor(index);
             },
         }
         return null;

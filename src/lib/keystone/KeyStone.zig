@@ -3,7 +3,7 @@ const Vapor = @import("../Vapor.zig");
 const Kit = Vapor.Kit;
 const JWT = @import("JWT.zig");
 
-const Provider = enum {
+pub const Provider = enum {
     google,
     github,
     apple,

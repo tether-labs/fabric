@@ -316,3 +316,8 @@ pub fn stringify(value: anytype, arena_type: Vapor.ArenaType) ![]const u8 {
     const payload = writer.written();
     return payload;
 }
+
+// /// The idea is to get parent ptr recursively
+// pub fn getParent(comptime TargetType: type, comptime field: []const u8, field_ptr: *FT) type {
+//     @fieldParentPtr(field, field_ptr: *T)
+// }

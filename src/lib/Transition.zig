@@ -23,6 +23,7 @@ pub const TransitionProperty = enum(u8) {
     cx,
     d,
     cy,
+    padding,
 };
 
 pub const TransitionState = packed union {
@@ -37,8 +38,8 @@ pub const TransitionState = packed union {
 };
 
 pub const PackedTransition = packed struct {
-    properties_ptr: ?[*]const TransitionProperty = null,
-    properties_len: usize = 0,
+    properties_ptr: u32 = 0,
+    properties_len: u32 = 0,
     duration: u32 = 300, // default 300ms
     timing: TimingFunction = .ease,
     delay: u32 = 0,
@@ -48,8 +49,10 @@ pub const PackedTransition = packed struct {
         for (transition.properties, 0..) |property, i| {
             slice[i] = property;
         }
-        packed_transition.properties_ptr = slice.ptr;
-        packed_transition.properties_len = slice.len;
+        const count = Vapor.packed_transitions.count() + 1;
+        Vapor.packed_transitions.put(count, slice) catch unreachable;
+        packed_transition.properties_ptr = count;
+        packed_transition.properties_len = @intCast(slice.len);
         packed_transition.duration = transition.duration;
         packed_transition.timing = transition.timing;
         packed_transition.delay = transition.delay;

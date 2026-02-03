@@ -6,8 +6,188 @@ const getExitAnimationStyle = StyleCompiler.getExitAnimationStyle;
 const getExitAnimationStyleLen = StyleCompiler.getAnimationsLen;
 const UINode = @import("UITree.zig").UINode;
 const Color = Vapor.Types.Color;
+const Shadow = @import("Shadow.zig");
 
 pub const Animation = @This();
+
+// Helper struct for setAll - allows named field syntax
+pub const PropSet = struct {
+    none: ?f32 = null,
+    translateX: ?f32 = null,
+    translateY: ?f32 = null,
+    translateZ: ?f32 = null,
+    scale: ?f32 = null,
+    scaleX: ?f32 = null,
+    scaleY: ?f32 = null,
+    rotate: ?f32 = null,
+    rotateX: ?f32 = null,
+    rotateY: ?f32 = null,
+    rotateZ: ?f32 = null,
+    skewX: ?f32 = null,
+    skewY: ?f32 = null,
+    opacity: ?f32 = null,
+    width: ?f32 = null,
+    height: ?f32 = null,
+    marginTop: ?f32 = null,
+    marginBottom: ?f32 = null,
+    marginLeft: ?f32 = null,
+    marginRight: ?f32 = null,
+    paddingTop: ?f32 = null,
+    paddingBottom: ?f32 = null,
+    paddingLeft: ?f32 = null,
+    paddingRight: ?f32 = null,
+    top: ?f32 = null,
+    bottom: ?f32 = null,
+    left: ?f32 = null,
+    right: ?f32 = null,
+    borderRadius: ?f32 = null,
+    borderWidth: ?f32 = null,
+    blur: ?f32 = null,
+    brightness: ?f32 = null,
+    saturate: ?f32 = null,
+};
+
+/// Sets multiple properties at once using struct syntax
+/// Usage: .at(20).setAll(.{ .translateX = -8, .skewX = -10, .opacity = 0.9 })
+const animation_types = std.enums.values(AnimationType);
+pub fn setAll(self: Animation, props: PropSet) Animation {
+    var a = self;
+
+    // Use inline for to iterate over struct fields at comptime
+    const fields = @typeInfo(PropSet).@"struct".fields;
+    inline for (fields, 0..) |field, i| {
+        if (@field(props, field.name)) |value| {
+            // Convert field name to AnimationType
+            const anim_type = animation_types[i];
+            a = a.set(anim_type, value);
+        }
+    }
+
+    return a;
+}
+
+/// Resets all properties used in this animation to their default values at 100%
+/// Automatically detects which properties were animated and resets them
+/// Usage: .at(85).set(.translateX, 3).autoReset()
+pub fn autoReset(self: Animation) Animation {
+    var a = self.at(100);
+
+    // Collect all unique property types used across all keyframes
+    var used_props: [MAX_PROPS_PER_FRAME * MAX_KEYFRAMES]AnimationType = undefined;
+    var used_count: u8 = 0;
+
+    for (a.frames) |maybe_frame| {
+        if (maybe_frame) |frame| {
+            if (frame.percent == 100) continue; // Skip existing 100% frame
+
+            for (frame.props) |maybe_prop| {
+                if (maybe_prop) |_prop| {
+                    // Check if we already have this prop type
+                    var found = false;
+                    for (used_props[0..used_count]) |existing| {
+                        if (existing == _prop.type) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found and used_count < used_props.len) {
+                        used_props[used_count] = _prop.type;
+                        used_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Reset each used property to its default
+    for (used_props[0..used_count]) |prop_type| {
+        const default_val = getDefaultValue(prop_type);
+        a = a.set(prop_type, default_val);
+    }
+
+    return a;
+}
+
+/// Resets all properties at current keyframe to their default values
+/// Usage: .at(100).reset()
+pub fn reset(self: Animation) Animation {
+    var a = self;
+
+    // Same logic as autoReset but applies to current_percent
+    var used_props: [MAX_PROPS_PER_FRAME * MAX_KEYFRAMES]AnimationType = undefined;
+    var used_count: u8 = 0;
+
+    for (a.frames) |maybe_frame| {
+        if (maybe_frame) |frame| {
+            if (frame.percent == a.current_percent) continue;
+
+            for (frame.props) |maybe_prop| {
+                if (maybe_prop) |_prop| {
+                    var found = false;
+                    for (used_props[0..used_count]) |existing| {
+                        if (existing == _prop.type) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found and used_count < used_props.len) {
+                        used_props[used_count] = _prop.type;
+                        used_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    for (used_props[0..used_count]) |prop_type| {
+        a = a.set(prop_type, getDefaultValue(prop_type));
+    }
+
+    return a;
+}
+
+/// Clears specific properties to their defaults at the current keyframe
+/// Usage: .at(100).clear(&.{ .translateX, .translateY, .skewX })
+pub fn clear(self: Animation, prop_types: []const AnimationType) Animation {
+    var a = self;
+
+    for (prop_types) |prop_type| {
+        a = a.set(prop_type, getDefaultValue(prop_type));
+    }
+
+    return a;
+}
+
+/// Returns the default/initial value for each property type
+fn getDefaultValue(prop_type: AnimationType) f32 {
+    return switch (prop_type) {
+        // Transforms default to 0
+        .translateX, .translateY, .translateZ => 0,
+        .rotate, .rotateX, .rotateY, .rotateZ => 0,
+        .skewX, .skewY => 0,
+
+        // Scale defaults to 1
+        .scale, .scaleX, .scaleY => 1,
+
+        // Opacity defaults to 1 (fully visible)
+        .opacity => 1,
+
+        // Filters
+        .blur => 0,
+        .brightness => 1,
+        .saturate => 1,
+
+        // Size/spacing - 0 is a safe default but may not be "initial"
+        .width, .height => 0,
+        .marginTop, .marginBottom, .marginLeft, .marginRight => 0,
+        .paddingTop, .paddingBottom, .paddingLeft, .paddingRight => 0,
+        .top, .bottom, .left, .right => 0,
+        .borderRadius, .borderWidth => 0,
+
+        // None/unknown
+        .none, .backgroundColor, .textShadow => 0,
+    };
+}
 
 pub const AnimationType = enum(u8) {
     none,
@@ -52,8 +232,11 @@ pub const AnimationType = enum(u8) {
     blur,
     brightness,
     saturate,
-
     backgroundColor,
+
+    // NEW: Text shadow for glitch effects
+    textShadow, // Offset X of text shadow
+    // For chromatic aberration, you'd animate multiple shadows
 
     pub fn isTransform(self: AnimationType) bool {
         return switch (self) {
@@ -105,6 +288,14 @@ pub const AnimationType = enum(u8) {
             .brightness => "brightness",
             .saturate => "saturate",
             .backgroundColor => "background-color",
+            .textShadow => "text-shadow", // Will need special handling
+        };
+    }
+
+    pub fn isTextShadow(self: AnimationType) bool {
+        return switch (self) {
+            .textShadow => true,
+            else => false,
         };
     }
 };
@@ -241,6 +432,7 @@ pub const Property = struct {
 pub const Value = union(enum) {
     number: f32,
     color: Color,
+    shadow: Shadow, // NEW
 };
 
 pub const PropValue = struct {
@@ -251,8 +443,9 @@ pub const PropValue = struct {
     // Init for Numbers (Transforms, Opacity, etc.)
     pub fn init(t: AnimationType, v: f32) PropValue {
         const u: Unit = switch (t) {
-            .rotate, .rotateX, .rotateY, .rotateZ => .deg,
-            .opacity, .scale, .scaleX, .scaleY => .none,
+            .rotate, .rotateX, .rotateY, .rotateZ, .skewX, .skewY => .deg,
+            .opacity, .scale, .scaleX, .scaleY, .brightness, .saturate => .none,
+            .blur => .px, // blur uses pixels: blur(10px)
             else => .px,
         };
         return .{ .type = t, .value = .{ .number = v }, .unit = u };
@@ -267,6 +460,11 @@ pub const PropValue = struct {
     pub fn initColor(t: AnimationType, c: Color) PropValue {
         return .{ .type = t, .value = .{ .color = c }, .unit = .none };
     }
+
+    // NEW: Init for Shadows
+    pub fn initShadow(t: AnimationType, s: Shadow) PropValue {
+        return .{ .type = t, .value = .{ .shadow = s }, .unit = .none };
+    }
 };
 
 // -- NEW: Keyframe Storage --
@@ -275,7 +473,7 @@ const MAX_PROPS_PER_FRAME = 8;
 const MAX_KEYFRAMES = 10; // 0%, 25%, 35%, 59%, 60%, 100%...
 
 pub const Keyframe = struct {
-    percent: u8, // 0 to 100
+    percent: f32, // 0 to 100
     props: [MAX_PROPS_PER_FRAME]?PropValue = [_]?PropValue{null} ** MAX_PROPS_PER_FRAME,
     count: u8 = 0,
 
@@ -306,6 +504,16 @@ pub const Keyframe = struct {
         }
         return k;
     }
+
+    // NEW: Helper to add a shadow property
+    pub fn addShadow(self: Keyframe, t: AnimationType, s: Shadow) Keyframe {
+        var k = self;
+        if (k.count < MAX_PROPS_PER_FRAME) {
+            k.props[k.count] = PropValue.initShadow(t, s);
+            k.count += 1;
+        }
+        return k;
+    }
 };
 
 const MAX_PROPERTIES = 8;
@@ -313,7 +521,7 @@ const MAX_PROPERTIES = 8;
 frames: [MAX_KEYFRAMES]?Keyframe = [_]?Keyframe{null} ** MAX_KEYFRAMES,
 frame_count: u8 = 0,
 // Used for the builder chain to know which frame we are editing
-current_percent: u8 = 0,
+current_percent: f32 = 0,
 
 // Core animation fields
 _name: []const u8,
@@ -336,7 +544,7 @@ pub fn init(name: []const u8) Animation {
 
 /// Sets the current "cursor" to a specific percentage.
 /// If a keyframe doesn't exist for this percent, it creates one.
-pub fn at(self: Animation, percent: u8) Animation {
+pub fn at(self: Animation, percent: f32) Animation {
     var a = self;
     a.current_percent = percent;
 
@@ -459,16 +667,33 @@ pub fn infinite(self: Animation) Animation {
     return a;
 }
 
+pub fn setShadow(self: Animation, prop_type: AnimationType, shadow: Shadow) Animation {
+    var a = self;
+    for (0..a.frame_count) |i| {
+        if (a.frames[i]) |*f| {
+            if (f.percent == a.current_percent) {
+                a.frames[i] = f.addShadow(prop_type, shadow);
+                break;
+            }
+        }
+    }
+    return a;
+}
+
 // Convenience presets
 pub fn fadeIn(name: []const u8) Animation {
     return init(name)
         .prop(.opacity, 0, 1)
+        .duration(150)
+        .easing(.easeInOut)
         .fill(.forwards);
 }
 
 pub fn fadeOut(name: []const u8) Animation {
     return init(name)
         .prop(.opacity, 1, 0)
+        .duration(150)
+        .easing(.easeInOut)
         .fill(.forwards);
 }
 
@@ -553,6 +778,498 @@ pub fn pulse(name: []const u8) Animation {
         .prop(.scale, 1, 1.05)
         .dir(.alternate)
         .infinite();
+}
+
+// ============================================
+// ATTENTION / EMPHASIS ANIMATIONS
+// ============================================
+
+pub fn bounce(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .translateY = 0 })
+        .at(20).setAll(.{ .translateY = -30 })
+        .at(40).setAll(.{ .translateY = 0 })
+        .at(60).setAll(.{ .translateY = -15 })
+        .at(80).setAll(.{ .translateY = 0 })
+        .at(100).setAll(.{ .translateY = 0 })
+        .easing(.easeOut)
+        .fill(.both);
+}
+
+pub fn shake(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.translateX, 0)
+        .at(10).set(.translateX, -10)
+        .at(20).set(.translateX, 10)
+        .at(30).set(.translateX, -10)
+        .at(40).set(.translateX, 10)
+        .at(50).set(.translateX, -10)
+        .at(60).set(.translateX, 10)
+        .at(70).set(.translateX, -10)
+        .at(80).set(.translateX, 10)
+        .at(90).set(.translateX, -10)
+        .at(100).set(.translateX, 0)
+        .duration(500);
+}
+
+pub fn shakeY(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.translateY, 0)
+        .at(10).set(.translateY, -10)
+        .at(20).set(.translateY, 10)
+        .at(30).set(.translateY, -10)
+        .at(40).set(.translateY, 10)
+        .at(50).set(.translateY, -10)
+        .at(60).set(.translateY, 10)
+        .at(70).set(.translateY, -10)
+        .at(80).set(.translateY, 10)
+        .at(90).set(.translateY, -10)
+        .at(100).set(.translateY, 0)
+        .duration(500);
+}
+
+pub fn wobble(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .translateX = 0, .rotate = 0 })
+        .at(15).setAll(.{ .translateX = -25, .rotate = -5 })
+        .at(30).setAll(.{ .translateX = 20, .rotate = 3 })
+        .at(45).setAll(.{ .translateX = -15, .rotate = -3 })
+        .at(60).setAll(.{ .translateX = 10, .rotate = 2 })
+        .at(75).setAll(.{ .translateX = -5, .rotate = -1 })
+        .at(100).setAll(.{ .translateX = 0, .rotate = 0 })
+        .duration(800);
+}
+
+pub fn jello(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.skewX, 0)
+        .at(11).set(.skewX, 0)
+        .at(22).set(.skewX, -12.5)
+        .at(33).set(.skewX, 6.25)
+        .at(44).set(.skewX, -3.125)
+        .at(55).set(.skewX, 1.5625)
+        .at(66).set(.skewX, -0.78125)
+        .at(77).set(.skewX, 0.390625)
+        .at(88).set(.skewX, -0.1953125)
+        .at(100).set(.skewX, 0)
+        .duration(900);
+}
+
+pub fn heartbeat(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.scale, 1)
+        .at(14).set(.scale, 1.3)
+        .at(28).set(.scale, 1)
+        .at(42).set(.scale, 1.3)
+        .at(70).set(.scale, 1)
+        .duration(1300)
+        .easing(.easeInOut);
+}
+
+pub fn rubberBand(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .scaleX = 1, .scaleY = 1 })
+        .at(30).setAll(.{ .scaleX = 1.25, .scaleY = 0.75 })
+        .at(40).setAll(.{ .scaleX = 0.75, .scaleY = 1.25 })
+        .at(50).setAll(.{ .scaleX = 1.15, .scaleY = 0.85 })
+        .at(65).setAll(.{ .scaleX = 0.95, .scaleY = 1.05 })
+        .at(75).setAll(.{ .scaleX = 1.05, .scaleY = 0.95 })
+        .at(100).setAll(.{ .scaleX = 1, .scaleY = 1 })
+        .duration(800);
+}
+
+pub fn tada(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .scale = 1, .rotate = 0 })
+        .at(10).setAll(.{ .scale = 0.9, .rotate = -3 })
+        .at(20).setAll(.{ .scale = 0.9, .rotate = -3 })
+        .at(30).setAll(.{ .scale = 1.1, .rotate = 3 })
+        .at(40).setAll(.{ .scale = 1.1, .rotate = -3 })
+        .at(50).setAll(.{ .scale = 1.1, .rotate = 3 })
+        .at(60).setAll(.{ .scale = 1.1, .rotate = -3 })
+        .at(70).setAll(.{ .scale = 1.1, .rotate = 3 })
+        .at(80).setAll(.{ .scale = 1.1, .rotate = -3 })
+        .at(90).setAll(.{ .scale = 1.1, .rotate = 3 })
+        .at(100).setAll(.{ .scale = 1, .rotate = 0 })
+        .duration(1000);
+}
+
+pub fn swing(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.rotate, 0)
+        .at(20).set(.rotate, 15)
+        .at(40).set(.rotate, -10)
+        .at(60).set(.rotate, 5)
+        .at(80).set(.rotate, -5)
+        .at(100).set(.rotate, 0)
+        .duration(800)
+        .easing(.easeInOut);
+}
+
+// ============================================
+// ENTRANCE ANIMATIONS
+// ============================================
+
+pub fn bounceIn(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .scale = 0.3 })
+        .at(20).setAll(.{ .scale = 1.1 })
+        .at(40).setAll(.{ .scale = 0.9 })
+        .at(60).setAll(.{ .opacity = 1, .scale = 1.03 })
+        .at(80).setAll(.{ .scale = 0.97 })
+        .at(100).setAll(.{ .opacity = 1, .scale = 1 })
+        .duration(750)
+        .fill(.both);
+}
+
+pub fn bounceInDown(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .translateY = -3000 })
+        .at(60).setAll(.{ .opacity = 1, .translateY = 25 })
+        .at(75).setAll(.{ .translateY = -10 })
+        .at(90).setAll(.{ .translateY = 5 })
+        .at(100).setAll(.{ .translateY = 0 })
+        .easing(.easeOutCubic)
+        .fill(.both);
+}
+
+pub fn bounceInUp(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .translateY = 3000 })
+        .at(60).setAll(.{ .opacity = 1, .translateY = -25 })
+        .at(75).setAll(.{ .translateY = 10 })
+        .at(90).setAll(.{ .translateY = -5 })
+        .at(100).setAll(.{ .translateY = 0 })
+        .easing(.easeOutCubic)
+        .fill(.both);
+}
+
+pub fn flipIn(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .rotateY = 90 })
+        .at(40).setAll(.{ .rotateY = -20 })
+        .at(60).setAll(.{ .rotateY = 10 })
+        .at(80).setAll(.{ .opacity = 1, .rotateY = -5 })
+        .at(100).setAll(.{ .rotateY = 0 })
+        .duration(750)
+        .easing(.easeInOut)
+        .fill(.both);
+}
+
+pub fn flipInX(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .rotateX = 90 })
+        .at(40).setAll(.{ .rotateX = -20 })
+        .at(60).setAll(.{ .rotateX = 10 })
+        .at(80).setAll(.{ .opacity = 1, .rotateX = -5 })
+        .at(100).setAll(.{ .rotateX = 0 })
+        .duration(750)
+        .easing(.easeInOut)
+        .fill(.both);
+}
+
+pub fn rotateIn(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .rotate = -200 })
+        .at(100).setAll(.{ .opacity = 1, .rotate = 0 })
+        .easing(.easeInOut)
+        .fill(.both);
+}
+
+pub fn rollIn(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .translateX = -100, .rotate = -120 })
+        .at(100).setAll(.{ .opacity = 1, .translateX = 0, .rotate = 0 })
+        .duration(800)
+        .fill(.both);
+}
+
+pub fn lightSpeedIn(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .translateX = 100, .skewX = -30 })
+        .at(60).setAll(.{ .opacity = 1, .skewX = 20 })
+        .at(80).setAll(.{ .skewX = -5 })
+        .at(100).setAll(.{ .translateX = 0, .skewX = 0 })
+        .easing(.easeOut)
+        .fill(.both);
+}
+
+pub fn expandIn(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .scaleX = 0, .scaleY = 1 })
+        .at(100).setAll(.{ .opacity = 1, .scaleX = 1, .scaleY = 1 })
+        .easing(.easeOut)
+        .fill(.both);
+}
+
+pub fn expandInY(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0, .scaleX = 1, .scaleY = 0 })
+        .at(100).setAll(.{ .opacity = 1, .scaleX = 1, .scaleY = 1 })
+        .easing(.easeOut)
+        .fill(.both);
+}
+
+// ============================================
+// EXIT ANIMATIONS
+// ============================================
+
+pub fn bounceOut(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .scale = 1 })
+        .at(20).setAll(.{ .scale = 0.9 })
+        .at(50).setAll(.{ .opacity = 1, .scale = 1.1 })
+        .at(55).setAll(.{ .opacity = 1, .scale = 1.1 })
+        .at(100).setAll(.{ .opacity = 0, .scale = 0.3 })
+        .duration(750)
+        .fill(.both);
+}
+
+pub fn bounceOutDown(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .translateY = 0 })
+        .at(20).setAll(.{ .translateY = -10 })
+        .at(40).setAll(.{ .opacity = 1, .translateY = 20 })
+        .at(45).setAll(.{ .opacity = 1, .translateY = 20 })
+        .at(100).setAll(.{ .opacity = 0, .translateY = 2000 })
+        .fill(.both);
+}
+
+pub fn bounceOutUp(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .translateY = 0 })
+        .at(20).setAll(.{ .translateY = 10 })
+        .at(40).setAll(.{ .opacity = 1, .translateY = -20 })
+        .at(45).setAll(.{ .opacity = 1, .translateY = -20 })
+        .at(100).setAll(.{ .opacity = 0, .translateY = -2000 })
+        .fill(.both);
+}
+
+pub fn flipOut(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .rotateY = 0 })
+        .at(30).setAll(.{ .opacity = 1, .rotateY = -20 })
+        .at(100).setAll(.{ .opacity = 0, .rotateY = 90 })
+        .duration(600)
+        .fill(.both);
+}
+
+pub fn rotateOut(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .rotate = 0 })
+        .at(100).setAll(.{ .opacity = 0, .rotate = 200 })
+        .easing(.easeInOut)
+        .fill(.both);
+}
+
+pub fn rollOut(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .translateX = 0, .rotate = 0 })
+        .at(100).setAll(.{ .opacity = 0, .translateX = 100, .rotate = 120 })
+        .duration(800)
+        .fill(.both);
+}
+
+pub fn lightSpeedOut(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .translateX = 0, .skewX = 0 })
+        .at(100).setAll(.{ .opacity = 0, .translateX = 100, .skewX = 30 })
+        .easing(.easeIn)
+        .fill(.both);
+}
+
+pub fn shrinkOut(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .scale = 1 })
+        .at(100).setAll(.{ .opacity = 0, .scale = 0 })
+        .easing(.easeIn)
+        .fill(.both);
+}
+
+pub fn hinge(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 1, .rotate = 0 })
+        .at(20).setAll(.{ .rotate = 80 })
+        .at(40).setAll(.{ .rotate = 60 })
+        .at(60).setAll(.{ .rotate = 80 })
+        .at(80).setAll(.{ .opacity = 1, .rotate = 60, .translateY = 0 })
+        .at(100).setAll(.{ .opacity = 0, .rotate = 60, .translateY = 700 })
+        .duration(2000)
+        .easing(.easeInOut)
+        .fill(.both);
+}
+
+// ============================================
+// BACKGROUND / SPECIAL ANIMATIONS
+// ============================================
+
+pub fn flash(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.opacity, 1)
+        .at(25).set(.opacity, 0)
+        .at(50).set(.opacity, 1)
+        .at(75).set(.opacity, 0)
+        .at(100).set(.opacity, 1)
+        .duration(750);
+}
+
+pub fn blink(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.opacity, 1)
+        .at(50).set(.opacity, 0)
+        .at(100).set(.opacity, 1)
+        .duration(1000)
+        .infinite();
+}
+
+pub fn glow(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.brightness, 1)
+        .at(50).set(.brightness, 1.3)
+        .at(100).set(.brightness, 1)
+        .dir(.alternate)
+        .infinite();
+}
+
+pub fn float(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.translateY, 0)
+        .at(50).set(.translateY, -20)
+        .at(100).set(.translateY, 0)
+        .easing(.easeInOut)
+        .dir(.alternate)
+        .infinite();
+}
+
+pub fn sway(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.rotate, -3)
+        .at(50).set(.rotate, 3)
+        .at(100).set(.rotate, -3)
+        .easing(.easeInOut)
+        .infinite();
+}
+
+pub fn breathe(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.scale, 1)
+        .at(50).set(.scale, 1.1)
+        .at(100).set(.scale, 1)
+        .duration(3000)
+        .easing(.easeInOut)
+        .infinite();
+}
+
+pub fn pulseShadow(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.blur, 0)
+        .at(50).set(.blur, 10)
+        .at(100).set(.blur, 0)
+        .duration(2000)
+        .easing(.easeInOut)
+        .infinite();
+}
+
+// ============================================
+// LOADING / PROGRESS ANIMATIONS
+// ============================================
+
+pub fn spinPulse(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .rotate = 0, .scale = 1 })
+        .at(50).setAll(.{ .rotate = 180, .scale = 1.2 })
+        .at(100).setAll(.{ .rotate = 360, .scale = 1 })
+        .infinite();
+}
+
+pub fn pendulum(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.rotate, -45)
+        .at(50).set(.rotate, 45)
+        .at(100).set(.rotate, -45)
+        .easing(.easeInOut)
+        .infinite();
+}
+
+pub fn morphWidth(name: []const u8, from: f32, to: f32) Animation {
+    return init(name)
+        .at(0).set(.width, from)
+        .at(50).set(.width, to)
+        .at(100).set(.width, from)
+        .easing(.easeInOut)
+        .infinite();
+}
+
+pub fn progressPulse(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .opacity = 0.6, .scaleX = 0.8 })
+        .at(50).setAll(.{ .opacity = 1, .scaleX = 1 })
+        .at(100).setAll(.{ .opacity = 0.6, .scaleX = 0.8 })
+        .easing(.easeInOut)
+        .infinite();
+}
+
+// ============================================
+// TEXT ANIMATIONS
+// ============================================
+
+pub fn typewriter(name: []const u8, width: f32) Animation {
+    return init(name)
+        .at(0).set(.width, 0)
+        .at(100).set(.width, width)
+        .easing(.linear)
+        .fill(.forwards);
+}
+
+pub fn blur(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .blur = 0, .opacity = 1 })
+        .at(100).setAll(.{ .blur = 10, .opacity = 0 })
+        .fill(.forwards);
+}
+
+pub fn unblur(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .blur = 10, .opacity = 0 })
+        .at(100).setAll(.{ .blur = 0, .opacity = 1 })
+        .fill(.forwards);
+}
+
+// ============================================
+// 3D-ISH ANIMATIONS
+// ============================================
+
+pub fn flip3D(name: []const u8) Animation {
+    return init(name)
+        .at(0).set(.rotateY, 0)
+        .at(100).set(.rotateY, 360)
+        .easing(.easeInOut)
+        .infinite();
+}
+
+pub fn tilt(name: []const u8, deg: f32) Animation {
+    return init(name)
+        .at(0).setAll(.{ .rotateX = 0, .rotateY = 0 })
+        .at(50).setAll(.{ .rotateX = deg, .rotateY = deg })
+        .at(100).setAll(.{ .rotateX = 0, .rotateY = 0 })
+        .easing(.easeInOut)
+        .infinite();
+}
+
+pub fn zoomInRotate(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .scale = 0, .rotate = -180, .opacity = 0 })
+        .at(100).setAll(.{ .scale = 1, .rotate = 0, .opacity = 1 })
+        .easing(.easeOutBack)
+        .fill(.both);
+}
+
+pub fn zoomOutRotate(name: []const u8) Animation {
+    return init(name)
+        .at(0).setAll(.{ .scale = 1, .rotate = 0, .opacity = 1 })
+        .at(100).setAll(.{ .scale = 0, .rotate = 180, .opacity = 0 })
+        .easing(.easeInBack)
+        .fill(.both);
 }
 
 pub fn build(self: Animation) void {
@@ -685,7 +1402,10 @@ pub const RemovalQueue = struct {
         const has_exit_animation = node.animation_exit != null;
 
         const anim_id: AnimationId = if (has_exit_animation) blk: {
-            const css_ptr = getExitAnimationStyle(node) orelse unreachable;
+            const css_ptr = getExitAnimationStyle(node) orelse {
+                Vapor.printErr("Exit Animation not found could not ENQUE, Please make sure to Run .build() on the animation", .{});
+                break :blk std.math.maxInt(AnimationId);
+            };
             const len = StyleCompiler.getAnimationLen();
             break :blk try self.animations.intern(css_ptr[0..len]);
         } else std.math.maxInt(AnimationId); // sentinel for "no animation"
@@ -697,6 +1417,9 @@ pub const RemovalQueue = struct {
             .animation_id = anim_id,
             .generation = self.current_generation,
         });
+        if (node.type == .Text) {
+            try self.removals.append(handle);
+        }
         try self.removals.append(handle);
     }
 

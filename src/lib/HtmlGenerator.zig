@@ -67,10 +67,22 @@ fn writeAllProps(ui_node: *UINode) void {
     _ = writer.write(ui_node.uuid) catch unreachable;
     _ = writer.write("\"") catch unreachable;
 
+    if (ui_node.inlineStyle) |inlineStyle| {
+        writeOptionalProp(" style", inlineStyle);
+    }
+
     // Write optional props
-    writeOptionalProp(" class", ui_node.class);
+    if (ui_node.type == .Icon) {
+        var buf: [256]u8 = undefined;
+        const class = ui_node.class orelse "";
+        const icon_class = std.fmt.bufPrint(&buf, "{s} {s}", .{ ui_node.href.?, class }) catch unreachable;
+        writeOptionalProp(" class", icon_class);
+    } else {
+        writeOptionalProp(" class", ui_node.class);
+    }
+
     writeOptionalProp(" aria-label", ui_node.aria_label);
-    if (ui_node.type != .Graphic) {
+    if (ui_node.type != .Graphic and ui_node.type != .Icon) {
         if (ui_node.type == .Image) {
             writeOptionalProp(" src", ui_node.href);
         } else {
@@ -123,6 +135,73 @@ pub fn createField(ui_node: *UINode) void {
     _ = writer.write("</p>") catch unreachable;
 }
 
+pub fn createInput(ui_node: *UINode) void {
+    _ = writer.write("<input") catch unreachable;
+    writeAllProps(ui_node);
+    writeOptionalProp("name", ui_node.name);
+    const params = ui_node.text_field_params.?;
+    switch (params.*) {
+        // .string => |string| {
+        //     var value: []const u8 = "";
+        //     if (string.value_ptr) |ptr| {
+        //         value = ptr[0..string.value_len];
+        //     }
+        //     var default_value: []const u8 = "";
+        //     if (string.default_ptr) |ptr| {
+        //         default_value = ptr[0..string.default_len];
+        //     }
+        //     // writeOptionalProp("value", value);
+        //     writeOptionalProp("placeholder", default_value);
+        // },
+        // .int => |int| {
+        //     // writeOptionalProp("value", Vapor.fmtln("{d}", int.value));
+        //     writeOptionalProp("placeholder", Vapor.fmtln("{d}", int.value));
+        // },
+        // .password => |password| {
+        //     writeOptionalProp("value", password.value);
+        //     writeOptionalProp("placeholder", password.default);
+        // },
+        .email => |email| {
+            // var value: []const u8 = "";
+            // if (email.value_ptr) |ptr| {
+            //     value = ptr[0..email.value_len];
+            // }
+            var default_value: []const u8 = "";
+            if (email.default_ptr) |ptr| {
+                default_value = ptr[0..email.default_len];
+            }
+            writeOptionalProp("type", "email");
+            writeOptionalProp("placeholder", default_value);
+        },
+        // .telephone => |telephone| {
+        //     writeOptionalProp("value", telephone.value);
+        //     writeOptionalProp("placeholder", telephone.default);
+        // },
+        // .file => |file| {
+        //     writeOptionalProp("value", file.value);
+        //     writeOptionalProp("placeholder", file.default);
+        // },
+        // .float => |float| {
+        //     writeOptionalProp("value", float.value);
+        //     writeOptionalProp("placeholder", float.default);
+        // },
+        else => {},
+    }
+    _ = writer.write(">") catch unreachable;
+    _ = writer.write("</input>") catch unreachable;
+}
+
+pub fn createLabel(ui_node: *UINode) void {
+    _ = writer.write("<label ") catch unreachable;
+    writeOptionalProp("for", ui_node.name);
+    writeAllProps(ui_node);
+    _ = writer.write(">") catch unreachable;
+    if (ui_node.text) |text| {
+        _ = writer.write(text) catch unreachable; // TODO: Escape HTML content
+    }
+    _ = writer.write("</label>") catch unreachable;
+}
+
 pub fn createLinkOpen(ui_node: *UINode) void {
     _ = writer.write("<a") catch unreachable;
     writeAllProps(ui_node);
@@ -152,7 +231,7 @@ pub fn createImageClose() void {
 
 pub fn createGraphicOpen(ui_node: *UINode) void {
     if (mode_options.static_mode) {
-        _ = writer.write("<img") catch unreachable;
+        _ = writer.write("<div") catch unreachable;
         writeAllProps(ui_node);
         _ = writer.write(">") catch unreachable;
     } else {
@@ -163,7 +242,7 @@ pub fn createGraphicOpen(ui_node: *UINode) void {
 }
 pub fn createGraphicClose() void {
     if (mode_options.static_mode) {
-        _ = writer.write("</img>") catch unreachable;
+        _ = writer.write("</div>") catch unreachable;
     } else {
         _ = writer.write("</div>") catch unreachable;
     }
@@ -225,6 +304,17 @@ pub fn createHeadingClose() void {
     _ = writer.write("</h>") catch unreachable;
 }
 
+pub fn createSvgOpen(ui_node: *UINode) void {
+    // _ = writer.write("<svg") catch unreachable;
+    // writeAllProps(ui_node);
+    // _ = writer.write(">\n") catch unreachable;
+    _ = writer.write(ui_node.text.?) catch unreachable;
+}
+
+pub fn createSvgClose() void {
+    _ = writer.write("</svg>") catch unreachable;
+}
+
 pub fn createElementOpen(ui_node: *UINode) void {
     switch (ui_node.type) {
         .FlexBox => {
@@ -239,6 +329,12 @@ pub fn createElementOpen(ui_node: *UINode) void {
         },
         .TextFmt => {
             createField(ui_node);
+        },
+        .TextField => {
+            createInput(ui_node);
+        },
+        .Label => {
+            createLabel(ui_node);
         },
 
         .Button, .CtxButton, .ButtonCycle => {
@@ -278,6 +374,18 @@ pub fn createElementOpen(ui_node: *UINode) void {
         },
         .Heading => {
             createHeadingOpen(ui_node);
+        },
+
+        .Svg => {
+            // createSvgOpen(ui_node);
+        },
+
+        .Hooks, .HooksCtx => {
+            createDivOpen(ui_node);
+        },
+
+        .Spacer => {
+            createDivOpen(ui_node);
         },
 
         else => {
@@ -327,9 +435,23 @@ pub fn createElementClose(ui_node: *UINode) void {
         .Code => {
             createCodeClose();
         },
+
         .Heading => {
             createHeadingClose();
         },
+
+        .Svg => {
+            // createSvgClose();
+        },
+
+        .Hooks, .HooksCtx => {
+            createDivClose();
+        },
+
+        .Spacer => {
+            createDivClose();
+        },
+
         else => {
             // createDivClose();
         },

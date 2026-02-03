@@ -231,8 +231,11 @@ pub const KeyGenerator = struct {
 
         hasher.update(tag_name);
         hasher.update(parent_key);
-        hasher.update(std.mem.asBytes(&depth));
-        hasher.update(std.mem.asBytes(&index));
+        // Cast to fixed-size integers to ensure consistent hashing
+        const depth_fixed: u32 = @intCast(depth);
+        const index_fixed: u32 = @intCast(index);
+        hasher.update(std.mem.asBytes(&depth_fixed));
+        hasher.update(std.mem.asBytes(&index_fixed));
         const hash_val = hasher.final();
 
         // 2. Direct Write to Output Buffer
@@ -248,7 +251,6 @@ pub const KeyGenerator = struct {
         // 4. Final Suffix
         const final_pos = prefix_len + 1 + base62_len;
         @memcpy(uuid_buf[final_pos .. final_pos + 3], "-gk");
-
         return uuid_buf[0 .. final_pos + 3];
     }
 

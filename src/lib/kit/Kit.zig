@@ -1314,6 +1314,105 @@ pub fn log() void {
     }
 }
 
+const WssOptions = struct {
+    key: []const u8,
+    query: []const u8,
+    port: u16 = 8080,
+    on_connection: ?*const fn () void = undefined,
+    on_message: ?*const fn (msg: []const u8) void = undefined,
+    on_close: ?*const fn () void = undefined,
+};
+
+extern fn createWss(
+    port: u16,
+    id: u32,
+    query: [*]const u8,
+    query_len: u32,
+) void;
+
+extern fn sendWss(
+    id: u32,
+    msg: [*]const u8,
+    msg_len: u32,
+) void;
+
+var wss_callbacks: ?std.AutoHashMap(u32, WssOptions) = null;
+
+pub const Wss = struct {
+    id: u32,
+    pub fn send(wss: *const Wss, msg: []const u8) void {
+        sendWss(wss.id, msg.ptr, msg.len);
+    }
+};
+
+pub fn useWss(wss_options: WssOptions) !Wss {
+    if (wss_callbacks == null) {
+        wss_callbacks = std.AutoHashMap(u32, WssOptions).init(Vapor.arena(.persist));
+        const key = utils.hash(wss_options.key);
+        wss_callbacks.?.put(key, wss_options) catch |err| {
+            std.log.err("Error adding wss options {any}\n", .{err});
+            return error.CouldNotAddWssOptions;
+        };
+        createWss(wss_options.port, key, wss_options.query.ptr, wss_options.query.len);
+        return Wss{
+            .id = key,
+        };
+    } else if (wss_callbacks) |*callbacks| {
+        const key = utils.hash(wss_options.key);
+        callbacks.put(key, wss_options) catch |err| {
+            std.log.err("Error adding wss options {any}\n", .{err});
+            return error.CouldNotAddWssOptions;
+        };
+        createWss(wss_options.port, key, wss_options.query.ptr, wss_options.query.len);
+        return Wss{
+            .id = key,
+        };
+    }
+    return error.CouldNotAddWssOptions;
+}
+
+export fn onWssConnection(id: u32) void {
+    if (wss_callbacks) |callbacks| {
+        const wss_ops = callbacks.get(id) orelse {
+            std.log.err("Error getting wss options {any}\n", .{error.CouldNotGetWssCallbacks});
+            return;
+        };
+        if (wss_ops.on_connection) |cb| {
+            cb();
+            if (Vapor.mode == .atomic) {
+                Vapor.cycle();
+            }
+        }
+    }
+}
+export fn onWssMessage(id: u32, msg_nullterm: [*:0]u8) void {
+    const msg = std.mem.span(msg_nullterm);
+    if (wss_callbacks) |callbacks| {
+        const wss_ops = callbacks.get(id) orelse {
+            std.log.err("Error getting wss options {any}\n", .{error.CouldNotGetWssCallbacks});
+            return;
+        };
+        if (wss_ops.on_message) |cb| {
+            cb(msg);
+            if (Vapor.mode == .atomic) {
+                Vapor.cycle();
+            }
+        }
+    }
+}
+
+export fn onWssClose(id: u32) void {
+    if (wss_callbacks) |callbacks| {
+        const wss_ops = callbacks.get(id) orelse {
+            std.log.err("Error getting wss options {any}\n", .{error.CouldNotGetWssCallbacks});
+            return;
+        };
+        if (wss_ops.on_close) |cb| {
+            cb();
+        }
+    }
+}
+
 // --- Auto-Export Magic ---
 // This runs automatically when this file is imported
 comptime {

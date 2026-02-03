@@ -9,6 +9,15 @@ const Event = @import("Event.zig");
 const utils = @import("utils.zig");
 const hashKey = utils.hashKey;
 const Style = @import("types.zig").Style;
+const ScrollBehavior = Vapor.Event.ScrollBehavior;
+const ScrollBlock = Vapor.Event.ScrollBlock;
+
+const ScrollOptions = struct {
+    top: f32 = 0,
+    left: f32 = 0,
+    behavior: ScrollBehavior = .auto,
+    block: ScrollBlock = .start,
+};
 
 const Rect = struct {
     top: f32,
@@ -67,6 +76,8 @@ pub const Element = struct {
     on_focus: ?*const fn (event: *Event) void = null,
     on_blur: ?*const fn (event: *Event) void = null,
 
+    buf: ?std.array_list.Managed(u8) = null,
+
     style: struct {
         top: f32 = 0,
         left: f32 = 0,
@@ -84,7 +95,54 @@ pub const Element = struct {
             return null;
         }
     }
+
+    pub fn init(self: *Element, allocator: std.mem.Allocator) void {
+        self.buf =
+            std.array_list.Managed(u8).init(allocator);
+    }
+
+    pub fn scrollTo(self: *Element, options: ScrollOptions) void {
+        if (!Vapor.isWasi) return;
+        const id = self._get_id() orelse {
+            Vapor.printlnSrc("Id is null", .{}, @src());
+            return;
+        };
+        Wasm.scrollToBehaviorWasm(id.ptr, id.len, options.top, options.left, options.behavior, options.block);
+    }
+
+    pub fn scrollToBottom(self: *Element, value: u32) void {
+        if (!Vapor.isWasi) return;
+        const id = self._get_id() orelse {
+            Vapor.printlnSrc("Id is null", .{}, @src());
+            return;
+        };
+        const attribute: []const u8 = "scrollBottom";
+        mutateDomElement(id.ptr, id.len, attribute.ptr, attribute.len, value);
+        self.scroll_top = value;
+    }
+
+    pub fn scrollHeight(self: *Element) u32 {
+        if (!Vapor.isWasi) return 0;
+        const id = self._get_id() orelse {
+            Vapor.printlnSrc("Id is null", .{}, @src());
+            return 0;
+        };
+        const attribute: []const u8 = "scrollHeight";
+        return Wasm.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len);
+    }
+
+    pub fn scrollWidth(self: *Element) u32 {
+        if (!Vapor.isWasi) return 0;
+        const id = self._get_id() orelse {
+            Vapor.printlnSrc("Id is null", .{}, @src());
+            return 0;
+        };
+        const attribute: []const u8 = "scrollWidth";
+        return Wasm.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len);
+    }
+
     pub fn scrollToTop(self: *Element, value: u32) void {
+        if (!Vapor.isWasi) return;
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return;
@@ -95,20 +153,23 @@ pub const Element = struct {
     }
 
     pub fn scrollTop(self: *Element) u32 {
+        if (!Vapor.isWasi) return 0;
         const attribute: []const u8 = "scrollTop";
         self.scroll_top = self.getAttributeNumber(attribute);
         return self.scroll_top;
     }
 
     pub fn scrollIntoView(self: *Element) void {
+        if (!Vapor.isWasi) return;
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return;
         };
-        Wasm.scrollIntoViewWasm(id.ptr, id.len);
+        Wasm.scrollIntoViewWasm(id.ptr, id.len, Event.ScrollBehavior.auto, Event.ScrollBlock.center);
     }
 
     pub fn toOffsetWidth(self: *Element, value: u32) void {
+        if (!Vapor.isWasi) return;
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return;
@@ -119,6 +180,7 @@ pub const Element = struct {
     }
 
     pub fn getAttributeNumber(self: *Element, attribute: []const u8) u32 {
+        if (!Vapor.isWasi) return 0;
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return 0;
@@ -176,6 +238,7 @@ pub const Element = struct {
         cb: anytype,
         construct: anytype,
     ) ?usize {
+        if (!Vapor.isWasi) return null;
         const ui_node = self._node_ptr orelse {
             Vapor.printlnSrc("Node is null", .{}, @src());
             return null;
@@ -235,6 +298,15 @@ pub const Element = struct {
             return;
         };
         mutateDomElementStyleString(id.ptr, id.len, attribute.ptr, attribute.len, value.ptr, value.len);
+    }
+
+    pub fn mutateDomElementString(self: *Element, attribute: []const u8, value: []const u8) void {
+        if (!Vapor.isWasi) return;
+        const id = self._get_id() orelse {
+            Vapor.printlnSrc("Id is null", .{}, @src());
+            return;
+        };
+        Wasm.mutateDomElementStringWasm(id.ptr, id.len, attribute.ptr, attribute.len, value.ptr, value.len);
     }
 
     pub fn mutateStyle(self: *Element, style: *const Style) void {
@@ -297,7 +369,7 @@ pub const Element = struct {
         } else {
             // Dummy implementation - return offsets with fake values
             // Assuming offsets contain [offsetX, offsetY]
-            &[_]f32{ 0.0, 0.0 };
+            return null;
         };
 
         return Offsets{
@@ -335,12 +407,26 @@ pub const Element = struct {
         const text = "";
         setTextFieldValue(id.ptr, @intCast(id.len), text.ptr, text.len);
     }
+
     pub fn setText(self: *Element, text: []const u8) void {
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return;
         };
-        self.text = text;
+
+        if (self.buf) |*buf| {
+            buf.clearRetainingCapacity();
+            buf.appendSlice(text) catch {
+                std.log.err("Could not append slice {any}\n", .{text});
+                return;
+            };
+            self.text = buf.toOwnedSlice() catch {
+                std.log.err("Could not toOwnedSlice {any}\n", .{text});
+                return;
+            };
+        } else {
+            self.text = text;
+        }
         setTextFieldValue(id.ptr, @intCast(id.len), text.ptr, text.len);
     }
 
@@ -371,10 +457,12 @@ pub const Element = struct {
 
     pub fn focus(self: *Element) void {
         const id = self._get_id() orelse {
-            Vapor.printlnSrc("Id is null", .{}, @src());
+            Vapor.printlnSrc("Cannot Focus on Element, Id is null", .{}, @src());
+            std.log.err("Potentially the Element is not in the DOM or mounted Yet, the Element need to exist in the UI to be focusable", .{});
+            std.log.err("Check your if statement?", .{});
             return;
         };
-        if (self.element_type != .TextField) {
+        if (self.element_type != .TextField and self.element_type != .TextArea) {
             Vapor.println("Can only focus on TextField Element, add element Type Input\n", .{});
             return;
         }
@@ -490,6 +578,7 @@ pub const Element = struct {
     }
 
     pub fn translate3d(element: *Element, translation: Translate3d) ?void {
+        if (!Vapor.isWasi) return;
         const id = element._get_id() orelse {
             Vapor.printlnSrcErr("Id is null", .{}, @src());
             return null;

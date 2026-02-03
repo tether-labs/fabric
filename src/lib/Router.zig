@@ -7,6 +7,8 @@ const std = @import("std");
 const UITree = @import("UITree.zig");
 const Vapor = @import("Vapor.zig");
 const mem = std.mem;
+const FrameAllocator = @import("FrameAllocator.zig").FrameAllocator;
+const RouteFrameArena = @import("FrameAllocator.zig").RouteFrameArena;
 
 const RadixError = error{
     FailedToInitRadix,
@@ -33,6 +35,7 @@ pub const Node = struct {
     is_end: bool,
     page: *const fn () void,
     sub_path: []const u8,
+    route_arena: *RouteFrameArena,
 
     fn findChildWithCommonPrefix(node: *Node, prefix: []const u8) ?*Node {
         var children_itr = node.children.iterator();
@@ -55,7 +58,6 @@ pub const Node = struct {
         self: *Node,
         at: usize,
         allocator: std.mem.Allocator,
-        page: *const fn () void,
     ) !*Node {
         // We take the current node and set it as the child,
         // so now we move everything from current to child
@@ -67,18 +69,20 @@ pub const Node = struct {
             .prefix = self.prefix[at..],
             .tree = self.tree,
             .query_param = self.query_param,
-            .is_dynamic = self.is_end,
+            .is_dynamic = self.is_dynamic,
             .children = self.children,
             .param_child = self.param_child,
-            .is_end = true,
-            .page = page,
+            .is_end = self.is_end, // ← Keep original is_end
+            .page = self.page, // ← Keep original page!
             .sub_path = self.sub_path[at..],
+            .route_arena = self.route_arena,
         };
 
-        // set the current node to hell
         self.prefix = self.prefix[0..at];
         self.sub_path = self.sub_path[0..at];
+        self.is_end = false; // ← The split point is NOT an endpoint (unless a route ends here)
         self.children = std.StringHashMap(*Node).init(allocator);
+
         // store the new_node o in the hell node
         try self.children.put(new_node.prefix, new_node);
 
@@ -98,6 +102,7 @@ pub fn init(target: *Radix, allocator: std.mem.Allocator) !void {
         .is_end = false,
         .page = undefined,
         .sub_path = "",
+        .route_arena = undefined,
     };
     target.* = .{
         .root = root_node,
@@ -128,6 +133,7 @@ fn newNode(
     is_end: bool,
     page: *const fn () void,
     sub_path: []const u8,
+    route_arena: *RouteFrameArena,
 ) !*Node {
     const node = try radix.allocator.create(Node);
     node.* = Node{
@@ -140,6 +146,7 @@ fn newNode(
         .is_end = is_end,
         .page = page,
         .sub_path = sub_path,
+        .route_arena = route_arena,
     };
     return node;
 }
@@ -158,6 +165,7 @@ const Route = struct {
     page: *const fn () void = undefined,
     is_dynamic: bool = false,
     path: []const u8,
+    route_arena: *RouteFrameArena,
 };
 pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
     var node_path: std.array_list.Managed(u8) = std.array_list.Managed(u8).init(Vapor.arena(.frame));
@@ -178,6 +186,8 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
         const segment = path[start..end];
         start = end;
 
+        node_path.append('/') catch unreachable; // ← Add '/' once per segment HERE
+
         var remaining = segment;
         while (remaining.len > 0) {
             const match = node.findChildWithCommonPrefix(remaining) orelse return null;
@@ -187,8 +197,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
             if (common_len != match.prefix.len) return null;
             remaining = remaining[common_len..];
             node = match;
-            node_path.append('/') catch unreachable;
-            node_path.appendSlice(match.sub_path) catch unreachable;
+            node_path.appendSlice(match.sub_path) catch unreachable; // Don't add '/' here
         }
 
         // Handle dynamic parameters
@@ -213,6 +222,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
             .page = node.page,
             .is_dynamic = node.is_dynamic,
             .path = node_path.toOwnedSlice() catch unreachable,
+            .route_arena = node.route_arena,
         };
     }
     return null;
@@ -223,9 +233,10 @@ pub fn addRoute(
     path: []const u8,
     tree: *UITree,
     page: *const fn () void,
+    route_arena: *RouteFrameArena,
 ) !void {
     var path_iter = mem.tokenizeScalar(u8, path, '/');
-    try radix.insert(&path_iter, tree, page);
+    try radix.insert(&path_iter, tree, page, route_arena);
 }
 
 fn insert(
@@ -233,6 +244,7 @@ fn insert(
     segments: *mem.TokenIterator(u8, .scalar),
     tree: *UITree,
     page: *const fn () void,
+    route_arena: *RouteFrameArena,
 ) !void {
     var node = radix.root;
     while (segments.next()) |segment| {
@@ -241,7 +253,7 @@ fn insert(
         if (is_dynamic) {
             const param = segment[1..];
             if (node.param_child) |_| return error.ConflictDynamicRoute;
-            const dynamic_node = try radix.newNode(":dynamic", tree, param, true, page, segment);
+            const dynamic_node = try radix.newNode(":dynamic", tree, param, true, page, segment, route_arena);
             node.param_child = dynamic_node;
             node.is_end = true;
             return;
@@ -259,7 +271,7 @@ fn insert(
                 while (i < child.prefix.len and i < segement_remaining.len and child.prefix[i] == segement_remaining[i]) : (i += 1) {}
 
                 if (i < child.prefix.len) {
-                    _ = try child.splitNode(i, radix.allocator, page);
+                    _ = try child.splitNode(i, radix.allocator);
                     // Once we splitt the node we need to set the current to the correct route func
                     child.tree = tree;
                     child.prefix = segement_remaining[0..i];
@@ -283,6 +295,7 @@ fn insert(
                     false,
                     page,
                     segement_remaining,
+                    route_arena,
                 );
                 try node.children.put(segement_remaining, new_node);
                 node = new_node;
@@ -291,6 +304,8 @@ fn insert(
         }
     }
     node.is_end = true;
+    node.tree = tree; // Add this
+    node.page = page; // Add this
 }
 
 /// Update the UITree for a specific route path
@@ -341,7 +356,7 @@ pub fn updateRouteTree(radix: *Radix, path: []const u8, new_tree: *UITree) bool 
     return false;
 }
 
-fn printTree(radix: *const Radix) !void {
+pub fn printTree(radix: *const Radix) !void {
     var buffer = std.array_list.Managed(u8).init(radix.allocator);
     defer buffer.deinit();
     // Start traversal from the root's children (root itself has no prefix)

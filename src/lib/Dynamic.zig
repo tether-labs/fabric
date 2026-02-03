@@ -17,7 +17,7 @@ pub const Field = struct {
     value: union(enum) {
         string: []const u8,
         int: i32,
-        float: f64,
+        float: f32,
         bool: bool,
     },
 };
@@ -60,6 +60,7 @@ pub fn convertFromDynamicToType(comptime T: type, dyn_object: *DynamicObject) T 
                 }
             },
             .float => {
+                Vapor.print("Flooating", .{});
                 if (dyn_field_type == .float) {
                     @field(new_object, field.name) = @as(field.type, @intCast(dyn_field_value.float));
                 } else {

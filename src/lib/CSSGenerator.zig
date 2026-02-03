@@ -39,6 +39,8 @@ fn writeCss(_: *Generator, node: *UINode) void {
     writer.writeByte('}') catch {};
     writer.writeByte('\n') catch {};
 
+    // This area checks if the current node has a hover style
+    // if it does, we then check if the children of the node inherit the hover style
     if (node.packed_field_ptrs) |packed_field_ptrs| {
         if (packed_field_ptrs.interactive_ptr) |interactive_ptr| {
             if (interactive_ptr.has_hover) {
@@ -52,6 +54,8 @@ fn writeCss(_: *Generator, node: *UINode) void {
                 writer.writeByte('}') catch {};
                 writer.writeByte('\n') catch {};
 
+                // Now we write the inherited styles for the children
+                // in the form or .class:hover .child_class {}
                 // We write the inherited styles for the children
                 if (node.children_count > 0) {
                     writer.writeByte('.') catch {};
@@ -93,6 +97,9 @@ fn writeInteractive(interactive_ptr: *const Types.PackedInteractive) void {
     const hover_position = interactive_ptr.hover_position;
     StyleWriter.generateVisual(&hover, &writer);
     StyleWriter.generatePositions(&hover_position, &writer);
+    if (interactive_ptr.has_hover_transform) {
+        StyleWriter.writePropValue("transform", .{ .tag = .transform_type, .data = .{ .transform_type = interactive_ptr.hover_transform } }, &writer);
+    }
 }
 
 fn writeAnimation(animation_ptr: *const Types.PackedAnimations) void {
@@ -201,10 +208,10 @@ pub fn writeAllStyles(gen: *Generator) void {
     writeCommonStyleGroup(gen, allocator, &Packer.positions, "pos", &key_buf, writePos, null);
     writeCommonStyleGroup(gen, allocator, &Packer.margins_paddings, "mapa", &key_buf, writeMarginPaddings, null);
     writeCommonStyleGroup(gen, allocator, &Packer.transforms, "tran", &key_buf, writeTransform, null);
+    writeCommonStyleGroup(gen, allocator, &Packer.animations, "anim", &key_buf, writeAnimation, null);
 
     // Special cases with ":hover"
     writeCommonStyleGroup(gen, allocator, &Packer.interactives, "intr", &key_buf, writeInteractive, ":hover");
-    writeCommonStyleGroup(gen, allocator, &Packer.animations, "anim", &key_buf, writeAnimation, ":hover");
 }
 
 /// REFACTORED: Now uses the `writeFullNodeRule` helper.

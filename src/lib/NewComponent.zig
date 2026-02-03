@@ -14,6 +14,15 @@ const hashKey = utils.hashKey;
 const Draggable = @import("Draggable.zig").Draggable;
 const onCreateNode = @import("Hooks.zig").onCreateNode;
 const Shadow = @import("Shadow.zig");
+const Accessibility = @import("Accessibility.zig").Accessibility;
+
+pub const StringEntry = struct {
+    ptr: [*]const u8, // original source ptr (used as key)
+    len: usize, // original len
+    persisted: []const u8, // our copy
+};
+
+pub var text_string_table: std.AutoHashMap(u32, StringEntry) = undefined;
 
 // ... keep HeaderSize, Header, Hooks, LinkOptions, FlexType, Position, Layout, Tooltip, createNode as-is ...
 
@@ -88,14 +97,6 @@ const LinkOptions = struct {
     aria_label: ?[]const u8 = null,
 };
 
-const FlexType = enum(u8) {
-    Flex = 0, // "flex"
-    Center = 1,
-    Stack = 2, // "inline-flex"
-    Flow = 3, // "inherit"
-    None = 4, // "centers the child content"
-};
-
 const Position = enum {
     top,
     bottom,
@@ -145,7 +146,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         _value: ?*anyopaque = null,
 
         _elem_type: Vapor.ElementType,
-        _flex_type: FlexType = .Flex,
+        _flex_type: types.FlexType = .flex,
         _text: ?[]const u8 = null,
         _href: ?[]const u8 = null,
         _alt: ?[]const u8 = null,
@@ -157,15 +158,16 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         _draggable: ?*Draggable = null,
         _element: ?*Element = null,
 
-        _animation_enter: ?*const Vapor.Animation = null,
-        _animation_exit: ?*const Vapor.Animation = null,
+        _animation_enter: ?[]const u8 = null,
+        _animation_exit: ?[]const u8 = null,
         _name: ?[]const u8 = null,
+        _used_style: bool = false,
 
         // Style props
         _pos: ?types.Position = null,
         _padding: ?types.Padding = null,
         _layout: ?types.Layout = null,
-        _placement: ?types.Layout = null,
+        _placement: ?types.AnchorPlacement = null,
         _margin: ?types.Margin = null,
         _size: ?types.Size = null,
         _child_gap: ?u8 = null,
@@ -183,6 +185,21 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         _style_fields: ?[]const types.StyleFields = &.{},
         _hover_style_fields: ?[]const types.StyleFields = &.{},
         _anchor: ?[]const u8 = null,
+        _aspect_ratio: ?types.AspectRatio = null,
+        _persisted_text: bool = false,
+        // In GenericBuilder struct, add field:
+        _accessibility: ?Accessibility = null,
+
+        _edges: ?[]const u8 = null,
+
+        pub fn edges(self: *const Self, edges_tag: ?[]const u8) Self {
+            if (edges_tag) |_edges| {
+                var new_self: Self = self.*;
+                new_self._edges = _edges;
+                return new_self;
+            }
+            return self.*;
+        }
 
         // Helper to handle the close operation based on mode
         inline fn doClose() StyleReturnType {
@@ -224,6 +241,18 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             LifeCycle.close({});
         }
 
+        pub fn Null2(elem_type: Vapor.Types.ElementType) void {
+            _ = LifeCycle.open(.{
+                .elem_type = elem_type,
+                .state_type = _state_type,
+            });
+            LifeCycle.configure(.{
+                .elem_type = .Noop,
+                .state_type = _state_type,
+            });
+            LifeCycle.close({});
+        }
+
         pub fn Heading(level: u8, text: []const u8) Self {
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
@@ -249,6 +278,12 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 ._video = options,
                 ._ui_node = ui_node,
             };
+        }
+
+        pub fn aspectRatio(self: *const Self, ratio: types.AspectRatio) Self {
+            var new_self: Self = self.*;
+            new_self._aspect_ratio = ratio;
+            return new_self;
         }
 
         // ============================================================
@@ -370,7 +405,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return Self{
                 ._ui_node = ui_node,
                 ._elem_type = .FlexBox,
-                ._flex_type = .Center,
+                ._flex_type = .center,
             };
         }
 
@@ -384,10 +419,13 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 unreachable;
             };
 
+            ui_node.direction = .column;
+
             return Self{
                 ._ui_node = ui_node,
                 ._elem_type = .FlexBox,
-                ._flex_type = .Stack,
+                ._flex_type = .stack,
+                ._direction = .column,
             };
         }
 
@@ -483,14 +521,44 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             };
         }
 
-        pub fn Text(value: anytype) Self {
+        pub fn Spacer(val: f32) Self {
+            const elem_decl = ElementDecl{
+                .state_type = _state_type,
+                .elem_type = .Spacer,
+            };
+
+            const ui_node = LifeCycle.open(elem_decl) orelse {
+                Vapor.printlnSrcErr("Could not add component Link to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
+                unreachable;
+            };
+
+            return Self{
+                ._elem_type = .Spacer,
+                ._ui_node = ui_node,
+                ._size = .hw(.px(val), .percent(100)),
+            };
+        }
+
+        /// Text does not allocate memory, since we are not using a pointer
+        /// make sure the lifetime of the value is long enough
+        pub fn Number(value: anytype) Self {
+            const elem_decl = ElementDecl{
+                .state_type = _state_type,
+                .elem_type = .Text,
+            };
+
+            const ui_node = LifeCycle.open(elem_decl) orelse {
+                Vapor.printlnSrcErr("Could not add component Link to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
+                unreachable;
+            };
+
             const text = blk: switch (@typeInfo(@TypeOf(value))) {
-                .pointer => |_| {
-                    // const value_alloc = Vapor.fmtln("{s}", .{value});
-                    // value = value_alloc;
-                    break :blk value;
-                },
                 .int => {
+                    const number = Vapor.fmtln("{any}", .{value});
+                    Vapor.frame_arena.addBytesUsed(number.len);
+                    break :blk number;
+                },
+                .float => {
                     const number = Vapor.fmtln("{any}", .{value});
                     Vapor.frame_arena.addBytesUsed(number.len);
                     break :blk number;
@@ -502,9 +570,20 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 },
                 else => {
                     Vapor.printlnErr("Text only accepts []const u8 or number types, NOT {any}", .{@TypeOf(value)});
-                    return Self{ ._elem_type = .Text, ._text = "" };
+                    return Self{ ._elem_type = .Text, ._text = "", ._ui_node = ui_node };
                 },
             };
+
+            return Self{
+                ._elem_type = .Text,
+                ._text = text,
+                ._ui_node = ui_node,
+            };
+        }
+
+        /// Text does not allocate memory, since we are not using a pointer
+        /// make sure the lifetime of the value is long enough
+        pub fn Text(value: anytype) Self {
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
                 .elem_type = .Text,
@@ -515,6 +594,41 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 unreachable;
             };
 
+            const text = blk: switch (@typeInfo(@TypeOf(value))) {
+                .pointer => |ptr_info| {
+                    if (ptr_info.size == .one) {
+                        // String literal - use directly
+                        break :blk value;
+                    } else if (ptr_info.size == .slice) {
+                        return Self{
+                            ._elem_type = .Text,
+                            ._text = value,
+                            ._ui_node = ui_node,
+                            ._persisted_text = true,
+                        };
+                    }
+                },
+                .int => {
+                    const number = Vapor.fmtln("{any}", .{value});
+                    Vapor.frame_arena.addBytesUsed(number.len);
+                    break :blk number;
+                },
+                .float => {
+                    const number = Vapor.fmtln("{any}", .{value});
+                    Vapor.frame_arena.addBytesUsed(number.len);
+                    break :blk number;
+                },
+                .@"enum" => {
+                    const number = Vapor.fmtln("{s}", .{@tagName(value)});
+                    Vapor.frame_arena.addBytesUsed(number.len);
+                    break :blk number;
+                },
+                else => {
+                    Vapor.printlnErr("Text only accepts []const u8 or number types, NOT {any}", .{@TypeOf(value)});
+                    return Self{ ._elem_type = .Text, ._text = "", ._ui_node = ui_node };
+                },
+            };
+
             return Self{
                 ._elem_type = .Text,
                 ._text = text,
@@ -522,15 +636,25 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             };
         }
 
+        pub fn unmanaged(self: *const Self) Self {
+            var new_self: Self = self.*;
+            new_self._persisted_text = false;
+            return new_self;
+        }
+
+        pub fn hidden(self: *const Self, hide: bool) Self {
+            var new_self: Self = self.*;
+            if (!hide) return new_self;
+            new_self._flex_type = .hidden;
+            return new_self;
+        }
+
         pub fn Html(text: []const u8) Self {
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
                 .elem_type = .HtmlText,
             };
-            const ui_node = LifeCycle.open(elem_decl) orelse {
-                Vapor.printlnSrcErr("Could not add component Link to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
-                unreachable;
-            };
+            const ui_node = createNode(elem_decl);
             return Self{ ._elem_type = .HtmlText, ._text = text, ._ui_node = ui_node };
         }
 
@@ -559,13 +683,13 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         }
 
         pub fn Graphic(options: struct { src: []const u8 }) Self {
-            const elem_decl = ElementDecl{ .state_type = _state_type, .elem_type = .FlexBox };
+            const elem_decl = ElementDecl{ .state_type = _state_type, .elem_type = .Graphic };
             const ui_node = createNode(elem_decl);
             return Self{ ._elem_type = .Graphic, ._href = options.src, ._ui_node = ui_node };
         }
 
         pub fn Icon(token: *const IconTokens) Self {
-            const elem_decl = ElementDecl{ .state_type = _state_type, .elem_type = .FlexBox };
+            const elem_decl = ElementDecl{ .state_type = _state_type, .elem_type = .Icon };
             const ui_node = createNode(elem_decl);
             return Self{ ._elem_type = .Icon, ._href = token.web orelse "", ._ui_node = ui_node };
         }
@@ -599,6 +723,87 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             const elem_decl = ElementDecl{ .state_type = _state_type, .elem_type = .Anchor };
             const ui_node = createNode(elem_decl);
             return Self{ ._elem_type = .Anchor, ._ui_node = ui_node, ._anchor = name };
+        }
+
+        // Add these methods:
+
+        /// Set full accessibility config
+        pub fn a11y(self: *const Self, accessibility: Accessibility) Self {
+            var new_self: Self = self.*;
+            new_self._accessibility = accessibility;
+            return new_self;
+        }
+
+        /// Shorthand: just set aria-label
+        pub fn ariaLabel(self: *const Self, label: []const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.label = label;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: set role
+        pub fn role(self: *const Self, r: Accessibility.Role) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.role = r;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-expanded
+        pub fn ariaExpanded(self: *const Self, expanded: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.expanded = expanded;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-selected
+        pub fn ariaSelected(self: *const Self, selected: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.selected = selected;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-controls
+        pub fn ariaControls(self: *const Self, uuid: []const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.controls = uuid;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-activedescendant
+        pub fn ariaActiveDescendant(self: *const Self, uuid: ?[]const u8) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.active_descendant = uuid;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: aria-hidden
+        pub fn ariaHidden(self: *const Self, hidden_val: bool) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.hidden = hidden_val;
+            new_self._accessibility = acc;
+            return new_self;
+        }
+
+        /// Shorthand: tabindex
+        pub fn tabIndex(self: *const Self, index: i16) Self {
+            var new_self: Self = self.*;
+            var acc = new_self._accessibility orelse Accessibility{};
+            acc.tab_index = index;
+            new_self._accessibility = acc;
+            return new_self;
         }
 
         pub fn fontStyle(self: *const Self, font_style: types.FontStyle) Self {
@@ -689,12 +894,6 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn ariaLabel(self: *const Self, label: []const u8) Self {
-            var new_self: Self = self.*;
-            new_self._aria_label = label;
-            return new_self;
-        }
-
         pub fn onFocus(self: *const Self, cb: fn (*Vapor.Event) void) Self {
             var new_self: Self = self.*;
             var element = self._element orelse {
@@ -759,6 +958,12 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
+        pub fn inlineStyleStr(self: *const Self, text: []const u8) Self {
+            var new_self: Self = self.*;
+            new_self._inlineStyle = text;
+            return new_self;
+        }
+
         pub fn fontSize(self: *const Self, font_size: u8) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
@@ -785,11 +990,23 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn onLeave(self: *const Self, cb: fn (*Vapor.Event) void) Self {
+        pub fn onLeave(self: *const Self, cb: *const fn (*Vapor.Event) void) Self {
             var new_self: Self = self.*;
 
             const ui_node = self.getOrCreateNode(&new_self);
             Vapor.attachEventCallback(ui_node, .mouseleave, cb) catch |err| {
+                Vapor.println("ONLEAVE: Could not attach event callback {any}\n", .{err});
+                unreachable;
+            };
+
+            return new_self;
+        }
+
+        pub fn onEvent(self: *const Self, event: types.EventType, cb: *const fn (*Vapor.Event) void) Self {
+            var new_self: Self = self.*;
+
+            const ui_node = self.getOrCreateNode(&new_self);
+            Vapor.attachEventCallback(ui_node, event, cb) catch |err| {
                 Vapor.println("ONLEAVE: Could not attach event callback {any}\n", .{err});
                 unreachable;
             };
@@ -887,7 +1104,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             element._node_ptr = ui_node;
             draggable_ptr.element = element;
 
-            onCreateNode(ui_node, struct {
+            Vapor.onEndCtx(struct {
                 pub fn attachDraggable(draggable: *Draggable) void {
                     draggable.addStartListener();
                 }
@@ -908,8 +1125,8 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn animationEnter(self: *const Self, animation_ptr: ?*const Vapor.Animation) Self {
-            if (animation_ptr) |_animation| {
+        pub fn animationEnter(self: *const Self, animation_tag: ?[]const u8) Self {
+            if (animation_tag) |_animation| {
                 var new_self: Self = self.*;
                 new_self._animation_enter = _animation;
                 return new_self;
@@ -917,8 +1134,8 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return self.*;
         }
 
-        pub fn animation(self: *const Self, animation_ptr: ?*const Vapor.Animation) Self {
-            if (animation_ptr) |_animation| {
+        pub fn animation(self: *const Self, animation_tag: ?[]const u8) Self {
+            if (animation_tag) |_animation| {
                 var new_self: Self = self.*;
                 var visual = new_self._visual orelse types.Visual{};
                 visual.animation = _animation;
@@ -928,15 +1145,31 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return self.*;
         }
 
-        pub fn animationExit(self: *const Self, animation_ptr: *const Vapor.Animation) Self {
+        pub fn animationExit(self: *const Self, animation_tag: ?[]const u8) Self {
             var new_self: Self = self.*;
-            new_self._animation_exit = animation_ptr;
+            new_self._animation_exit = animation_tag;
             return new_self;
         }
 
         pub fn class(self: *const Self, class_name: []const u8) Self {
             var new_self: Self = self.*;
             new_self._class = class_name;
+            return new_self;
+        }
+
+        pub fn classFmt(self: *const Self, comptime fmt: []const u8, args: anytype) Self {
+            var new_self: Self = self.*;
+            const allocator = Vapor.arena(.frame);
+            const text = std.fmt.allocPrint(allocator, fmt, args) catch |err| {
+                Vapor.printlnColor(
+                    \\Error formatting text: {any}\n"
+                    \\FMT: {s}\n"
+                    \\ARGS: {any}\n"
+                , .{ err, fmt, args }, .hex("#FF3029"));
+                return new_self;
+            };
+            Vapor.frame_arena.addBytesUsed(text.len);
+            new_self._class = text;
             return new_self;
         }
 
@@ -987,6 +1220,14 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
+        pub fn textColor(self: *const Self, color: ?Color) Self {
+            var new_self: Self = self.*;
+            var visual = new_self._visual orelse types.Visual{};
+            visual.text_color = color;
+            new_self._visual = visual;
+            return new_self;
+        }
+
         pub fn font(self: *const Self, font_size: u8, weight: ?u16, color: ?Color) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
@@ -1031,7 +1272,13 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn placement(self: *const Self, value: types.Layout) Self {
+        pub fn anchorPlacement(self: *const Self, value: types.AnchorPlacement) Self {
+            var new_self: Self = self.*;
+            new_self._placement = value;
+            return new_self;
+        }
+
+        pub fn placement(self: *const Self, value: types.AnchorPlacement) Self {
             var new_self: Self = self.*;
             new_self._placement = value;
             return new_self;
@@ -1059,7 +1306,8 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn shadow(self: *const Self, value: types.Shadow) Self {
+        pub fn shadow(self: *const Self, value: ?types.Shadow) Self {
+            if (value == null) return self.*;
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.shadow = value;
@@ -1067,18 +1315,29 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn newShadow(self: *const Self, value: Shadow) Self {
+        pub fn newShadow(self: *const Self, value: ?Shadow) Self {
+            if (value == null) return self.*;
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
-            visual.new_shadow = value;
+            visual.new_shadow = value.?;
             new_self._visual = visual;
             return new_self;
         }
 
-        pub fn layer(self: *const Self, value: types.BackgroundLayer) Self {
+        pub fn layer(self: *const Self, value: ?types.BackgroundLayer) Self {
+            if (value == null) return self.*;
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.layer = value;
+            new_self._visual = visual;
+            return new_self;
+        }
+
+        pub fn layers(self: *const Self, value: ?[]const types.BackgroundLayer) Self {
+            if (value == null) return self.*;
+            var new_self: Self = self.*;
+            var visual = new_self._visual orelse types.Visual{};
+            visual.layers = value;
             new_self._visual = visual;
             return new_self;
         }
@@ -1292,6 +1551,26 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
+        pub fn minHeight(
+            self: *const Self,
+            min: types.Sizing,
+        ) Self {
+            var new_self: Self = self.*;
+
+            const sizing: types.Sizing = switch (min.type) {
+                .percent => types.Sizing{ .type = .min_percent, .size = min.size },
+                .fixed => types.Sizing{ .type = .min_px, .size = min.size },
+                else => unreachable,
+            };
+
+            if (new_self._size == null) {
+                new_self._size = .{ .height = sizing };
+            } else {
+                new_self._size.?.height = sizing;
+            }
+            return new_self;
+        }
+
         pub fn border(self: *const Self, value: types.BorderGrouped) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
@@ -1300,10 +1579,22 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
+        pub fn borderStyle(self: *const Self, value: types.BorderStyle) Self {
+            var new_self: Self = self.*;
+            var visual = new_self._visual orelse types.Visual{};
+            var old_border = visual.border orelse types.BorderGrouped{ .color = null, .thickness = .all(0) };
+            old_border.style = value;
+            visual.border = old_border;
+            new_self._visual = visual;
+            return new_self;
+        }
+
         pub fn radius(self: *const Self, value: types.BorderRadius) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
-            visual.border_radius = value;
+            var old_border = visual.border orelse types.BorderGrouped{ .color = null, .thickness = .all(0) };
+            old_border.radius = value;
+            visual.border = old_border;
             new_self._visual = visual;
             return new_self;
         }
@@ -1317,6 +1608,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         pub fn direction(self: *const Self, value: types.Direction) Self {
             var new_self: Self = self.*;
             new_self._direction = value;
+            self._ui_node.?.direction = value;
             return new_self;
         }
 
@@ -1330,7 +1622,51 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         // Terminal methods with conditional return types
         // ============================================================
 
-        pub fn style(self: *const Self, style_ptr: *const Vapor.Style) StyleReturnType {
+        pub fn style(self: *const Self, style_ptr: *const Vapor.Style) Self {
+            var new_self: Self = self.*;
+            var elem_decl = Vapor.ElementDecl{
+                .state_type = _state_type,
+                .elem_type = self._elem_type,
+                .text = self._text,
+                .style = style_ptr,
+                .href = self._href,
+                .svg = self._svg,
+                .alt = self._alt,
+                .aria_label = self._aria_label,
+                .animation_enter = self._animation_enter,
+                .animation_exit = self._animation_exit,
+                .name = self._name,
+                .inlineStyle = self._inlineStyle,
+            };
+
+            if (self._flex_type == .center) {
+                var mutable_style = style_ptr.*;
+                mutable_style.layout = .center;
+                elem_decl.style = &mutable_style;
+            } else if (self._flex_type == .stack) {
+                var mutable_style = style_ptr.*;
+                mutable_style.direction = .column;
+                elem_decl.style = &mutable_style;
+            }
+
+            if (self._id) |_id| {
+                var mutable_style = style_ptr.*;
+                mutable_style.id = _id;
+                elem_decl.style = &mutable_style;
+            }
+
+            if (self._class) |_class| {
+                var mutable_style = style_ptr.*;
+                mutable_style.style_id = _class;
+                elem_decl.style = &mutable_style;
+            }
+
+            new_self._used_style = true;
+            Vapor.LifeCycle.configure(elem_decl);
+            return new_self;
+        }
+
+        pub fn styleOld(self: *const Self, style_ptr: *const Vapor.Style) StyleReturnType {
             var elem_decl = Vapor.ElementDecl{
                 .state_type = _state_type,
                 .elem_type = self._elem_type,
@@ -1374,6 +1710,8 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
 
         // children() is only in Builder
         pub fn children(self: *const Self, _: void) void {
+            if (self._used_style) return Vapor.LifeCycle.close({});
+
             var mutable_style = Style{};
             if (self._style) |style_ptr| {
                 mutable_style = style_ptr.*;
@@ -1401,12 +1739,45 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 if (_visual.cursor != null) visual.cursor = _visual.cursor;
                 if (_visual.layer != null) visual.layer = _visual.layer;
                 if (_visual.layers != null) visual.layers = _visual.layers;
+                if (self._edges != null) visual.edges = self._edges;
                 mutable_style.visual = visual;
             } else if (self._visual) |_visual| {
                 mutable_style.visual = _visual;
+                mutable_style.visual.?.edges = self._edges;
             }
 
-            if (mutable_style.interactive == null) mutable_style.interactive = self._interactive;
+            if (mutable_style.interactive != null and self._interactive != null) {
+                const interactive = mutable_style.interactive.?;
+                const _interactive = self._interactive.?;
+                if (interactive.hover != null and _interactive.hover != null) {
+                    var visual = interactive.hover.?;
+                    const _visual = _interactive.hover.?;
+                    if (_visual.background != null) visual.background = _visual.background;
+                    if (_visual.fill != null) visual.fill = _visual.fill;
+                    if (_visual.stroke != null) visual.stroke = _visual.stroke;
+                    if (_visual.border != null) visual.border = _visual.border;
+                    if (_visual.border_radius != null) visual.border_radius = _visual.border_radius;
+                    if (_visual.border_thickness != null) visual.border_thickness = _visual.border_thickness;
+                    if (_visual.border_color != null) visual.border_color = _visual.border_color;
+                    if (_visual.text_color != null) visual.text_color = _visual.text_color;
+                    if (_visual.font_size != null) visual.font_size = _visual.font_size;
+                    if (_visual.font_weight != null) visual.font_weight = _visual.font_weight;
+                    if (_visual.letter_spacing != null) visual.letter_spacing = _visual.letter_spacing;
+                    if (_visual.line_height != null) visual.line_height = _visual.line_height;
+                    if (_visual.opacity != null) visual.opacity = _visual.opacity;
+                    if (_visual.ellipsis != null) visual.ellipsis = _visual.ellipsis;
+                    if (_visual.shadow != null) visual.shadow = _visual.shadow;
+                    if (_visual.cursor != null) visual.cursor = _visual.cursor;
+                    if (_visual.layer != null) visual.layer = _visual.layer;
+                    if (_visual.layers != null) visual.layers = _visual.layers;
+                    if (_visual.animation != null) visual.animation = _visual.animation;
+                    if (_visual.animation_name != null) visual.animation_name = _visual.animation_name;
+                    mutable_style.interactive.?.hover = visual;
+                }
+            } else if (self._interactive) |_interactive| {
+                mutable_style.interactive = _interactive;
+            }
+
             if (mutable_style.child_gap == null) mutable_style.child_gap = self._child_gap;
             if (mutable_style.transform_origin == null) mutable_style.transform_origin = self._transform_origin;
             if (mutable_style.padding == null) mutable_style.padding = self._padding;
@@ -1434,10 +1805,13 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             if (mutable_style.list_style == null) mutable_style.list_style = self._list_style;
             if (mutable_style.font_family == null) mutable_style.font_family = self._font_family;
             if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
+            if (mutable_style.flex_type == .default) mutable_style.flex_type = self._flex_type;
+            // if (mutable_style.layout == null) mutable_style.layout = self._layout;
+            // if (mutable_style.direction == .row) mutable_style.direction = self._direction;
 
-            if (self._flex_type == .Center) {
+            if (self._flex_type == .center) {
                 mutable_style.layout = .center;
-            } else if (self._flex_type == .Stack) {
+            } else if (self._flex_type == .stack) {
                 mutable_style.direction = .column;
             }
 
@@ -1464,6 +1838,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 .animation_enter = self._animation_enter,
                 .animation_exit = self._animation_exit,
                 .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
             };
 
             Vapor.LifeCycle.configure(elem_decl);
@@ -1471,6 +1846,8 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
         }
 
         pub fn end(self: *const Self) EndReturnType {
+            if (self._used_style) return doClose();
+
             var mutable_style = Style{};
             if (self._style) |style_ptr| {
                 mutable_style = style_ptr.*;
@@ -1505,6 +1882,8 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             if (mutable_style.child_gap == null) mutable_style.child_gap = self._child_gap;
             if (mutable_style.transform_origin == null) mutable_style.transform_origin = self._transform_origin;
             if (mutable_style.padding == null) mutable_style.padding = self._padding;
+            if (mutable_style.flex_type == .default) mutable_style.flex_type = self._flex_type;
+
             if (mutable_style.layout != null) {
                 if (self._layout) |_layout| {
                     mutable_style.layout = _layout;
@@ -1529,10 +1908,11 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             if (mutable_style.list_style == null) mutable_style.list_style = self._list_style;
             if (mutable_style.font_family == null) mutable_style.font_family = self._font_family;
             if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
+            if (mutable_style.aspect_ratio == null) mutable_style.aspect_ratio = self._aspect_ratio;
 
-            if (self._flex_type == .Center) {
+            if (self._flex_type == .center) {
                 mutable_style.layout = .center;
-            } else if (self._flex_type == .Stack) {
+            } else if (self._flex_type == .stack) {
                 mutable_style.direction = .column;
             }
 
@@ -1548,10 +1928,47 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 mutable_style.anchor = _anchor;
             }
 
+            var text: ?[]const u8 = self._text;
+            if (self._elem_type == .Text and self._persisted_text) {
+                const value = self._text.?;
+                text = blk: {
+                    const uuid = hashKey(self._ui_node.?.uuid);
+                    // Runtime slice - persist it
+                    const slice: []const u8 = value;
+
+                    if (text_string_table.get(uuid)) |entry| {
+                        const old_string = entry.persisted;
+                        // Check if content changed (ptr or len different means new data)
+                        if (entry.len == slice.len and entry.ptr == slice.ptr) {
+                            // Same source, use persisted copy
+                            break :blk entry.persisted;
+                        }
+                        // Content changed, update
+                        const new_copy = Vapor.arena(.persist).dupe(u8, slice) catch unreachable;
+                        text_string_table.put(uuid, .{
+                            .ptr = slice.ptr,
+                            .len = slice.len,
+                            .persisted = new_copy,
+                        }) catch unreachable;
+                        defer Vapor.arena(.persist).free(old_string);
+                        break :blk new_copy;
+                    } else {
+                        // New entry
+                        const copy = Vapor.arena(.persist).dupe(u8, slice) catch unreachable;
+                        text_string_table.put(uuid, .{
+                            .ptr = slice.ptr,
+                            .len = slice.len,
+                            .persisted = copy,
+                        }) catch unreachable;
+                        break :blk copy;
+                    }
+                };
+            }
+
             const elem_decl = Vapor.ElementDecl{
                 .state_type = _state_type,
                 .elem_type = self._elem_type,
-                .text = self._text,
+                .text = text,
                 .style = &mutable_style,
                 .href = self._href,
                 .svg = self._svg,
@@ -1564,6 +1981,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
                 .style_fields = self._style_fields,
                 .hover_style_fields = self._hover_style_fields,
                 .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
             };
 
             Vapor.LifeCycle.configure(elem_decl);

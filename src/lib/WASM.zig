@@ -120,6 +120,9 @@ pub extern fn getEventDataNumberWasm(id: u32, ptr: [*]const u8, len: usize) f32;
 /// Prevents the default action for the specified event.
 pub extern fn eventPreventDefault(id: u32) void;
 
+/// Stops the propagation of the specified event.
+pub extern fn eventStopPropagation(id: u32) void;
+
 /// Extracts form data from a form submission event.
 pub extern fn formDataWasm(event_id: u32) u32;
 
@@ -157,6 +160,26 @@ pub extern fn getAttributeWasmNumber(
     attribute_ptr: [*]const u8,
     attribute_len: usize,
 ) u32;
+
+pub extern fn mutateDomElementStringWasm(
+    id_ptr: [*]const u8,
+    id_len: usize,
+    attribute: [*]const u8,
+    attribute_len: usize,
+    value_ptr: [*]const u8,
+    value_len: usize,
+) void;
+
+pub extern fn runOnAnimationFrameWasm(callback_id: u32) void;
+
+pub extern fn consoleLogColoredErrorWasm(
+    ptr: [*]const u8,
+    len: usize,
+    style_ptr_1: [*]const u8,
+    style_len_1: usize,
+    style_ptr_2: [*]const u8,
+    style_len_2: usize,
+) void;
 
 // =============================================================================
 // DOM STYLING
@@ -301,8 +324,7 @@ pub extern "env" fn cancelTimeoutWasm(id: u32) void;
 
 /// Registers a repeating interval.
 pub extern "env" fn createInterval(
-    name_ptr: [*]const u8,
-    name_len: usize,
+    callback_id: u32,
     delay: u32,
 ) void;
 
@@ -350,11 +372,18 @@ pub extern fn scrollToWasm(x: f32, y: f32) void;
 /// Gets current scroll position.
 pub extern fn getScrollPositionWasm() [*]f32;
 
+const ScrollBehavior = Vapor.Event.ScrollBehavior;
+const ScrollBlock = Vapor.Event.ScrollBlock;
+
 /// Scrolls element into view with options.
 pub extern fn scrollIntoViewWasm(
     id_ptr: [*]const u8,
     id_len: usize,
+    behavior: ScrollBehavior,
+    block: ScrollBlock,
 ) void;
+
+pub extern fn scrollToBehaviorWasm(id_ptr: [*]const u8, id_len: usize, top: f32, left: f32, behavior: ScrollBehavior, block: ScrollBlock) void;
 
 /// Gets element's scroll properties.
 pub extern fn getElementScrollWasm(id_ptr: [*]const u8, id_len: usize) [*]f32;

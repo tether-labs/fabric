@@ -66,6 +66,19 @@ pub fn fromTimestamp(timestamp: i64) DateTime {
     };
 }
 
+pub fn fromDayMonthYear(day: u8, month: u8, year: i32) DateTime {
+    return .{
+        .year = year,
+        .month = month,
+        .day = day,
+        .hour = 0,
+        .minute = 0,
+        .second = 0,
+    };
+}
+
+
+
 pub fn fromMonth(month: u8, year: i32) DateTime {
     return .{
         .year = year,

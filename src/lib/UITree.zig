@@ -7,6 +7,7 @@ const Writer = @import("Writer.zig");
 const Packer = @import("Packer.zig");
 const ClassType = @import("ClassCache.zig").ClassType;
 const Configuration = @import("Configuration.zig");
+const Accessibility = @import("Accessibility.zig").Accessibility;
 // const CompactStyle = @import("types.zig").CompactStyle;
 
 const types = @import("types.zig");
@@ -24,6 +25,14 @@ const Direction = types.Direction;
 const HooksIds = types.HooksIds;
 const InputParams = types.InputParams;
 
+pub const StyleInfo = struct {
+    packed_field_ptrs: PackedFieldPtrs,
+    style_hashes: [8]u32,
+    style_hash: u32,
+    class: ?[]const u8 = null,
+};
+
+pub var style_info_map: std.AutoHashMap(u32, *StyleInfo) = undefined;
 pub const PackedFieldPtrs = struct {
     visual_ptr: ?*const types.PackedVisual = null,
     layout_ptr: ?*const types.PackedLayout = null,
@@ -78,7 +87,7 @@ pub const UINode = struct {
     aria_label: ?[]const u8 = null,
     alt: ?[]const u8 = null,
     class: ?[]const u8 = null,
-    animation_exit: ?*const Vapor.Animation = null,
+    animation_exit: ?[]const u8 = null,
     packed_field_ptrs: ?PackedFieldPtrs = null, // TODO: This is 28 bytes
     children_count: usize = 0,
     finger_print: u32 = 0,
@@ -87,12 +96,16 @@ pub const UINode = struct {
     props_hash: u32 = 0,
     props_changed: bool = false,
     hash: u32 = 0,
+    prev_style_hash: u32 = 0,
+    prev_style_hash_computed: u32 = 0,
     level: ?u8 = null,
-    // video: ?types.Video = null,
+    video: ?*const types.Video = null,
     event_handlers: ?*Vapor.EventHandlers = null,
     on_hover: bool = false,
     on_leave: bool = false,
     name: ?[]const u8 = null,
+    accessibility: bool = false,
+    direction: Direction = .row,
 
     first_child: ?*UINode = null, // "child" in React terms
     next_sibling: ?*UINode = null, // "sibling" in React terms
@@ -280,6 +293,22 @@ fn setUUID(parent: *UINode, child: *UINode) void {
     }
 }
 
+pub var cache_count: u32 = 0;
+pub var prev_style_hashes: std.AutoHashMap(u32, u32) = undefined;
+pub fn captureHash(node: *UINode) void {
+    prev_style_hashes.put(node.hash, node.prev_style_hash_computed) catch unreachable;
+    if (node.packed_field_ptrs == null) return;
+    if (style_info_map.get(node.prev_style_hash_computed) != null) return;
+    const style_info = Vapor.arena(.persist).create(StyleInfo) catch unreachable;
+    style_info.* = .{
+        .packed_field_ptrs = node.packed_field_ptrs.?,
+        .style_hashes = node.style_hashes,
+        .style_hash = node.style_hash,
+        .class = node.class,
+    };
+    style_info_map.put(node.prev_style_hash_computed, style_info) catch unreachable;
+}
+
 // Open takes a current stack and adds the elements depth first search
 // Open and close get called in sequence
 // depth first search
@@ -302,9 +331,15 @@ pub fn open(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
         node.uuid = style.?.id.?;
     }
 
-    // const time = Vapor.nowMs();
     setUUID(current_open, node);
-    // open_time += Vapor.nowMs() - time;
+
+    node.hash = hashKey(node.uuid);
+
+    // Lookup previous hash
+    if (prev_style_hashes.get(node.hash)) |old_hash| {
+        node.prev_style_hash = old_hash;
+    }
+
     return node;
 }
 
@@ -711,6 +746,7 @@ pub fn buildClassString(
     hash_a: u32,
     hash_i: u32,
     hash_t: u32,
+    additonal_classes: ?[]const u8,
 ) !void {
     const hashes = [8]u32{ 0, hash_l, hash_p, hash_m, hash_v, hash_a, hash_i, hash_t };
     const old = current_open.style_hashes;
@@ -814,7 +850,8 @@ pub fn buildClassString(
     //     global_classes[6],
     //     global_classes[7],
     // });
-    const full_class = Vapor.arena(.persist).dupe(u8, writer.buffer[0..writer.pos]) catch |err| {
+
+    const full_class = std.fmt.allocPrint(Vapor.arena(.persist), "{s}{s}", .{ writer.buffer[0..writer.pos], additonal_classes orelse "" }) catch |err| {
         Vapor.printlnErr("Could not create string {any} To many classes have been created\n", .{err});
         return err;
     };
@@ -825,106 +862,6 @@ pub fn buildClassString(
     current_open.class = full_class;
 }
 
-// pub fn buildClassString(
-//     field_ptrs: *const PackedFieldPtrs,
-//     current_open: *UINode,
-//     hash_l: u32,
-//     hash_p: u32,
-//     hash_m: u32,
-//     hash_v: u32,
-//     hash_a: u32,
-//     hash_i: u32,
-//     hash_t: u32,
-// ) !void {
-//     var writer: Writer = undefined;
-//     var writer_buf: [512]u8 = undefined;
-//     writer.init(&writer_buf);
-//     const old_element_styles = element_style_hash_map.get(current_open.hash);
-//
-//     // var current_classes: ?[7][]const u8 = class_map.get(current_open.hash);
-//
-//     if (current_open.class) |class| {
-//         writer.write(class) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//     }
-//
-//     if (field_ptrs.layout_ptr != null and hash_l > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_l, "lay");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[1] = hash_l;
-//         try compareClobber(old_element_styles, hash_l, 1, .layout);
-//     }
-//
-//     if (field_ptrs.position_ptr != null and hash_p > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_p, "pos");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[2] = hash_p;
-//         try compareClobber(old_element_styles, hash_p, 2, .position);
-//     }
-//
-//     if (field_ptrs.margins_paddings_ptr != null and hash_m > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_m, "mapa");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[3] = hash_m;
-//         try compareClobber(old_element_styles, hash_m, 3, .margin_padding);
-//     }
-//
-//     if (field_ptrs.visual_ptr != null and hash_v > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_v, "vis");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[4] = hash_v;
-//         try compareClobber(old_element_styles, hash_v, 4, .visual);
-//     }
-//
-//     if (field_ptrs.animations_ptr != null and hash_a > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_a, "anim");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[5] = hash_a;
-//         try compareClobber(old_element_styles, hash_a, 5, .animation);
-//     }
-//
-//     if (field_ptrs.interactive_ptr != null and hash_i > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_i, "intr");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[6] = hash_i;
-//         try compareClobber(old_element_styles, hash_i, 6, .interactive);
-//     }
-//
-//     if (field_ptrs.transforms_ptr != null and hash_t > 0) {
-//         const common = KeyGenerator.generateHashKey(&buf, hash_t, "tran");
-//         writer.write(common) catch return error.CouldNotAllocate;
-//         writer.writeByte(' ') catch return error.CouldNotAllocate;
-//         global_classes[7] = hash_t;
-//         try compareClobber(old_element_styles, hash_t, 7, .transform);
-//     }
-//
-//     if (writer.buffer[0..writer.pos].len == 0) return;
-//
-//     // We store the new class hash and list inside the element_style_hash_map
-//     // and clobber the old class if it exists this way we ensure each element has only one
-//     try element_style_hash_map.put(current_open.hash, .{
-//         global_classes[0],
-//         global_classes[1],
-//         global_classes[2],
-//         global_classes[3],
-//         global_classes[4],
-//         global_classes[5],
-//         global_classes[6],
-//         global_classes[7],
-//     });
-//     const full_class = Vapor.arena(.frame).dupe(u8, writer.buffer[0..writer.pos]) catch |err| {
-//         Vapor.printlnErr("Could not create string {any} To many classes have been created\n", .{err});
-//         return err;
-//     };
-//     current_open.class = full_class;
-// }
-
 // TODO: Hashing the value is slow, we need to create a better hashmap system
 // running a comparison on each st.mem.bytes is expensive
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -933,7 +870,9 @@ pub fn buildClassString(
 /// NOTE: creating pointers to anyhting and then hashing will corrupt the memory, sicne the pointers are not static,
 /// they will appear different during runtime, for  hashing it should always be a static pointer
 pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
-    return Configuration.configure(ui_ctx, elem_decl);
+    const ui_node = Configuration.configure(ui_ctx, elem_decl);
+    captureHash(ui_node);
+    return ui_node;
     // const stack = ui_ctx.stack orelse unreachable;
     // const current_open = stack.ptr orelse unreachable;
     // const parent = current_open.parent orelse unreachable;
