@@ -67,17 +67,6 @@ pub const Layer = struct {
         // Adjust this call based on how your Color struct works (e.g. .format or .toCss)
         try self.color.toCss(writer);
     }
-
-    // NEW: for text-shadow (no spread, no inset)
-    pub fn writeTextShadowCss(self: Layer, writer: *Writer) !void {
-        try writer.writeI16(self.x);
-        try writer.write("px ");
-        try writer.writeI16(self.y);
-        try writer.write("px ");
-        try writer.writeU16(self.blur);
-        try writer.write("px ");
-        try self.color.toCss(writer);
-    }
 };
 
 // -- 2. The Main Shadow Container --

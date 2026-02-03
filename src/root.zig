@@ -129,24 +129,4 @@ pub const Form = PureComponent.Form;
 pub const Label = PureComponentClose.Label;
 pub const SubmitButton = PureComponent.SubmitButton;
 
-const std = @import("std");
-const Vapor = @import("Vapor.zig");
-pub fn log(
-    comptime level: std.log.Level,
-    comptime scope: @Type(.EnumLiteral),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    if (Vapor.isWasi and Vapor.build_options.enable_debug) {
-        const allocator = Vapor.arena(.persist);
-        const buf = std.fmt.allocPrint(allocator, format, args) catch return;
-        const buf_with_src = std.fmt.allocPrint(allocator, "[{any}] [{any}] {s}", .{ level, scope, buf[0..] }) catch return;
-        _ = Vapor.Wasm.consoleLogWasm(buf_with_src.ptr, buf_with_src.len);
-        Vapor.arena(.persist).free(buf_with_src);
-        Vapor.arena(.persist).free(buf);
-    } else if (!Vapor.isWasi) {
-        std.debug.print(format, args);
-    }
-    // Implementation that calls a 'jsLog' extern function
-    // similar to the panic handler above.
-}
+

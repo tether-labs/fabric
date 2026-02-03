@@ -77,8 +77,6 @@ pub fn fromDayMonthYear(day: u8, month: u8, year: i32) DateTime {
     };
 }
 
-
-
 pub fn fromMonth(month: u8, year: i32) DateTime {
     return .{
         .year = year,

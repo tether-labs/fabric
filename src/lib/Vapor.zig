@@ -1,9 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
+pub var isGenerated = !isWasi;
 pub const isWasi = builtin.target.cpu.arch == .wasm32;
 pub const debug = builtin.mode == .Debug;
 // We cant use bools since they get recompiled each time, hence we use the builtin target
-pub var isGenerated = !isWasi;
 const types = @import("types.zig");
 const UIContext = @import("UITree.zig");
 const PureTree = @import("PureTree.zig");

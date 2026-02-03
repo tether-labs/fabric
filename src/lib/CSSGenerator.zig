@@ -10,6 +10,7 @@ const Writer = @import("Writer.zig");
 const KeyGenerator = @import("Key.zig").KeyGenerator;
 const Types = @import("types.zig");
 const Packer = @import("Packer.zig");
+const Edges = @import("Edges.zig").Edges;
 
 const Generator = @This();
 buffer: [8192 * 12]u8 = undefined,
@@ -205,6 +206,7 @@ pub fn writeAllStyles(gen: *Generator) void {
 
     writeCommonStyleGroup(gen, allocator, &Packer.layouts, "lay", &key_buf, writeLayout, null);
     writeCommonStyleGroup(gen, allocator, &Packer.visuals, "vis", &key_buf, writeVisual, null);
+
     writeCommonStyleGroup(gen, allocator, &Packer.positions, "pos", &key_buf, writePos, null);
     writeCommonStyleGroup(gen, allocator, &Packer.margins_paddings, "mapa", &key_buf, writeMarginPaddings, null);
     writeCommonStyleGroup(gen, allocator, &Packer.transforms, "tran", &key_buf, writeTransform, null);
