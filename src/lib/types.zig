@@ -1608,6 +1608,15 @@ pub const Transform = struct {
         }
     }
 
+    pub fn distAndScale(dir: Transform.Direction, dist: f16, scale_size: f16) Transform {
+        switch (dir) {
+            .up => return .{ .trans_y = -dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
+            .down => return .{ .trans_y = dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
+            .left => return .{ .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateX, .scale }, .size_type = .px },
+            .right => return .{ .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateX, .scale }, .size_type = .px },
+        }
+    }
+
     pub fn down(dist: f16) Transform {
         return .{ .trans_y = dist, .type = &.{.translateY}, .size_type = .px };
     }
@@ -2483,7 +2492,7 @@ pub const PackedShadow = packed struct {
     color: PackedColor = .{},
 };
 
-const SizeType = enum(u8) {
+pub const SizeType = enum(u8) {
     percent,
     deg,
     px,

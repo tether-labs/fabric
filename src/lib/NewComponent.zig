@@ -1208,7 +1208,7 @@ pub fn GenericBuilder(comptime state_type: types.StateType, comptime returns_clo
             return new_self;
         }
 
-        pub fn transform(self: *const Self, value: types.Transform) Self {
+        pub fn transform(self: *const Self, value: ?types.Transform) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.transform = value;

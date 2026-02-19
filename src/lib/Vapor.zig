@@ -408,7 +408,7 @@ pub fn init(config: VaporConfig) void {
     dirty_nodes = std.array_list.Managed(*UINode).init(allocator);
     element_registry = std.AutoHashMap(u32, *Element).init(allocator);
 
-    action_log = Structures.BoundedArray(ErrorReport, 512).init(512) catch unreachable;
+    // action_log = Structures.BoundedArray(ErrorReport, 512).init(512) catch unreachable;
 
     UIContext.indexes = std.AutoHashMap(u32, usize).init(allocator);
     if (build_options.enable_debug) {
@@ -2956,258 +2956,263 @@ pub fn log(
     // similar to the panic handler above.
 }
 
-pub const StackFrameType = enum {
-    wasm,
-    js,
-    unknown,
-};
-
-pub const StackFrame = struct {
-    function: ?[]const u8 = null,
-    wasm_function_index: ?u32 = null,
-    wasm_offset: ?[]const u8 = null,
-    file: ?[]const u8 = null,
-    line: ?u32 = null,
-    column: ?u32 = null,
-    frame_type: StackFrameType = .unknown,
-    raw: ?[]const u8 = null,
-};
-
-pub const WasmError = struct {
-    type: []const u8,
-    message: []const u8,
-    is_wasm_trap: bool,
-    crash_site: ?StackFrame = null,
-    user_stack: []const StackFrame,
-
-    pub fn deinit(self: *WasmError, allocator: std.mem.Allocator) void {
-        allocator.free(self.user_stack);
-        allocator.free(self.full_stack);
-    }
-};
-
-pub fn parseWasmError(allocator: std.mem.Allocator, json_str: []const u8) !WasmError {
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
-    defer parsed.deinit();
-
-    const root = parsed.value.object;
-
-    const err_type = if (root.get("type")) |v| v.string else "RuntimeError";
-    const message = if (root.get("message")) |v| v.string else "unknown";
-    const is_wasm_trap = if (root.get("isWasmTrap")) |v| v.bool else false;
-
-    const crash_site = if (root.get("crashSite")) |v| blk: {
-        if (v == .null) break :blk null;
-        break :blk try parseStackFrame(v.object);
-    } else null;
-
-    const user_stack = if (root.get("userStack")) |v|
-        try parseStackArray(allocator, v.array)
-    else
-        try allocator.alloc(StackFrame, 0);
-
-    return WasmError{
-        .type = err_type,
-        .message = message,
-        .is_wasm_trap = is_wasm_trap,
-        .crash_site = crash_site,
-        .user_stack = user_stack,
-    };
-}
-
-fn parseStackFrame(obj: std.json.ObjectMap) !StackFrame {
-    const frame_type: StackFrameType = if (obj.get("type")) |v| blk: {
-        const s = v.string;
-        if (std.mem.eql(u8, s, "wasm")) break :blk .wasm;
-        if (std.mem.eql(u8, s, "js")) break :blk .js;
-        break :blk .unknown;
-    } else .unknown;
-
-    return StackFrame{
-        .function = if (obj.get("function")) |v| switch (v) {
-            .string => |s| s,
-            else => null,
-        } else null,
-        .wasm_function_index = if (obj.get("wasmFunctionIndex")) |v| switch (v) {
-            .integer => |i| @intCast(i),
-            else => null,
-        } else null,
-        .wasm_offset = if (obj.get("wasmOffset")) |v| switch (v) {
-            .string => |s| s,
-            else => null,
-        } else null,
-        .file = if (obj.get("file")) |v| switch (v) {
-            .string => |s| s,
-            else => null,
-        } else null,
-        .line = if (obj.get("line")) |v| switch (v) {
-            .integer => |i| @intCast(i),
-            else => null,
-        } else null,
-        .column = if (obj.get("column")) |v| switch (v) {
-            .integer => |i| @intCast(i),
-            else => null,
-        } else null,
-        .raw = if (obj.get("raw")) |v| switch (v) {
-            .string => |s| s,
-            else => null,
-        } else null,
-        .frame_type = frame_type,
-    };
-}
-
-fn parseStackArray(allocator: std.mem.Allocator, stack_array: std.json.Array) ![]const StackFrame {
-    var frames = try allocator.alloc(StackFrame, stack_array.items.len);
-    for (stack_array.items, 0..) |item, i| {
-        frames[i] = try parseStackFrame(item.object);
-    }
-    return frames;
-}
-
-const EventData = struct {
-    id: []const u8,
-};
-
-pub var trace_buffer: Structures.RingBuffer(TraceEvent, 128) = .{};
-
-pub const RequestContext = struct {
-    method: []const u8 = "GET",
-    url: []const u8 = "",
-    status_code: ?u32 = null,
-    body: ?[]const u8 = null,
-    elapsed_ms: ?i64 = null,
-};
-
-pub const TraceEvent = struct {
-    timestamp: i64,
-    event_type: enum { click, dblclick, hover, mousemove, input, scroll, state_change },
-    element_id: ?[]const u8,
-    serialized_args: []const u8,
-};
-
-// ============================================================================
-// Error Report (inbound payload from the client)
-// ============================================================================
-
-pub const ErrorReport = struct {
-    element_id: ?[]const u8 = null,
-    args: ?[]const u8 = null,
-    wasmError: WasmError,
-    events: []const TraceEvent,
-    timestamp: i64,
-
-    // New context fields
-    route: ?[]const u8 = null,
-    url: ?[]const u8 = null,
-    session_id: ?[]const u8 = null,
-    user_agent: ?[]const u8 = null,
-    environment: ?[]const u8 = null,
-    release: ?[]const u8 = null,
-    user_id: ?[]const u8 = null,
-
-    // Optional: the fetch call that triggered the error (if any)
-    request_context: ?RequestContext = null,
-};
-
-// Append list for important events (flush periodically)
-var action_log: Structures.BoundedArray(ErrorReport, 512) = .{};
+// pub const StackFrameType = enum {
+//     wasm,
+//     js,
+//     unknown,
+// };
+//
+// pub const StackFrame = struct {
+//     function: ?[]const u8 = null,
+//     wasm_function_index: ?u32 = null,
+//     wasm_offset: ?[]const u8 = null,
+//     file: ?[]const u8 = null,
+//     line: ?u32 = null,
+//     column: ?u32 = null,
+//     frame_type: StackFrameType = .unknown,
+//     raw: ?[]const u8 = null,
+// };
+//
+// pub const WasmError = struct {
+//     type: []const u8,
+//     message: []const u8,
+//     is_wasm_trap: bool,
+//     crash_site: ?StackFrame = null,
+//     user_stack: []const StackFrame,
+//
+//     pub fn deinit(self: *WasmError, allocator: std.mem.Allocator) void {
+//         allocator.free(self.user_stack);
+//         allocator.free(self.full_stack);
+//     }
+// };
+//
+// pub fn parseWasmError(allocator: std.mem.Allocator, json_str: []const u8) !WasmError {
+//     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+//     defer parsed.deinit();
+//
+//     const root = parsed.value.object;
+//
+//     const err_type = if (root.get("type")) |v| v.string else "RuntimeError";
+//     const message = if (root.get("message")) |v| v.string else "unknown";
+//     const is_wasm_trap = if (root.get("isWasmTrap")) |v| v.bool else false;
+//
+//     const crash_site = if (root.get("crashSite")) |v| blk: {
+//         if (v == .null) break :blk null;
+//         break :blk try parseStackFrame(v.object);
+//     } else null;
+//
+//     const user_stack = if (root.get("userStack")) |v|
+//         try parseStackArray(allocator, v.array)
+//     else
+//         try allocator.alloc(StackFrame, 0);
+//
+//     return WasmError{
+//         .type = err_type,
+//         .message = message,
+//         .is_wasm_trap = is_wasm_trap,
+//         .crash_site = crash_site,
+//         .user_stack = user_stack,
+//     };
+// }
+//
+// fn parseStackFrame(obj: std.json.ObjectMap) !StackFrame {
+//     const frame_type: StackFrameType = if (obj.get("type")) |v| blk: {
+//         const s = v.string;
+//         if (std.mem.eql(u8, s, "wasm")) break :blk .wasm;
+//         if (std.mem.eql(u8, s, "js")) break :blk .js;
+//         break :blk .unknown;
+//     } else .unknown;
+//
+//     return StackFrame{
+//         .function = if (obj.get("function")) |v| switch (v) {
+//             .string => |s| s,
+//             else => null,
+//         } else null,
+//         .wasm_function_index = if (obj.get("wasmFunctionIndex")) |v| switch (v) {
+//             .integer => |i| @intCast(i),
+//             else => null,
+//         } else null,
+//         .wasm_offset = if (obj.get("wasmOffset")) |v| switch (v) {
+//             .string => |s| s,
+//             else => null,
+//         } else null,
+//         .file = if (obj.get("file")) |v| switch (v) {
+//             .string => |s| s,
+//             else => null,
+//         } else null,
+//         .line = if (obj.get("line")) |v| switch (v) {
+//             .integer => |i| @intCast(i),
+//             else => null,
+//         } else null,
+//         .column = if (obj.get("column")) |v| switch (v) {
+//             .integer => |i| @intCast(i),
+//             else => null,
+//         } else null,
+//         .raw = if (obj.get("raw")) |v| switch (v) {
+//             .string => |s| s,
+//             else => null,
+//         } else null,
+//         .frame_type = frame_type,
+//     };
+// }
+//
+// fn parseStackArray(allocator: std.mem.Allocator, stack_array: std.json.Array) ![]const StackFrame {
+//     var frames = try allocator.alloc(StackFrame, stack_array.items.len);
+//     for (stack_array.items, 0..) |item, i| {
+//         frames[i] = try parseStackFrame(item.object);
+//     }
+//     return frames;
+// }
+//
+// const EventData = struct {
+//     id: []const u8,
+// };
+//
+// pub var trace_buffer: Structures.RingBuffer(TraceEvent, 128) = .{};
+//
+// pub const RequestContext = struct {
+//     method: []const u8 = "GET",
+//     url: []const u8 = "",
+//     status_code: ?u32 = null,
+//     body: ?[]const u8 = null,
+//     elapsed_ms: ?i64 = null,
+// };
+//
+// pub const TraceEvent = struct {
+//     timestamp: i64,
+//     event_type: enum { click, dblclick, hover, mousemove, input, scroll, state_change },
+//     element_id: ?[]const u8,
+//     serialized_args: []const u8,
+// };
+//
+// // ============================================================================
+// // Error Report (inbound payload from the client)
+// // ============================================================================
+//
+// pub const ErrorReport = struct {
+//     element_id: ?[]const u8 = null,
+//     args: ?[]const u8 = null,
+//     wasmError: WasmError,
+//     events: []const TraceEvent,
+//     timestamp: i64,
+//
+//     // New context fields
+//     route: ?[]const u8 = null,
+//     url: ?[]const u8 = null,
+//     session_id: ?[]const u8 = null,
+//     user_agent: ?[]const u8 = null,
+//     environment: ?[]const u8 = null,
+//     release: ?[]const u8 = null,
+//     user_id: ?[]const u8 = null,
+//
+//     // Optional: the fetch call that triggered the error (if any)
+//     request_context: ?RequestContext = null,
+// };
+//
+// // Append list for important events (flush periodically)
+// var action_log: Structures.BoundedArray(ErrorReport, 512) = .{};
+//
+// export fn recordState(err_str: [*:0]u8, event_str: ?[*:0]u8) void {
+//     if (isWasi) {
+//         const json_err = std.mem.span(err_str);
+//         const parsed = parseWasmError(Vapor.arena(.frame), json_err) catch |err| {
+//             std.log.err("Error could not parse json {any}\n", .{err});
+//             return;
+//         };
+//         var ids: [][]const u8 = &.{};
+//         var ui_node: ?*UINode = null;
+//         var event_data: ?EventData = null;
+//
+//         if (event_str) |event| {
+//             const json_event = std.mem.span(event);
+//             event_data = Vapor.Kit.Json.parse(EventData, json_event, .frame) catch |err| {
+//                 std.log.err("Error could not parse json {any}\n", .{err});
+//                 return;
+//             };
+//             ids = queryComponentIds(.CtxButton) catch |err| {
+//                 std.log.err("Error could not query component {any}\n", .{err});
+//                 return;
+//             };
+//             for (ids) |id| {
+//                 if (!std.mem.eql(u8, id, event_data.?.id)) continue;
+//                 ui_node = queryByUUID(id) catch |err| {
+//                     std.log.err("Error could not query component {any}\n", .{err});
+//                     return;
+//                 };
+//             }
+//         }
+//
+//         const events = trace_buffer.snapshotAlloc(Vapor.arena(.frame)) catch return;
+//         defer {
+//             for (events) |event| {
+//                 if (event.element_id) |element_id| {
+//                     allocator_global.free(element_id);
+//                 }
+//             }
+//         }
+//
+//         if (ui_node) |node| {
+//             switch (node.type) {
+//                 .CtxButton => {
+//                     const ctx_callback = ctx_callback_registry.get(hashKey(ui_node.?.uuid)) orelse return;
+//                     const argsFn = ctx_callback.data.argsFn orelse return;
+//                     const json = @call(.auto, argsFn, .{&ctx_callback.data});
+//                     const event = event_data orelse return;
+//                     const record = ErrorReport{
+//                         .element_id = event.id,
+//                         .args = json,
+//                         .wasmError = parsed,
+//                         .events = events,
+//                         .timestamp = std.time.microTimestamp(),
+//                         .environment = "dev",
+//                         .route = Vapor.Kit.getWindowPath(),
+//                         .url = Vapor.Kit.getWindowPath(),
+//                     };
+//                     const json_record = std.json.Stringify.valueAlloc(Vapor.arena(.frame), record, .{}) catch unreachable;
+//                     Vapor.Kit.Fetch.fetch("http://localhost:8080/recordError", .{
+//                         .method = .POST,
+//                         .body = json_record,
+//                     }).handle(handleRecordError);
+//                 },
+//                 else => {},
+//             }
+//         } else {
+//             const record = ErrorReport{
+//                 .element_id = null,
+//                 .args = null,
+//                 .wasmError = parsed,
+//                 .events = events,
+//                 .timestamp = std.time.microTimestamp(),
+//                 .environment = "dev",
+//                 .route = Vapor.Kit.getWindowPath(),
+//                 .url = Vapor.Kit.getWindowPath(),
+//             };
+//
+//             // const json =
+//             //     \\{"element_id":"test","args":"{}","wasmError":{"type":"RuntimeError","message":"unreachable","is_wasm_trap":true,"crash_site":null,"user_stack":[]},"events":[],"timestamp":1771446261518000}
+//             // ;
+//             const json_record = std.json.Stringify.valueAlloc(Vapor.arena(.frame), record, .{}) catch unreachable;
+//             Vapor.Kit.Fetch.fetch("http://localhost:8080/recordError", .{
+//                 .method = .POST,
+//                 .body = json_record,
+//             }).handle(handleRecordError);
+//         }
+//     }
+// }
+//
+// fn handleRecordError(response: Vapor.Kit.Response) void {
+//     switch (response) {
+//         .Ok => |ok| {
+//             _ = ok;
+//             std.log.err("Recorded Error\n", .{});
+//         },
+//         .Err => |err| {
+//             std.log.err("Error: {s}\n", .{err.message});
+//         },
+//     }
+// }
 
 export fn recordState(err_str: [*:0]u8, event_str: ?[*:0]u8) void {
-    if (isWasi) {
-        const json_err = std.mem.span(err_str);
-        const parsed = parseWasmError(Vapor.arena(.frame), json_err) catch |err| {
-            std.log.err("Error could not parse json {any}\n", .{err});
-            return;
-        };
-        var ids: [][]const u8 = &.{};
-        var ui_node: ?*UINode = null;
-        var event_data: ?EventData = null;
-
-        if (event_str) |event| {
-            const json_event = std.mem.span(event);
-            event_data = Vapor.Kit.Json.parse(EventData, json_event, .frame) catch |err| {
-                std.log.err("Error could not parse json {any}\n", .{err});
-                return;
-            };
-            ids = queryComponentIds(.CtxButton) catch |err| {
-                std.log.err("Error could not query component {any}\n", .{err});
-                return;
-            };
-            for (ids) |id| {
-                if (!std.mem.eql(u8, id, event_data.?.id)) continue;
-                ui_node = queryByUUID(id) catch |err| {
-                    std.log.err("Error could not query component {any}\n", .{err});
-                    return;
-                };
-            }
-        }
-
-        const events = trace_buffer.snapshotAlloc(Vapor.arena(.frame)) catch return;
-        defer {
-            for (events) |event| {
-                if (event.element_id) |element_id| {
-                    allocator_global.free(element_id);
-                }
-            }
-        }
-
-        if (ui_node) |node| {
-            switch (node.type) {
-                .CtxButton => {
-                    const ctx_callback = ctx_callback_registry.get(hashKey(ui_node.?.uuid)) orelse return;
-                    const argsFn = ctx_callback.data.argsFn orelse return;
-                    const json = @call(.auto, argsFn, .{&ctx_callback.data});
-                    const event = event_data orelse return;
-                    const record = ErrorReport{
-                        .element_id = event.id,
-                        .args = json,
-                        .wasmError = parsed,
-                        .events = events,
-                        .timestamp = std.time.microTimestamp(),
-                        .environment = "dev",
-                        .route = Vapor.Kit.getWindowPath(),
-                        .url = Vapor.Kit.getWindowPath(),
-                    };
-                    const json_record = std.json.Stringify.valueAlloc(Vapor.arena(.frame), record, .{}) catch unreachable;
-                    Vapor.Kit.Fetch.fetch("http://localhost:8080/recordError", .{
-                        .method = .POST,
-                        .body = json_record,
-                    }).handle(handleRecordError);
-                },
-                else => {},
-            }
-        } else {
-            const record = ErrorReport{
-                .element_id = null,
-                .args = null,
-                .wasmError = parsed,
-                .events = events,
-                .timestamp = std.time.microTimestamp(),
-                .environment = "dev",
-                .route = Vapor.Kit.getWindowPath(),
-                .url = Vapor.Kit.getWindowPath(),
-            };
-
-            // const json =
-            //     \\{"element_id":"test","args":"{}","wasmError":{"type":"RuntimeError","message":"unreachable","is_wasm_trap":true,"crash_site":null,"user_stack":[]},"events":[],"timestamp":1771446261518000}
-            // ;
-            const json_record = std.json.Stringify.valueAlloc(Vapor.arena(.frame), record, .{}) catch unreachable;
-            Vapor.Kit.Fetch.fetch("http://localhost:8080/recordError", .{
-                .method = .POST,
-                .body = json_record,
-            }).handle(handleRecordError);
-        }
-    }
-}
-
-fn handleRecordError(response: Vapor.Kit.Response) void {
-    switch (response) {
-        .Ok => |ok| {
-            _ = ok;
-            std.log.err("Recorded Error\n", .{});
-        },
-        .Err => |err| {
-            std.log.err("Error: {s}\n", .{err.message});
-        },
-    }
+    _ = err_str;
+    _ = event_str;
 }
