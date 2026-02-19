@@ -223,6 +223,11 @@ pub const Element = struct {
         };
     }
 
+    pub fn replaceRange(self: *Element, start: usize, end: usize, replacement: []const u8) void {
+        const id = self._get_id() orelse return;
+        Wasm.replaceRangeWasm(id.ptr, id.len, start, end, replacement.ptr, replacement.len);
+    }
+
     pub fn mutate(self: *Element, attribute: []const u8, value: u32) void {
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
@@ -298,6 +303,57 @@ pub const Element = struct {
             return;
         };
         mutateDomElementStyleString(id.ptr, id.len, attribute.ptr, attribute.len, value.ptr, value.len);
+    }
+
+    const Unit = enum {
+        px,
+        percent,
+        em,
+        rem,
+        vw,
+        vh,
+        deg,
+        none,
+    };
+
+    const Sizing = struct {
+        value: f32,
+        unit: Unit,
+        pub fn toString(self: *const Sizing) []const u8 {
+            return Vapor.fmtln("{d}{s}", .{ self.value, @tagName(self.unit) });
+        }
+    };
+
+    const Attributes = union(enum) {
+        id: []const u8,
+        class: []const u8,
+        style: []const u8,
+        src: []const u8,
+        alt: []const u8,
+        href: []const u8,
+        height: Sizing,
+        width: Sizing,
+        top: Sizing,
+        left: Sizing,
+        bottom: Sizing,
+        right: Sizing,
+    };
+
+    pub fn mutateAttribute(self: *Element, attribute: Attributes) void {
+        switch (attribute) {
+            .id => self.mutateDomElementString("id", attribute.id),
+            .class => self.mutateDomElementString("class", attribute.class),
+            .style => self.mutateDomElementString("style", attribute.style),
+            .src => self.mutateDomElementString("src", attribute.src),
+            .alt => self.mutateDomElementString("alt", attribute.alt),
+            .href => self.mutateDomElementString("href", attribute.href),
+            .height => self.mutateStyleString("height", attribute.height.toString()),
+            .width => self.mutateStyleString("width", attribute.width.toString()),
+            .top => self.mutateStyleString("top", attribute.top.toString()),
+            .left => self.mutateStyleString("left", attribute.left.toString()),
+            .bottom => self.mutateStyleString("bottom", attribute.bottom.toString()),
+            .right => self.mutateStyleString("right", attribute.right.toString()),
+        }
     }
 
     pub fn mutateDomElementString(self: *Element, attribute: []const u8, value: []const u8) void {

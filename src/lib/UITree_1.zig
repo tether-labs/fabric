@@ -106,8 +106,6 @@ pub const UINode = struct {
     name: ?[]const u8 = null,
     accessibility: bool = false,
     direction: Direction = .row,
-    column_count: ?u8 = null,
-    spacing: ?u8 = null,
 
     first_child: ?*UINode = null, // "child" in React terms
     next_sibling: ?*UINode = null, // "sibling" in React terms
@@ -115,7 +113,6 @@ pub const UINode = struct {
     hover_style_fields: ?*[]const types.StyleFields = null,
     inlineStyle: ?[]const u8 = null,
     style_hashes: [8]u32 = .{ 0, 0, 0, 0, 0, 0, 0, 0 }, // Direct access, no hashmap
-    can_have_children: bool = true,
 
     // nodes_flat_index: usize = 0,
     // tooltip: ?types.Tooltip = null,
@@ -239,7 +236,6 @@ pub fn deinit(_: *UIContext) void {
 }
 
 pub fn stackRegister(ui_ctx: *UIContext, ui_node: *UINode) !void {
-    uuid_depth += 1;
     Vapor.frame_arena.incrementItemCount();
     const item: *Item = try ui_ctx.memory_pool.create();
     const current_stack = ui_ctx.stack;
@@ -272,6 +268,7 @@ pub var uuid_depth: usize = 0;
 var current_tree: usize = 0;
 pub var indexes: std.AutoHashMap(u32, usize) = undefined;
 fn setUUID(parent: *UINode, child: *UINode) void {
+    uuid_depth += 1;
     // Set the keyGenerator count
     const index: usize = parent.children_count;
     KeyGenerator.setComponentCount(index);
@@ -322,7 +319,6 @@ pub fn open(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
     const current_open = stack.ptr orelse unreachable;
     var node = try ui_ctx.init(current_open, elem_decl.elem_type);
     node.level = elem_decl.level;
-    node.can_have_children = elem_decl.can_have_children;
 
     current_open.appendChild(node);
     ui_ctx.stackRegister(node) catch |err| {
@@ -344,10 +340,6 @@ pub fn open(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
         node.prev_style_hash = old_hash;
     }
 
-    if (!node.can_have_children) {
-        ui_ctx.close();
-    }
-
     return node;
 }
 
@@ -359,13 +351,12 @@ pub fn openUnattached(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
     node.level = elem_decl.level;
 
     current_open.appendChild(node);
-    // if (elem_decl.elem_type == .FlexBox) {
-    uuid_depth += 1;
-    //     ui_ctx.stackRegister(node) catch |err| {
-    //         Vapor.printlnSrcErr("Could not register node {any}", .{err}, @src());
-    //         return err;
-    //     };
-    // }
+    if (elem_decl.elem_type == .FlexBox) {
+        ui_ctx.stackRegister(node) catch |err| {
+            Vapor.printlnSrcErr("Could not register node {any}", .{err}, @src());
+            return err;
+        };
+    }
 
     const style = elem_decl.style;
     if (style != null and style.?.id != null) {
@@ -380,8 +371,6 @@ pub fn openUnattached(ui_ctx: *UIContext, elem_decl: ElemDecl) !*UINode {
     if (prev_style_hashes.get(node.hash)) |old_hash| {
         node.prev_style_hash = old_hash;
     }
-
-    uuid_depth -= 1;
 
     return node;
 }
@@ -917,7 +906,6 @@ pub fn configureByNode(_: *UIContext, node: ?*UINode, elem_decl: ElemDecl) *UINo
     captureHash(ui_node);
     return ui_node;
 }
-
 pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     const ui_node = Configuration.configure(ui_ctx, elem_decl);
     captureHash(ui_node);
@@ -1521,11 +1509,11 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
 // close is breadth post order first
 pub fn close(ui_ctx: *UIContext) void {
     // const time = Vapor.nowMs();
-    if (uuid_depth > 0) {
-        uuid_depth -= 1;
-    } else {
-        Vapor.printlnSrcErr("Depth is negative {}", .{uuid_depth}, @src());
-    }
+    // if (uuid_depth > 0) {
+    //     uuid_depth -= 1;
+    // } else {
+    //     Vapor.printlnSrcErr("Depth is negative {}", .{uuid_depth}, @src());
+    // }
     ui_ctx.stackPop();
 }
 

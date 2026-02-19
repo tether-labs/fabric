@@ -45,6 +45,7 @@ pub const PropSet = struct {
     blur: ?f32 = null,
     brightness: ?f32 = null,
     saturate: ?f32 = null,
+    strokeDashoffset: ?f32 = null,
 };
 
 /// Sets multiple properties at once using struct syntax
@@ -186,6 +187,7 @@ fn getDefaultValue(prop_type: AnimationType) f32 {
 
         // None/unknown
         .none, .backgroundColor, .textShadow => 0,
+        .strokeDashoffset => 0,
     };
 }
 
@@ -237,6 +239,7 @@ pub const AnimationType = enum(u8) {
     // NEW: Text shadow for glitch effects
     textShadow, // Offset X of text shadow
     // For chromatic aberration, you'd animate multiple shadows
+    strokeDashoffset,
 
     pub fn isTransform(self: AnimationType) bool {
         return switch (self) {
@@ -289,6 +292,7 @@ pub const AnimationType = enum(u8) {
             .saturate => "saturate",
             .backgroundColor => "background-color",
             .textShadow => "text-shadow", // Will need special handling
+            .strokeDashoffset => "stroke-dashoffset",
         };
     }
 

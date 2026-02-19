@@ -16,6 +16,8 @@ const onCreateNode = @import("Hooks.zig").onCreateNode;
 const Shadow = @import("Shadow.zig");
 const Accessibility = @import("Accessibility.zig").Accessibility;
 const Edges = @import("Edges.zig").Edges;
+const GenericBuilder = @import("NewComponent.zig").GenericBuilder;
+const serializeArgs = utils.serializeArgs;
 
 pub fn Builder(comptime state_type: types.StateType) type {
     return struct {
@@ -165,19 +167,31 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 Vapor.printlnSrcErr("LifeCycle open could not allocate {any}\n", .{error.CouldNotAllocate}, @src());
                 unreachable;
             };
+
             const Args = @TypeOf(args);
             const Closure = struct {
+                id: []const u8,
                 arguments: Args,
-                run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+                run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn, .argsFn = argsFn } },
                 fn runFn(action: *Vapor.Action) void {
                     const run_node: *Vapor.Node = @fieldParentPtr("data", action);
                     const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
                     @call(.auto, func, closure.arguments);
+
+                    Vapor.trace_buffer.push(.{
+                        .timestamp = std.time.microTimestamp(),
+                        .event_type = .click,
+                        .element_id = Vapor.allocator_global.dupe(u8, closure.id) catch "<failed>",
+                        .serialized_args = serializeArgs(Vapor.arena(.persist), closure.arguments, .{}) catch "<failed>",
+                    });
                 }
-                fn deinitFn(_: *Vapor.Node) void {
-                    // _ = @alignCast(@fieldParentPtr("run_node", node));
-                    // Vapor.allocator_global.destroy(closure);
+                fn argsFn(action: *Vapor.Action) []const u8 {
+                    const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+                    const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+                    return serializeArgs(Vapor.arena(.frame), closure.arguments, .{}) catch
+                        "\"<serialization failed>\"";
                 }
+                fn deinitFn(_: *Vapor.Node) void {}
             };
 
             const closure = Vapor.arena(.frame).create(Closure) catch |err| {
@@ -185,6 +199,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 unreachable;
             };
             closure.* = .{
+                .id = ui_node.uuid,
                 .arguments = args,
             };
 
@@ -906,10 +921,9 @@ pub fn Builder(comptime state_type: types.StateType) type {
         }
 
         pub fn newShadow(self: *const Self, value: ?Shadow) Self {
-            if (value == null) return self.*;
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
-            visual.new_shadow = value.?;
+            visual.new_shadow = value;
             new_self._visual = visual;
             return new_self;
         }
@@ -1237,7 +1251,245 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 }
             }
 
+            // Vapor.LifeCycle.configure(elem_decl);
+            _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
+            return Vapor.LifeCycle.close({});
+        }
+
+        pub fn child(self: *const Self, item: anytype) void {
+            if (@TypeOf(item) == GenericBuilder(.pure, false)) {
+                var added_node: GenericBuilder(.pure, false) = item;
+                added_node._ui_node = item._ui_node;
+                added_node.end();
+            }
+
+            var mutable_style = Style{};
+            if (self._style) |style_ptr| {
+                mutable_style = style_ptr.*;
+            }
+            if (mutable_style.position == null) mutable_style.position = self._pos;
+            if (mutable_style.visual != null and self._visual != null) {
+                var visual = mutable_style.visual.?;
+                const _visual = self._visual.?;
+
+                if (_visual.background != null) visual.background = _visual.background;
+                if (_visual.fill != null) visual.fill = _visual.fill;
+                if (_visual.stroke != null) visual.stroke = _visual.stroke;
+                if (_visual.border != null) visual.border = _visual.border;
+                if (_visual.border_radius != null) visual.border_radius = _visual.border_radius;
+                if (_visual.border_thickness != null) visual.border_thickness = _visual.border_thickness;
+                if (_visual.border_color != null) visual.border_color = _visual.border_color;
+                if (_visual.text_color != null) visual.text_color = _visual.text_color;
+                if (_visual.font_size != null) visual.font_size = _visual.font_size;
+                if (_visual.font_weight != null) visual.font_weight = _visual.font_weight;
+                if (_visual.letter_spacing != null) visual.letter_spacing = _visual.letter_spacing;
+                if (_visual.line_height != null) visual.line_height = _visual.line_height;
+                if (_visual.font_size != null) visual.font_size = _visual.font_size;
+                if (_visual.opacity != null) visual.opacity = _visual.opacity;
+                if (_visual.ellipsis != null) visual.ellipsis = _visual.ellipsis;
+                if (_visual.shadow != null) visual.shadow = _visual.shadow;
+                if (_visual.cursor != null) visual.cursor = _visual.cursor;
+                if (self._edges != null) visual.edges = self._edges;
+
+                mutable_style.visual = visual;
+            } else if (self._visual) |_visual| {
+                mutable_style.visual = _visual;
+                mutable_style.visual.?.edges = self._edges;
+            }
+
+            if (mutable_style.interactive == null) mutable_style.interactive = self._interactive;
+            if (mutable_style.child_gap == null) mutable_style.child_gap = self._child_gap;
+            if (mutable_style.transform_origin == null) mutable_style.transform_origin = self._transform_origin;
+            if (mutable_style.padding == null) mutable_style.padding = self._padding;
+            if (mutable_style.flex_type == .default) mutable_style.flex_type = self._flex_type;
+            if (mutable_style.layout != null) {
+                if (self._layout) |_layout| {
+                    mutable_style.layout = _layout;
+                }
+            } else {
+                mutable_style.layout = self._layout;
+            }
+            if (mutable_style.margin == null) mutable_style.margin = self._margin;
+            if (mutable_style.size == null) mutable_style.size = self._size;
+            if (mutable_style.transition == null) {
+                mutable_style.transition = self._transition;
+            }
+            if (mutable_style.flex_wrap == null) mutable_style.flex_wrap = self._flex_wrap;
+            mutable_style.direction = self._direction;
+            if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
+
+            if (self._id) |_id| {
+                mutable_style.id = _id;
+
+                const ui_node = self._ui_node orelse unreachable;
+                const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
+                Vapor.ctx_callback_registry.put(hashKey(_id), kv.value) catch |err| {
+                    println("Button Function Registry {any}\n", .{err});
+                    unreachable;
+                };
+            }
+
+            if (self._class) |_class| {
+                mutable_style.style_id = _class;
+            }
+
+            const elem_decl = Vapor.ElementDecl{
+                .state_type = _state_type,
+                .elem_type = self._elem_type,
+                .style = &mutable_style,
+                .aria_label = self._aria_label,
+                .animation_enter = self._animation_enter,
+                .animation_exit = self._animation_exit,
+                .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
+            };
+
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+                //     println("Button Function Registry {any}\n", .{err});
+                //     unreachable;
+                // };
+
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
             Vapor.LifeCycle.configure(elem_decl);
+            // return self;
+            return Vapor.LifeCycle.close({});
+        }
+
+        pub fn items(self: *const Self, nodes: anytype) void {
+            inline for (nodes) |kid| {
+                if (@TypeOf(kid) == GenericBuilder(.pure, false)) {
+                    var added_node: GenericBuilder(.pure, false) = kid;
+                    added_node._ui_node = kid._ui_node;
+                    added_node.end();
+                    // config(&added_node);
+                }
+            }
+
+            var mutable_style = Style{};
+            if (self._style) |style_ptr| {
+                mutable_style = style_ptr.*;
+            }
+            if (mutable_style.position == null) mutable_style.position = self._pos;
+            if (mutable_style.visual != null and self._visual != null) {
+                var visual = mutable_style.visual.?;
+                const _visual = self._visual.?;
+
+                if (_visual.background != null) visual.background = _visual.background;
+                if (_visual.fill != null) visual.fill = _visual.fill;
+                if (_visual.stroke != null) visual.stroke = _visual.stroke;
+                if (_visual.border != null) visual.border = _visual.border;
+                if (_visual.border_radius != null) visual.border_radius = _visual.border_radius;
+                if (_visual.border_thickness != null) visual.border_thickness = _visual.border_thickness;
+                if (_visual.border_color != null) visual.border_color = _visual.border_color;
+                if (_visual.text_color != null) visual.text_color = _visual.text_color;
+                if (_visual.font_size != null) visual.font_size = _visual.font_size;
+                if (_visual.font_weight != null) visual.font_weight = _visual.font_weight;
+                if (_visual.letter_spacing != null) visual.letter_spacing = _visual.letter_spacing;
+                if (_visual.line_height != null) visual.line_height = _visual.line_height;
+                if (_visual.font_size != null) visual.font_size = _visual.font_size;
+                if (_visual.opacity != null) visual.opacity = _visual.opacity;
+                if (_visual.ellipsis != null) visual.ellipsis = _visual.ellipsis;
+                if (_visual.shadow != null) visual.shadow = _visual.shadow;
+                if (_visual.cursor != null) visual.cursor = _visual.cursor;
+                if (self._edges != null) visual.edges = self._edges;
+
+                mutable_style.visual = visual;
+            } else if (self._visual) |_visual| {
+                mutable_style.visual = _visual;
+                mutable_style.visual.?.edges = self._edges;
+            }
+
+            if (mutable_style.interactive == null) mutable_style.interactive = self._interactive;
+            if (mutable_style.child_gap == null) mutable_style.child_gap = self._child_gap;
+            if (mutable_style.transform_origin == null) mutable_style.transform_origin = self._transform_origin;
+            if (mutable_style.padding == null) mutable_style.padding = self._padding;
+            if (mutable_style.flex_type == .default) mutable_style.flex_type = self._flex_type;
+            if (mutable_style.layout != null) {
+                if (self._layout) |_layout| {
+                    mutable_style.layout = _layout;
+                }
+            } else {
+                mutable_style.layout = self._layout;
+            }
+            if (mutable_style.margin == null) mutable_style.margin = self._margin;
+            if (mutable_style.size == null) mutable_style.size = self._size;
+            if (mutable_style.transition == null) {
+                mutable_style.transition = self._transition;
+            }
+            if (mutable_style.flex_wrap == null) mutable_style.flex_wrap = self._flex_wrap;
+            mutable_style.direction = self._direction;
+            if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
+
+            if (self._id) |_id| {
+                mutable_style.id = _id;
+
+                const ui_node = self._ui_node orelse unreachable;
+                const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
+                Vapor.ctx_callback_registry.put(hashKey(_id), kv.value) catch |err| {
+                    println("Button Function Registry {any}\n", .{err});
+                    unreachable;
+                };
+            }
+
+            if (self._class) |_class| {
+                mutable_style.style_id = _class;
+            }
+
+            const elem_decl = Vapor.ElementDecl{
+                .state_type = _state_type,
+                .elem_type = self._elem_type,
+                .style = &mutable_style,
+                .aria_label = self._aria_label,
+                .animation_enter = self._animation_enter,
+                .animation_exit = self._animation_exit,
+                .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
+            };
+
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+                //     println("Button Function Registry {any}\n", .{err});
+                //     unreachable;
+                // };
+
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
+            Vapor.LifeCycle.configure(elem_decl);
+            // return self;
             return Vapor.LifeCycle.close({});
         }
 
@@ -1298,10 +1550,6 @@ pub fn Builder(comptime state_type: types.StateType) type {
             mutable_style.direction = self._direction;
             if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
 
-            // if (self._tooltip) |_tooltip| {
-            //     elem_decl.tooltip = &_tooltip;
-            // }
-
             if (self._id) |_id| {
                 mutable_style.id = _id;
 
@@ -1352,7 +1600,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 }
             }
 
-            Vapor.LifeCycle.configure(elem_decl);
+            _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
             return Vapor.LifeCycle.close({});
         }
 

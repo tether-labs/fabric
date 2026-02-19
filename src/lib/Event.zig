@@ -72,6 +72,13 @@ pub fn number(evt: *Event) !i32 {
     return try std.fmt.parseInt(i32, num_str, 10);
 }
 
+pub fn int64(evt: *Event) !i64 {
+    const resp = getEventDataInput(evt.id);
+    const num_str = std.mem.span(resp);
+    if (num_str.len == 0) return error.EmptyString;
+    return try std.fmt.parseInt(i64, num_str, 10);
+}
+
 pub fn float(evt: *Event) !f32 {
     const resp = getEventDataInput(evt.id);
     const num_str = std.mem.span(resp);

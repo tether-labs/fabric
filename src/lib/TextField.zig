@@ -90,7 +90,8 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         pub fn TextArea() Self {
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
-                .elem_type = .Text,
+                .elem_type = .TextArea,
+                .can_have_children = false,
             };
 
             const ui_node = LifeCycle.open(elem_decl) orelse {
@@ -110,6 +111,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
                 .elem_type = .TextField,
+                .can_have_children = false,
             };
             const ui_node = LifeCycle.open(elem_decl) orelse {
                 Vapor.printlnSrcErr("{any}\n", .{error.CouldNotAllocate}, @src());
@@ -173,6 +175,14 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         ._text_field_params = .{ .float = .{} },
                     };
                 },
+                .date => {
+                    return Self{
+                        ._elem_type = .TextField,
+                        ._ui_node = ui_node,
+                        ._text_field_type = .date,
+                        ._text_field_params = .{ .date = .{} },
+                    };
+                },
                 else => {
                     Vapor.printlnSrcErr("Error: TextField only accepts valid types, Not valid: {any}", .{textfield_type}, @src());
                     unreachable;
@@ -218,6 +228,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                             .file => {
                                 text_field_params.file.default_ptr = value.ptr;
                                 text_field_params.file.default_len = value.len;
+                            },
+                            .date => {
+                                text_field_params.date.default_ptr = value.ptr;
+                                text_field_params.date.default_len = value.len;
                             },
                             else => {
                                 Vapor.printlnSrcErr("Error: Placeholder and TextField Type mismatch TextFieldType: {any} PlaceholderType: {any}", .{ self._text_field_type, V }, @src());
@@ -266,6 +280,49 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         pub fn fieldName(self: *const Self, name: []const u8) Self {
             var new_self: Self = self.*;
             new_self._name = name;
+            return new_self;
+        }
+
+        pub fn valStr(self: *const Self, value: []const u8) Self {
+            var new_self: Self = self.*;
+            if (self._elem_type != .TextField and self._elem_type != .TextArea) {
+                Vapor.printlnErr("bindValue only works on TextField", .{});
+                return self.*;
+            }
+
+            _ = self._ui_node orelse {
+                Vapor.printlnSrcErr("Node is null must ref() first, before setting onChange", .{}, @src());
+                unreachable;
+            };
+
+            switch (self._text_field_type) {
+                .password => {
+                    new_self._text_field_params.?.password.value_ptr = value.ptr;
+                    new_self._text_field_params.?.password.value_len = value.len;
+                },
+                .email => {
+                    new_self._text_field_params.?.email.value_ptr = value.ptr;
+                    new_self._text_field_params.?.email.value_len = value.len;
+                },
+                .string => {
+                    new_self._text_field_params.?.string.value_ptr = value.ptr;
+                    new_self._text_field_params.?.string.value_len = value.len;
+                },
+                .telephone => {
+                    new_self._text_field_params.?.telephone.value_ptr = value.ptr;
+                    new_self._text_field_params.?.telephone.value_len = value.len;
+                },
+                .date => {
+                    new_self._text_field_params.?.date.value_ptr = value.ptr;
+                    new_self._text_field_params.?.date.value_len = value.len;
+                },
+                else => {
+                    Vapor.printlnErr("NOT IMPLEMENTED", .{});
+                    return self.*;
+                },
+            }
+            // new_self._value = @ptrCast(@alignCast(value));
+
             return new_self;
         }
 
@@ -354,6 +411,14 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                     }
                     new_self._text_field_params.?.float.value = value.*;
                 },
+                .date => {
+                    if (@TypeOf(value.*) != []const u8) {
+                        Vapor.printlnErr("val and TextField type mismatch", .{});
+                        return self.*;
+                    }
+                    new_self._text_field_params.?.date.value_ptr = value.ptr;
+                    new_self._text_field_params.?.date.value_len = value.len;
+                },
                 else => {
                     Vapor.printlnErr("NOT IMPLEMENTED", .{});
                     return self.*;
@@ -397,7 +462,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
                             value_type.* = evt.text();
                         }
-                    }.updateText, value) catch |err| {
+                    }.updateText, .{value}) catch |err| {
                         Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
                         unreachable;
                     };
@@ -418,7 +483,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
                             value_type.* = evt.text();
                         }
-                    }.updateText, value) catch |err| {
+                    }.updateText, .{value}) catch |err| {
                         Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
                         unreachable;
                     };
@@ -439,7 +504,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
                             value_type.* = evt.text();
                         }
-                    }.updateText, value) catch |err| {
+                    }.updateText, .{value}) catch |err| {
                         Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
                         unreachable;
                     };
@@ -464,7 +529,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
                             value_type.* = evt.text();
                         }
-                    }.updateText, value) catch |err| {
+                    }.updateText, .{value}) catch |err| {
                         Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
                         unreachable;
                     };
@@ -484,7 +549,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                             };
                             value_type.* = num;
                         }
-                    }.updateText, value) catch |err| {
+                    }.updateText, .{value}) catch |err| {
                         Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
                         unreachable;
                     };
@@ -494,6 +559,31 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         Vapor.printlnErr("Float bindValue and TextField type mismatch", .{});
                         return self.*;
                     }
+                },
+                .date => {
+                    if (@TypeOf(value.*) == []u8) {
+                        Vapor.printlnErr("String bindValue and TextField type mismatch {any}", .{@typeInfo(@TypeOf(value.*))});
+                        return self.*;
+                    } else if (@TypeOf(value.*) == []const u8) {
+                        _ = Vapor.text_field_table.replaceOrAdd(value) catch |err| {
+                            std.log.err("bindValue: Could not add string to table {any}\n", .{err});
+                            unreachable;
+                        };
+                    } else {
+                        Vapor.printlnErr("String bindValue and TextField type mismatch {any}", .{@typeInfo(@TypeOf(value.*))});
+                        return self.*;
+                    }
+
+                    new_self._text_field_params.?.date.value_ptr = value.*.ptr;
+                    new_self._text_field_params.?.date.value_len = value.*.len;
+                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
+                        pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
+                            value_type.* = evt.text();
+                        }
+                    }.updateText, .{value}) catch |err| {
+                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
+                        unreachable;
+                    };
                 },
                 else => {
                     Vapor.printlnErr("NOT IMPLEMENTED", .{});
@@ -988,7 +1078,8 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 elem_decl.style = &mutable_style;
             }
 
-            Vapor.LifeCycle.configure(elem_decl);
+            _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
+            // Vapor.LifeCycle.configure(elem_decl);
             return new_self;
         }
 
@@ -1307,7 +1398,8 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         }
 
         pub fn end(self: *const Self) void {
-            if (self._used_style) return Vapor.LifeCycle.close({});
+            if (self._used_style) return;
+            // Vapor.LifeCycle.close({});
             var mutable_style = Style{};
             if (self._style) |style_ptr| {
                 mutable_style = style_ptr.*;
@@ -1348,8 +1440,9 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 elem_decl.text_field_params = params;
             }
 
-            Vapor.LifeCycle.configure(elem_decl);
-            return Vapor.LifeCycle.close({});
+            // Vapor.LifeCycle.configure(elem_decl);
+            _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
+            // return Vapor.LifeCycle.close({});
         }
 
         pub fn plain(self: *const Self) void {
@@ -1381,6 +1474,7 @@ const FieldExportEmail = DynamicObject.exportStruct(types.InputParamsEmail);
 const FieldExportTelephone = DynamicObject.exportStruct(types.InputParamsTelephone);
 const FieldExportFile = DynamicObject.exportStruct(types.InputParamsFile);
 const FieldExportFloat = DynamicObject.exportStruct(types.InputParamsFloat);
+const FieldExportDate = DynamicObject.exportStruct(types.InputParamsDate);
 
 const API = struct {
     pub fn getFieldName(node_ptr: *UINode) callconv(.c) ?[*]const u8 {
@@ -1433,6 +1527,11 @@ const API = struct {
                 FieldExportFloat.instance = float;
                 return FieldExportFloat.getInstancePtr();
             },
+            .date => |date| {
+                FieldExportDate.init();
+                FieldExportDate.instance = date;
+                return FieldExportDate.getInstancePtr();
+            },
         }
         return null;
     }
@@ -1464,6 +1563,9 @@ const API = struct {
             .float => {
                 return FieldExportFloat.getFieldCount();
             },
+            .date => {
+                return FieldExportDate.getFieldCount();
+            },
         }
         return 0;
     }
@@ -1491,6 +1593,9 @@ const API = struct {
             },
             .float => {
                 return FieldExportFloat.getFieldDescriptor(index);
+            },
+            .date => {
+                return FieldExportDate.getFieldDescriptor(index);
             },
         }
         return null;

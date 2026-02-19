@@ -293,6 +293,15 @@ pub extern fn selectionWasm(
     id_len: usize,
 ) [*]u32;
 
+pub extern fn replaceRangeWasm(
+    id_ptr: [*]const u8,
+    id_len: usize,
+    start: usize,
+    end: usize,
+    replacement_ptr: [*]const u8,
+    replacement_len: usize,
+) void;
+
 // =============================================================================
 // DEBUG HIGHLIGHTING
 // =============================================================================

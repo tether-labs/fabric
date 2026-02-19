@@ -431,6 +431,29 @@ pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
     new_node.style_changed = (new_node.style_hash != old_node.style_hash);
     new_node.props_changed = (new_node.props_hash != old_node.props_hash);
 
+    if (new_node.props_changed) {
+        const old_handlers = old_node.event_handlers;
+        const new_handlers = new_node.event_handlers;
+        if (old_handlers) |old_h| {
+            if (new_handlers) |new_h| {
+                // Remove old handlers whose type isn't in the new set
+                for (old_h.handlers.items) |old_handler| {
+                    const still_exists = for (new_h.handlers.items) |new_handler| {
+                        if (old_handler.type == new_handler.type) break true;
+                    } else false;
+                    if (!still_exists) {
+                        _ = Vapor.removeElementEventListener(old_node, old_handler.type);
+                    }
+                }
+            } else {
+                // No new handlers at all, remove everything
+                for (old_h.handlers.items) |old_handler| {
+                    _ = Vapor.removeElementEventListener(old_node, old_handler.type);
+                }
+            }
+        }
+    }
+
     var is_dirty = changed or
         Vapor.rerender_everything or
         old_node.dirty;

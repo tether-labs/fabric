@@ -7,6 +7,7 @@ const hashKey = utils.hashKey;
 const getUnderlyingType = utils.getUnderlyingType;
 const getUnderlyingValue = utils.getUnderlyingValue;
 const DynamicObject = @import("../Dynamic.zig");
+pub const Json = @import("JSON.zig");
 
 pub const Kit = @This();
 
@@ -232,6 +233,105 @@ pub fn fetchAwait(url: []const u8, http_req: HttpReq) *Future {
     return future;
 }
 
+pub const Fetch = struct {
+    _cbs: []*const fn (Response) void = &.{},
+    http_req: HttpReq,
+    url: []const u8,
+
+    pub fn fetch(url: []const u8, http_req: HttpReq) Fetch {
+        return .{
+            .http_req = http_req,
+            .url = url,
+        };
+    }
+
+    pub fn handle(self: *const Fetch, cb: fn (Response) void) void {
+        const http_req = self.http_req;
+        const url = self.url;
+
+        var writer = String.new();
+        writer.append_str("{\n\"method\": ");
+        writer.append_str("\"");
+        writer.append_str(@tagName(http_req.method));
+        writer.append_str("\"");
+        if (http_req.headers) |headers| {
+            writer.append_str(",\n\"headers\": {\n");
+            constructHeaders(headers, http_req.extra_headers, &writer);
+            writer.append_str("\n}");
+        } else if (http_req.extra_headers.len > 0) {
+            writer.append_str(",\n\"headers\": {\n");
+            var count: usize = 1;
+            for (http_req.extra_headers) |header| {
+                writer.append_str("\"");
+                writer.append_str(header.name);
+                writer.append_str("\"");
+                writer.append_str(": ");
+                writer.append_str("\"");
+                writer.append_str(header.value);
+                writer.append_str("\"");
+                if (count < http_req.extra_headers.len) {
+                    writer.append_str(",\n");
+                }
+                count += 1;
+            }
+            writer.append_str("\n}");
+        }
+
+        if (http_req.credentials) |credentials| {
+            writer.append_str(",\n\"credentials\": ");
+            writer.append_str("\"");
+            writer.append_str(credentials);
+            writer.append_str("\"");
+        }
+
+        if (http_req.body) |body| {
+            writer.append_str(",\n\"body\": ");
+            switch (http_req.body_type) {
+                .string => {
+                    var io_writer = std.Io.Writer.Allocating.init(Vapor.allocator_global);
+                    std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
+                    defer io_writer.deinit();
+                    writer.append_str(io_writer.written());
+                },
+                .json => {
+                    writer.append_str(body);
+                },
+            }
+        }
+        writer.append_str("\n}");
+
+        const final = writer.contents[0..writer.len];
+        const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
+
+        const Closure = struct {
+            fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+            fn runFn(_: *FetchAction, resp: Response) void {
+                @call(.auto, cb, .{resp});
+            }
+            fn deinitFn(node: *FetchNode) void {
+                const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
+                Vapor.allocator_global.destroy(closure);
+            }
+        };
+
+        const closure = Vapor.allocator_global.create(Closure) catch |err| {
+            Vapor.println("Error could not create closure {any}\n ", .{err});
+            unreachable;
+        };
+        closure.* = .{};
+
+        const id = Vapor.fetch_registry.count() + 1;
+        Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
+            Vapor.println("Button Function Registry {any}\n", .{err});
+            return;
+        };
+        if (Vapor.isWasi) {
+            fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
+        }
+        return;
+    }
+};
+
 pub fn fetch(url: []const u8, cb: fn (Response) void, http_req: HttpReq) void {
     var writer = String.new();
     writer.append_str("{\n\"method\": ");
@@ -272,9 +372,10 @@ pub fn fetch(url: []const u8, cb: fn (Response) void, http_req: HttpReq) void {
         writer.append_str(",\n\"body\": ");
         switch (http_req.body_type) {
             .string => {
-                writer.append_str("\"");
-                writer.append_str(body);
-                writer.append_str("\"");
+                var io_writer = std.Io.Writer.Allocating.init(Vapor.allocator_global);
+                std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
+                defer io_writer.deinit();
+                writer.append_str(io_writer.written());
             },
             .json => {
                 writer.append_str(body);
@@ -514,17 +615,56 @@ pub fn parseParams(url: []const u8, allocator: std.mem.Allocator) !?std.StringHa
     return params;
 }
 
-pub const ResponseError = struct {
-    type: []const u8 = "",
-    message: []const u8 = "",
-};
+pub const HeadersHM = std.json.ArrayHashMap([]const u8);
 
 pub const OkResponse = struct {
     code: u32,
     message: []const u8,
     type: []const u8,
     ok: bool,
+    url: []const u8,
+    redirected: bool,
     body: []const u8,
+    headers: HeadersHM,
+    content_type: []const u8,
+    content_length: u32,
+    elapsed_ms: u32,
+
+    /// Try to parse body as JSON
+    pub fn json(self: OkResponse, comptime T: type, allocator: std.mem.Allocator) !std.json.Parsed(T) {
+        return std.json.parseFromSlice(T, allocator, self.body, .{});
+    }
+
+    pub fn isJson(self: OkResponse) bool {
+        return std.mem.startsWith(u8, self.content_type, "application/json");
+    }
+
+    pub fn isRedirect(self: OkResponse) bool {
+        return self.code >= 300 and self.code < 400;
+    }
+
+    pub fn isClientError(self: OkResponse) bool {
+        return self.code >= 400 and self.code < 500;
+    }
+
+    pub fn isServerError(self: OkResponse) bool {
+        return self.code >= 500;
+    }
+
+    pub fn header(self: OkResponse, key: []const u8) ?[]const u8 {
+        return self.headers.map.get(key);
+    }
+};
+
+pub const ErrorKind = enum {
+    network,
+    timeout,
+    aborted,
+    cors,
+    dns,
+    tls,
+    http,
+    unknown,
 };
 
 pub const ErrResponse = struct {
@@ -532,26 +672,149 @@ pub const ErrResponse = struct {
     type: []const u8,
     message: []const u8,
     ok: bool,
+    url: []const u8,
+    redirected: bool,
+    body: []const u8,
+    headers: ?HeadersHM,
+    content_type: []const u8,
+    content_length: u32,
+    elapsed_ms: u32,
+    error_kind: []const u8,
+    error_name: []const u8,
+
+    pub fn kind(self: ErrResponse) ErrorKind {
+        const map = std.StaticStringMap(ErrorKind).initComptime(.{
+            .{ "network", .network },
+            .{ "timeout", .timeout },
+            .{ "aborted", .aborted },
+            .{ "cors", .cors },
+            .{ "dns", .dns },
+            .{ "tls", .tls },
+            .{ "http", .http },
+        });
+        return map.get(self.error_kind) orelse .unknown;
+    }
+
+    pub fn isTimeout(self: ErrResponse) bool {
+        return self.kind() == .timeout;
+    }
+
+    pub fn isNetworkError(self: ErrResponse) bool {
+        return self.kind() == .network;
+    }
+
+    pub fn clone(self: ErrResponse, arena_type: Vapor.ArenaType) ErrResponse {
+        var allocated_headers: ?std.json.ArrayHashMap([]const u8) = null;
+        const allocator = Vapor.arena(arena_type);
+        if (self.headers) |headers| {
+            allocated_headers = undefined;
+            allocated_headers.?.map = headers.map.clone(allocator) catch unreachable;
+        }
+
+        return ErrResponse{
+            .code = self.code,
+            .type = Vapor.dupe(self.type, arena_type),
+            .message = Vapor.dupe(self.message, arena_type),
+            .ok = self.ok,
+            .url = Vapor.dupe(self.url, arena_type),
+            .redirected = self.redirected,
+            .body = Vapor.dupe(self.body, arena_type),
+            .headers = allocated_headers,
+            .content_type = Vapor.dupe(self.content_type, arena_type),
+            .content_length = self.content_length,
+            .elapsed_ms = self.elapsed_ms,
+            .error_kind = Vapor.dupe(self.error_kind, arena_type),
+            .error_name = Vapor.dupe(self.error_name, arena_type),
+        };
+    }
+
+    pub fn deinit(self: *ErrResponse, arena_type: Vapor.ArenaType) void {
+        const allocator = Vapor.arena(arena_type);
+        allocator.free(self.type);
+        allocator.free(self.message);
+        allocator.free(self.url);
+        allocator.free(self.content_type);
+        allocator.free(self.error_kind);
+        allocator.free(self.error_name);
+        if (self.headers) |*headers| {
+            headers.deinit(allocator);
+        }
+    }
 };
 
 pub const Response = union(enum) {
-    ok: OkResponse,
-    err: ErrResponse,
+    Ok: OkResponse,
+    Err: ErrResponse,
+
     pub fn isOk(self: Response) bool {
-        return switch (self) {
-            .ok => true,
-            else => false,
-        };
+        return self == .Ok;
     }
 
     pub fn isErr(self: Response) bool {
+        return self == .Err;
+    }
+
+    /// Returns the status code (0 for network errors)
+    pub fn statusCode(self: Response) u32 {
         return switch (self) {
-            .err => true,
-            else => false,
+            .Ok => |r| r.code,
+            .Err => |r| r.code,
+        };
+    }
+
+    /// Returns the URL (final URL after redirects for ok)
+    pub fn url(self: Response) []const u8 {
+        return switch (self) {
+            .Ok => |r| r.url,
+            .Err => |r| r.url,
+        };
+    }
+
+    /// Returns elapsed time in ms
+    pub fn elapsedMs(self: Response) u32 {
+        return switch (self) {
+            .Ok => |r| r.elapsed_ms,
+            .Err => |r| r.elapsed_ms,
+        };
+    }
+
+    /// Unwrap the ok response or return null
+    pub fn ok(self: Response) ?OkResponse {
+        return switch (self) {
+            .Ok => |r| r,
+            .Err => null,
+        };
+    }
+
+    /// Unwrap the err response or return null
+    pub fn err(self: Response) ?ErrResponse {
+        return switch (self) {
+            .Err => |r| r,
+            .Ok => null,
         };
     }
 };
 
+pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
+    const resp = std.mem.span(resp_ptr);
+    const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.persist), resp, .{}) catch |err| {
+        Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
+        return;
+    };
+
+    const json_resp: Response = parsed_value.value;
+
+    if (json_resp.isErr()) {
+        const e = json_resp.err().?;
+        Vapor.printlnErr(
+            "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
+            .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
+        );
+    }
+
+    const node = Vapor.fetch_registry.get(id) orelse return;
+    @call(.auto, node.data.runFn, .{ &node.data, json_resp });
+}
 pub const HttpReqOffset = struct {
     method_ptr: [*]const u8 = undefined,
     method_len: usize = 0,
@@ -595,11 +858,12 @@ const BodyType = enum {
     json,
 };
 
-const Methods = enum {
+pub const Methods = enum {
     GET,
     POST,
     PATCH,
     DELETE,
+    PUT,
     OPTIONS,
 };
 
@@ -1208,27 +1472,43 @@ pub const API = struct {
 
     pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
         const resp = std.mem.span(resp_ptr);
-        // this std.json.parseFromSlice is extermely memory costly 43kb alone
-        const parsed_value: std.json.Parsed(Response) = std.json.parseFromSlice(Response, Vapor.arena(.persist), resp, .{}) catch |err| {
+        const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.frame), resp, .{
+            .ignore_unknown_fields = true,
+        }) catch |err| {
             Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
+            const node = Vapor.fetch_registry.get(id) orelse return;
+            @call(.auto, node.data.runFn, .{ &node.data, Response{ .Err = .{
+                .code = 0,
+                .message = "",
+                .type = "",
+                .ok = false,
+                .url = "",
+                .redirected = false,
+                .body = resp,
+                .headers = null,
+                .content_type = "",
+                .content_length = 0,
+                .elapsed_ms = 0,
+                .error_kind = "",
+                .error_name = "",
+            } } });
+            Vapor.cycle();
             return;
         };
 
-        if (parsed_value.value == .err) {
-            Vapor.printlnErr("\nERROR CODE: {d}\nERROR TYPE: {s}\nERROR MESSAGE: {s}\n", .{
-                parsed_value.value.err.code,
-                parsed_value.value.err.type,
-                parsed_value.value.err.message,
-            });
+        const json_resp: Response = parsed_value.value;
+
+        if (json_resp.isErr()) {
+            const e = json_resp.err().?;
+            std.log.err(
+                "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
+                .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
+            );
         }
 
-        const json_resp: Response = parsed_value.value;
-        // Vapor.response_registry.put(id, json_resp) catch |err| {
-        //     Vapor.println("Button Function Registry {any}\n", .{err});
-        //     return;
-        // };
         const node = Vapor.fetch_registry.get(id) orelse return;
         @call(.auto, node.data.runFn, .{ &node.data, json_resp });
+        Vapor.cycle();
     }
 
     pub fn getObserverOptions(options: *ObserverOptions) callconv(.c) [*]const u8 {

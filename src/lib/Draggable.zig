@@ -73,7 +73,7 @@ pub const Draggable = struct {
 
         // Setup listeners on the element or handle
         const target = self.config.handle orelse element;
-        _ = target.addInstListener(.pointerdown, handlePointerDown, self) orelse unreachable;
+        _ = target.addInstListener(.pointerdown, handlePointerDown, .{self}) orelse unreachable;
 
         return self;
     }
@@ -82,7 +82,7 @@ pub const Draggable = struct {
     pub fn addStartListener(self: *Draggable) void {
         // Setup listeners on the element or handle
         const target = self.element;
-        _ = target.addInstListener(.pointerdown, handlePointerDown, self) orelse unreachable;
+        _ = target.addInstListener(.pointerdown, handlePointerDown, .{self}) orelse unreachable;
     }
 
     pub fn deinit(self: *Draggable) void {

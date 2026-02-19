@@ -38,6 +38,8 @@ const TextFieldTable = @import("TextFieldTable.zig").StringTable;
 const Components = @import("NewComponent.zig");
 const Accessibility = @import("Accessibility.zig");
 const Polygons = @import("Polygon.zig").Polygons;
+const StorageTable = @import("StorageTable.zig").StorageTable;
+const Structures = @import("structures/Structures.zig");
 
 const DebugLevel = enum(u8) { all = 0, debug = 1, info = 2, warn = 3, none = 4 };
 
@@ -148,6 +150,10 @@ pub fn store(key: []const u8, value: anytype) void {
                 },
             }
         },
+        .@"enum" => {
+            const string = @tagName(value);
+            Wasm.setLocalStorageStringWasm(key.ptr, key.len, string.ptr, string.len);
+        },
         else => {
             Vapor.printlnErr("Cannot store non string or int float types TYPE: {any}", .{@TypeOf(value)});
         },
@@ -159,12 +165,26 @@ pub fn getStore(comptime T: type, key: []const u8) ?T {
     switch (T) {
         []const u8 => {
             const string = Wasm.getLocalStorageStringWasm(key.ptr, key.len) orelse return null;
-            return std.mem.span(string);
+            const value = std.mem.span(string);
+            const handle = storage_table.replaceOrAddStr(key, value) catch unreachable;
+            const stored_value = storage_table.getStr(handle) orelse unreachable;
+            return stored_value;
         },
+        usize => return @intCast(Wasm.getLocalStorageU32Wasm(key.ptr, key.len)),
         i32 => return Wasm.getLocalStorageI32Wasm(key.ptr, key.len),
         u32 => return Wasm.getLocalStorageU32Wasm(key.ptr, key.len),
         f32 => return Wasm.getLocalStorageF32Wasm(key.ptr, key.len),
-        else => return null,
+        else => {
+            if (@typeInfo(T) == .@"enum") {
+                const string = Wasm.getLocalStorageStringWasm(key.ptr, key.len) orelse return null;
+                const value = std.mem.span(string);
+                const handle = storage_table.replaceOrAddStr(key, value) catch unreachable;
+                const stored_value = storage_table.getStr(handle) orelse unreachable;
+                return std.meta.stringToEnum(T, stored_value);
+            } else {
+                return null;
+            }
+        },
     }
 }
 
@@ -180,12 +200,14 @@ pub const Action = struct {
     dynamic_object: ?*DynamicObject = null,
     runFn: ActionProto,
     deinitFn: NodeProto,
+    argsFn: ?ArgsProto = null,
 };
 
 pub const Node = struct { data: Action };
 
 pub const ActionProto = *const fn (*Action) void;
 pub const NodeProto = *const fn (*Node) void;
+pub const ArgsProto = *const fn (*Action) []const u8;
 
 pub fn ArgsTuple(comptime Fn: type) type {
     const out = std.meta.ArgsTuple(Fn);
@@ -217,6 +239,7 @@ pub var updated_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
 pub var destroy_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
 
 pub var string_table: StringTable = undefined;
+pub var storage_table: StorageTable = undefined;
 pub var text_field_table: TextFieldTable = undefined;
 pub var shadows: std.AutoHashMap(u32, Vapor.Types.NewShadow) = undefined;
 pub var packed_layers: std.AutoHashMap(u32, []Vapor.Types.PackedLayer) = undefined;
@@ -307,6 +330,7 @@ const Mode = enum {
 pub var pool: Pool = undefined;
 pub var mode: Mode = .atomic;
 pub var class_cache: ClassCache = undefined;
+pub var trace_arena: std.heap.ArenaAllocator = undefined;
 
 extern fn frame_arena_init(frame_arena: *FrameAllocator, backing_allocator: *std.mem.Allocator) void;
 
@@ -330,6 +354,7 @@ pub fn init(config: VaporConfig) void {
 
     // Init the frame allocator;
     frame_arena = FrameAllocator.init(allocator_global);
+    trace_arena = std.heap.ArenaAllocator.init(allocator_global);
     // The persistent allocator is used for the Initialization of the registries as these persist over the lifetime of the program.
     const allocator = frame_arena.persistentAllocator();
 
@@ -362,6 +387,7 @@ pub fn init(config: VaporConfig) void {
     Accessibility.a11y_map = std.AutoHashMap(u32, Accessibility.Accessibility).init(allocator);
 
     string_table = StringTable.init(allocator);
+    storage_table = StorageTable.init(allocator);
     text_field_table = TextFieldTable.init(allocator);
     shadows = std.AutoHashMap(u32, Vapor.Types.NewShadow).init(allocator);
     packed_layers = std.AutoHashMap(u32, []Types.PackedLayer).init(allocator);
@@ -381,6 +407,8 @@ pub fn init(config: VaporConfig) void {
     added_nodes = std.array_list.Managed(*UINode).init(allocator);
     dirty_nodes = std.array_list.Managed(*UINode).init(allocator);
     element_registry = std.AutoHashMap(u32, *Element).init(allocator);
+
+    action_log = Structures.BoundedArray(ErrorReport, 512).init(512) catch unreachable;
 
     UIContext.indexes = std.AutoHashMap(u32, usize).init(allocator);
     if (build_options.enable_debug) {
@@ -1138,10 +1166,11 @@ pub inline fn focused(element_uuid: []const u8) bool {
     }
 }
 
+const serializeArgs = utils.serializeArgs;
+
 pub fn attachEventCtxCallback(ui_node: *UINode, event_type: EventType, cb: anytype, args: anytype) !void {
     if (!isWasi) return;
     const onid = hashKey(ui_node.uuid);
-
     const Args = @TypeOf(args);
     const Closure = struct {
         arguments: Args,
@@ -1152,6 +1181,12 @@ pub fn attachEventCtxCallback(ui_node: *UINode, event_type: EventType, cb: anyty
             const run_node: *const Vapor.CtxAwareEventNode = @fieldParentPtr("data", data);
             const closure: *const @This() = @alignCast(@fieldParentPtr("run_node", run_node));
             _ = Vapor.elementInstEventListener(closure.ui_node, closure.event_type, closure.arguments, cb);
+        }
+        fn argsFn(action: *Vapor.Action) []const u8 {
+            const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+            return serializeArgs(Vapor.arena(.frame), closure.arguments, .{}) catch
+                "\"<serialization failed>\"";
         }
     };
 
@@ -1260,6 +1295,17 @@ pub inline fn elementEventListener(
     return onid;
 }
 
+pub inline fn removeElementEventListener(
+    ui_node: *UINode,
+    event_type: types.EventType,
+) ?usize {
+    var onid = hashKey(ui_node.uuid);
+    onid +%= @intFromEnum(event_type);
+    const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
+    Wasm.removeElementEventListener(ui_node.uuid.ptr, ui_node.uuid.len, event_type_str.ptr, event_type_str.len, onid);
+    return onid;
+}
+
 pub fn addGlobalListener(event_type: EventType, cb: *const fn (*Event) void) ?usize {
     const id = events_callbacks.count() + 1;
     events_callbacks.put(id, .{ .cb = cb, .ui_node = null, .evt_type = event_type }) catch |err| {
@@ -1338,16 +1384,18 @@ pub const CtxAwareEventNode = struct { data: CtxAwareEvent };
 
 pub const CtxAwareEvent = struct {
     runFn: CtxAwareEventNodeProto,
+    argsFn: ?ArgsProto = null,
 };
 
 pub const CtxAwareEventNodeProto = *const fn (*const CtxAwareEvent) void;
 
-pub inline fn elementInstEventListener(
+pub fn elementInstEventListener(
     ui_node: *UINode,
     event_type: types.EventType,
     arguments: anytype,
     cb: anytype,
 ) ?usize {
+    const ArgsT = std.meta.ArgsTuple(@TypeOf(cb));
     const Args = @TypeOf(arguments);
     const EvtClosure = struct {
         arguments: Args,
@@ -1356,12 +1404,16 @@ pub inline fn elementInstEventListener(
         fn runFn(evt_inst: *EvtInst, evt: *Event) void {
             const evt_node: *EvtInstNode = @fieldParentPtr("data", evt_inst);
             const closure: *@This() = @alignCast(@fieldParentPtr("evt_node", evt_node));
-            @call(.auto, cb, .{ closure.arguments, evt });
+
+            var combined: ArgsT = undefined;
+            inline for (0..@typeInfo(Args).@"struct".fields.len) |i| {
+                combined[i] = closure.arguments[i];
+            }
+            combined[@typeInfo(Args).@"struct".fields.len] = evt;
+
+            @call(.auto, cb, combined);
         }
-        fn deinitFn(_: *EvtInstNode) void {
-            // const closure: *@This() = @alignCast(@fieldParentPtr("evt_node", evt_node));
-            // Vapor.allocator_global.destroy(closure);
-        }
+        fn deinitFn(_: *EvtInstNode) void {}
     };
 
     const evt_closure = Vapor.arena(.frame).create(EvtClosure) catch |err| {
@@ -1808,19 +1860,28 @@ pub fn queryComponentIds(target_type: ElementType) ![][]const u8 {
     return try component_ids.toOwnedSlice();
 }
 
-fn findNodeByUUID(node: *UINode, uuid: []const u8) UINode {
+fn findNodeByUUID(node: *UINode, uuid: []const u8) ?*UINode {
+    // 1. Check the current node
     if (std.mem.eql(u8, node.uuid, uuid)) {
-        return node.*;
+        return node;
     }
-    if (node.children == null) return;
-    for (node.children.?.items) |child| {
-        collectComponentIds(child, uuid);
+
+    // 2. Iterate through children
+    var children = node.children();
+    while (children.next()) |child| {
+        // Only return if we actually found something!
+        if (findNodeByUUID(child, uuid)) |found| {
+            return found;
+        }
     }
+
+    // 3. No match found in this branch
+    return null;
 }
 
-pub fn queryByUUID(uuid: []const u8) !UINode {
+pub fn queryByUUID(uuid: []const u8) !*UINode {
     const root = current_ctx.root orelse return error.NoTree;
-    const node = findNodeByUUID(root, uuid);
+    const node = findNodeByUUID(root, uuid) orelse return error.NodeNotFound;
     return node;
 }
 
@@ -2091,6 +2152,19 @@ pub fn fmtln(
     return buf;
 }
 
+pub fn fmtArena(
+    comptime fmt: []const u8,
+    args: anytype,
+    arena_type: ArenaType,
+) []const u8 {
+    const allocator = arena(arena_type);
+    const buf = std.fmt.allocPrint(allocator, fmt, args) catch |err| {
+        println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+        return "";
+    };
+    return buf;
+}
+
 pub fn dupe(
     args: []const u8,
     allocator_type: ArenaType,
@@ -2101,6 +2175,18 @@ pub fn dupe(
         return "";
     };
     return buf;
+}
+
+pub fn pin(value: []const u8) void {
+    _ = string_table.intern(value) catch unreachable;
+}
+
+pub fn unpin(value: []const u8) void {
+    _ = string_table.remove(value) catch unreachable;
+}
+
+pub fn compact() void {
+    _ = string_table.compact() catch unreachable;
 }
 
 pub fn cloneFrame(
@@ -2542,6 +2628,10 @@ pub fn alert(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+pub fn checkWasmMemory() void {
+    Wasm.checkMemoryGrowthWasm();
+}
+
 pub const API = struct {
     // --- Context & Callbacks ---
 
@@ -2864,4 +2954,260 @@ pub fn log(
     }
     // Implementation that calls a 'jsLog' extern function
     // similar to the panic handler above.
+}
+
+pub const StackFrameType = enum {
+    wasm,
+    js,
+    unknown,
+};
+
+pub const StackFrame = struct {
+    function: ?[]const u8 = null,
+    wasm_function_index: ?u32 = null,
+    wasm_offset: ?[]const u8 = null,
+    file: ?[]const u8 = null,
+    line: ?u32 = null,
+    column: ?u32 = null,
+    frame_type: StackFrameType = .unknown,
+    raw: ?[]const u8 = null,
+};
+
+pub const WasmError = struct {
+    type: []const u8,
+    message: []const u8,
+    is_wasm_trap: bool,
+    crash_site: ?StackFrame = null,
+    user_stack: []const StackFrame,
+
+    pub fn deinit(self: *WasmError, allocator: std.mem.Allocator) void {
+        allocator.free(self.user_stack);
+        allocator.free(self.full_stack);
+    }
+};
+
+pub fn parseWasmError(allocator: std.mem.Allocator, json_str: []const u8) !WasmError {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+
+    const err_type = if (root.get("type")) |v| v.string else "RuntimeError";
+    const message = if (root.get("message")) |v| v.string else "unknown";
+    const is_wasm_trap = if (root.get("isWasmTrap")) |v| v.bool else false;
+
+    const crash_site = if (root.get("crashSite")) |v| blk: {
+        if (v == .null) break :blk null;
+        break :blk try parseStackFrame(v.object);
+    } else null;
+
+    const user_stack = if (root.get("userStack")) |v|
+        try parseStackArray(allocator, v.array)
+    else
+        try allocator.alloc(StackFrame, 0);
+
+    return WasmError{
+        .type = err_type,
+        .message = message,
+        .is_wasm_trap = is_wasm_trap,
+        .crash_site = crash_site,
+        .user_stack = user_stack,
+    };
+}
+
+fn parseStackFrame(obj: std.json.ObjectMap) !StackFrame {
+    const frame_type: StackFrameType = if (obj.get("type")) |v| blk: {
+        const s = v.string;
+        if (std.mem.eql(u8, s, "wasm")) break :blk .wasm;
+        if (std.mem.eql(u8, s, "js")) break :blk .js;
+        break :blk .unknown;
+    } else .unknown;
+
+    return StackFrame{
+        .function = if (obj.get("function")) |v| switch (v) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        .wasm_function_index = if (obj.get("wasmFunctionIndex")) |v| switch (v) {
+            .integer => |i| @intCast(i),
+            else => null,
+        } else null,
+        .wasm_offset = if (obj.get("wasmOffset")) |v| switch (v) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        .file = if (obj.get("file")) |v| switch (v) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        .line = if (obj.get("line")) |v| switch (v) {
+            .integer => |i| @intCast(i),
+            else => null,
+        } else null,
+        .column = if (obj.get("column")) |v| switch (v) {
+            .integer => |i| @intCast(i),
+            else => null,
+        } else null,
+        .raw = if (obj.get("raw")) |v| switch (v) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        .frame_type = frame_type,
+    };
+}
+
+fn parseStackArray(allocator: std.mem.Allocator, stack_array: std.json.Array) ![]const StackFrame {
+    var frames = try allocator.alloc(StackFrame, stack_array.items.len);
+    for (stack_array.items, 0..) |item, i| {
+        frames[i] = try parseStackFrame(item.object);
+    }
+    return frames;
+}
+
+const EventData = struct {
+    id: []const u8,
+};
+
+pub var trace_buffer: Structures.RingBuffer(TraceEvent, 128) = .{};
+
+pub const RequestContext = struct {
+    method: []const u8 = "GET",
+    url: []const u8 = "",
+    status_code: ?u32 = null,
+    body: ?[]const u8 = null,
+    elapsed_ms: ?i64 = null,
+};
+
+pub const TraceEvent = struct {
+    timestamp: i64,
+    event_type: enum { click, dblclick, hover, mousemove, input, scroll, state_change },
+    element_id: ?[]const u8,
+    serialized_args: []const u8,
+};
+
+// ============================================================================
+// Error Report (inbound payload from the client)
+// ============================================================================
+
+pub const ErrorReport = struct {
+    element_id: ?[]const u8 = null,
+    args: ?[]const u8 = null,
+    wasmError: WasmError,
+    events: []const TraceEvent,
+    timestamp: i64,
+
+    // New context fields
+    route: ?[]const u8 = null,
+    url: ?[]const u8 = null,
+    session_id: ?[]const u8 = null,
+    user_agent: ?[]const u8 = null,
+    environment: ?[]const u8 = null,
+    release: ?[]const u8 = null,
+    user_id: ?[]const u8 = null,
+
+    // Optional: the fetch call that triggered the error (if any)
+    request_context: ?RequestContext = null,
+};
+
+// Append list for important events (flush periodically)
+var action_log: Structures.BoundedArray(ErrorReport, 512) = .{};
+
+export fn recordState(err_str: [*:0]u8, event_str: ?[*:0]u8) void {
+    if (isWasi) {
+        const json_err = std.mem.span(err_str);
+        const parsed = parseWasmError(Vapor.arena(.frame), json_err) catch |err| {
+            std.log.err("Error could not parse json {any}\n", .{err});
+            return;
+        };
+        var ids: [][]const u8 = &.{};
+        var ui_node: ?*UINode = null;
+        var event_data: ?EventData = null;
+
+        if (event_str) |event| {
+            const json_event = std.mem.span(event);
+            event_data = Vapor.Kit.Json.parse(EventData, json_event, .frame) catch |err| {
+                std.log.err("Error could not parse json {any}\n", .{err});
+                return;
+            };
+            ids = queryComponentIds(.CtxButton) catch |err| {
+                std.log.err("Error could not query component {any}\n", .{err});
+                return;
+            };
+            for (ids) |id| {
+                if (!std.mem.eql(u8, id, event_data.?.id)) continue;
+                ui_node = queryByUUID(id) catch |err| {
+                    std.log.err("Error could not query component {any}\n", .{err});
+                    return;
+                };
+            }
+        }
+
+        const events = trace_buffer.snapshotAlloc(Vapor.arena(.frame)) catch return;
+        defer {
+            for (events) |event| {
+                if (event.element_id) |element_id| {
+                    allocator_global.free(element_id);
+                }
+            }
+        }
+
+        if (ui_node) |node| {
+            switch (node.type) {
+                .CtxButton => {
+                    const ctx_callback = ctx_callback_registry.get(hashKey(ui_node.?.uuid)) orelse return;
+                    const argsFn = ctx_callback.data.argsFn orelse return;
+                    const json = @call(.auto, argsFn, .{&ctx_callback.data});
+                    const event = event_data orelse return;
+                    const record = ErrorReport{
+                        .element_id = event.id,
+                        .args = json,
+                        .wasmError = parsed,
+                        .events = events,
+                        .timestamp = std.time.microTimestamp(),
+                        .environment = "dev",
+                        .route = Vapor.Kit.getWindowPath(),
+                        .url = Vapor.Kit.getWindowPath(),
+                    };
+                    const json_record = std.json.Stringify.valueAlloc(Vapor.arena(.frame), record, .{}) catch unreachable;
+                    Vapor.Kit.Fetch.fetch("http://localhost:8080/recordError", .{
+                        .method = .POST,
+                        .body = json_record,
+                    }).handle(handleRecordError);
+                },
+                else => {},
+            }
+        } else {
+            const record = ErrorReport{
+                .element_id = null,
+                .args = null,
+                .wasmError = parsed,
+                .events = events,
+                .timestamp = std.time.microTimestamp(),
+                .environment = "dev",
+                .route = Vapor.Kit.getWindowPath(),
+                .url = Vapor.Kit.getWindowPath(),
+            };
+
+            // const json =
+            //     \\{"element_id":"test","args":"{}","wasmError":{"type":"RuntimeError","message":"unreachable","is_wasm_trap":true,"crash_site":null,"user_stack":[]},"events":[],"timestamp":1771446261518000}
+            // ;
+            const json_record = std.json.Stringify.valueAlloc(Vapor.arena(.frame), record, .{}) catch unreachable;
+            Vapor.Kit.Fetch.fetch("http://localhost:8080/recordError", .{
+                .method = .POST,
+                .body = json_record,
+            }).handle(handleRecordError);
+        }
+    }
+}
+
+fn handleRecordError(response: Vapor.Kit.Response) void {
+    switch (response) {
+        .Ok => |ok| {
+            _ = ok;
+            std.log.err("Recorded Error\n", .{});
+        },
+        .Err => |err| {
+            std.log.err("Error: {s}\n", .{err.message});
+        },
+    }
 }

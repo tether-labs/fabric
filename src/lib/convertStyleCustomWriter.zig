@@ -291,11 +291,11 @@ const alignment_map = [_][]const u8{ "none", "center", "flex-start", "flex-end",
 const position_type_map = [_][]const u8{ "none", "relative", "absolute", "fixed", "sticky" };
 const float_type_map = [_][]const u8{ "top", "bottom", "left", "right" };
 const transform_origin_map = [_][]const u8{ "default", "top", "bottom", "right", "left", "top center", "bottom center", "right center", "left center" };
-const text_decoration_type_map = [_][]const u8{ "default", "none", "inherit", "underline", "initial", "overline", "unset", "revert" };
+const text_decoration_type_map = [_][]const u8{ "default", "none", "overline", "underline", "inherit", "initial", "revert", "unset", "line-through" };
 const text_decoration_style_map = [_][]const u8{ "default", "solid", "double", "dotted", "dashed", "wavy", "inherit", "initial", "revert", "unset" };
 const appearance_map = [_][]const u8{ "none", "auto", "button", "textfield", "menulist", "searchfield", "textarea", "checkbox", "radio", "inherit", "initial", "revert", "unset" };
 const outline_map = [_][]const u8{ "default", "none", "auto", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset", "inherit", "initial", "revert", "unset" };
-const cursor_map = [_][]const u8{ "default", "pointer", "help", "grab", "zoom-in", "zoom-out", "ew-resize", "ns-resize", "col-resize", "row-resize", "all-scroll" };
+const cursor_map = [_][]const u8{ "default", "pointer", "help", "grab", "zoom-in", "zoom-out", "ew-resize", "ns-resize", "col-resize", "row-resize", "all-scroll", "crosshair" };
 const box_sizing_map = [_][]const u8{ "content-box", "border-box", "padding-box", "inherit", "initial", "revert", "unset" };
 const list_style_map = [_][]const u8{ "default", "none", "disc", "circle", "square", "decimal", "decimal-leading-zero", "lower-roman", "upper-roman", "lower-alpha", "upper-alpha", "lower-greek", "armenian", "georgian", "inherit", "initial", "revert", "unset" };
 const flex_wrap_map = [_][]const u8{ "none", "nowrap", "wrap", "wrap-reverse", "inherit", "initial", "revert", "unset" };
@@ -964,14 +964,22 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     } else if (visual.background_layers.len > 0) {
         writePropValue("background", .{ .tag = .background_layers, .data = .{ .background_layers = visual.background_layers } }, writer);
     }
-    // if (visual.background_gradient.type != .none) {
-    //     writePropValue("background-image", .{ .tag = .gradient, .data = .{ .gradient = visual.background_gradient } }, writer);
-    // }
-    // if (visual.background_grid.packed_color.has_color or visual.background_grid.packed_color.has_token) {
-    //     writePropValue("background-image", .{ .tag = .layer, .data = .{ .layer = visual.background_grid } }, writer);
-    // } else if (visual.background_dots.packed_color.has_color or visual.background_dots.packed_color.has_token) {
-    //     writePropValue("background-image", .{ .tag = .dots, .data = .{ .dots = visual.background_dots } }, writer);
-    // }
+
+    if (visual.color_mix.color_prop != .default) {
+        switch (visual.color_mix.color_prop) {
+            .text_color => writer.write("color: ") catch {},
+            .background_color => writer.write("background-color: ") catch {},
+            .border_color => writer.write("border-color: ") catch {},
+            .fill_color => writer.write("fill: ") catch {},
+            .stroke_color => writer.write("stroke: ") catch {},
+            .default => unreachable,
+        }
+        writer.write("color-mix(in srgb, ") catch {};
+        colorToCSS(visual.color_mix.color, writer) catch {};
+        writer.write(", black ") catch {};
+        writer.writeF32(visual.color_mix.percentage * 100) catch {};
+        writer.write("%);\n") catch {};
+    }
 
     if (visual.packed_layers.items_ptr > 0) {
         writePropValue("background-image", .{ .tag = .layers, .data = .{ .layers = visual.packed_layers } }, writer);
@@ -1192,16 +1200,6 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
         writePropValue("text-align", .{ .tag = .alignment, .data = .{ .alignment = layout_ptr.text_align.x } }, writer);
     }
 
-    // if (placement.x != .none and placement.y != .none) {
-    //     if (direction == .row) {
-    //         writePropValue("justify-self", .{ .tag = .alignment, .data = .{ .alignment = placement.x } }, writer);
-    //         writePropValue("align-self", .{ .tag = .alignment, .data = .{ .alignment = placement.y } }, writer);
-    //     } else {
-    //         writePropValue("align-self", .{ .tag = .alignment, .data = .{ .alignment = placement.x } }, writer);
-    //         writePropValue("justify-self", .{ .tag = .alignment, .data = .{ .alignment = placement.y } }, writer);
-    //     }
-    // }
-
     if (placement != .none) {
         writer.write("position: fixed; position-area: ") catch {};
         writer.write(placement.toPositionArea()) catch {};
@@ -1224,6 +1222,14 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("min-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
             writer.write("vw;\n") catch {};
+        } else if (size.width.type == .max_px) {
+            writer.write("max-width:") catch {};
+            writer.writeF32(size.width.size.max) catch {};
+            writer.write("px;\n") catch {};
+        } else if (size.width.type == .min_px) {
+            writer.write("min-width:") catch {};
+            writer.writeF32(size.width.size.min) catch {};
+            writer.write("px;\n") catch {};
         } else if (size.width.type == .elastic_percent) {
             writer.write("max-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
@@ -1239,22 +1245,26 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.writeF32(size.width.size.min) catch {};
             writer.write("px;\n") catch {};
         } else {
-            writePropValue("width", .{ .tag = .sizing, .data = .{ .sizing = size.width } }, writer);
+            if (layout_ptr.column_count > 0) {
+                writer.write("flex-shrink: 1; flex-grow: 1; flex-basis: calc(") catch {};
+                writer.writeF32(size.width.size.max) catch {};
+                writer.write("% - ") catch {};
+                writer.writeF32(layout_ptr.column_spacing) catch {};
+                writer.write("px);\n") catch {};
+            } else {
+                writePropValue("width", .{ .tag = .sizing, .data = .{ .sizing = size.width } }, writer);
+            }
         }
 
-        if (layout_ptr.flex != .default) {
+        if (layout_ptr.flex != .default and layout_ptr.column_count == 0) {
             writer.write("flex-shrink: 0;\n") catch {};
         }
     } else if (size.width.type == .grow) {
         if (parent_direction_row) {
-            writer.write("flex: 1;\n") catch {};
+            writer.write("flex: 1;\nmin-width: 0;\n") catch {};
         } else {
             writer.write("align-self: stretch;\n") catch {};
         }
-        // GROW LOGIC:
-        // 1. flex: 1 allows it to take up space.
-        // 2. min-width: 0 is CRITICAL. It prevents the element from
-        //    expanding past the parent if it contains long text or images.
     }
 
     if (size.height.type != .none and size.height.type != .grow) {
@@ -1268,8 +1278,11 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};
             writer.write("px;\n") catch {};
+        } else if (size.height.type == .max_px) {
+            writer.write("max-height:") catch {};
+            writer.writeF32(size.height.size.max) catch {};
+            writer.write("px;\n") catch {};
         } else if (size.height.type == .min_px) {
-            std.log.err("min_px", .{});
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};
             writer.write("px;\n") catch {};
@@ -1299,7 +1312,7 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
         if (parent_direction_row) {
             writer.write("align-self: stretch;\n") catch {};
         } else {
-            writer.write("flex: 1;\n") catch {};
+            writer.write("flex: 1;\nmin-height: 0;\n") catch {};
         }
     }
     const scroll = layout_ptr.scroll;
@@ -1319,7 +1332,6 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
 
     if (layout_ptr.aspect_ratio != .none) {
         writePropValue("aspect-ratio", .{ .tag = .aspect_ratio, .data = .{ .aspect_ratio = layout_ptr.aspect_ratio } }, writer);
-        // writer.write("object-fit: cover;\n") catch {};
     }
 }
 

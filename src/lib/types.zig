@@ -203,6 +203,7 @@ pub const Size = packed struct {
     width: Sizing = .{},
     height: Sizing = .{},
     pub const full = Size{ .width = .percent(100), .height = .percent(100) };
+    pub const expand = Size{ .width = .expand, .height = .expand };
     pub fn square_px(size: f32) Size {
         return .{
             .width = .px(size),
@@ -215,6 +216,21 @@ pub const Size = packed struct {
             .height = .percent(size),
         };
     }
+
+    pub fn px(size: f32) Size {
+        return .{
+            .width = .px(size),
+            .height = .px(size),
+        };
+    }
+
+    pub fn percent(size: f32) Size {
+        return .{
+            .width = .percent(size),
+            .height = .percent(size),
+        };
+    }
+
     /// Creates a height sizing
     pub fn h(size: Sizing) Size {
         return .{
@@ -255,6 +271,7 @@ pub const Sizing = packed struct {
     type: SizingType = .none,
 
     pub const grow = Sizing{ .type = .grow, .size = .{ .min = 0, .max = 0 } };
+    pub const expand = Sizing{ .type = .grow, .size = .{ .min = 0, .max = 0 } };
     pub const auto = Sizing{ .type = .auto, .size = .{ .min = 0, .max = 0 } };
     pub const fit = Sizing{ .type = .fit, .size = .{ .min = 0, .max = 0 } };
     pub const full = percent(100);
@@ -345,6 +362,21 @@ pub const Pos = packed struct {
 
     pub fn percent(pos: f32) Pos {
         return .{ .type = .percent, .value = pos };
+    }
+
+    pub fn mobile_desktop_percent(mobile: f32, desktop: f32) Pos {
+        if (isMobile()) {
+            return .{ .type = .percent, .value = mobile };
+        }
+        return .{ .type = .percent, .value = desktop };
+    }
+    //
+    pub fn mobile_desktop(mobile: Pos, desktop: Pos) Pos {
+        if (isMobile()) {
+            return mobile;
+        } else {
+            return desktop;
+        }
     }
 };
 // Represents a single background image source and its properties.
@@ -859,7 +891,7 @@ pub const Color = union(enum) {
             },
         };
     }
-    pub fn rgba(r: u8, g: u8, b: u8, a: u8) Color {
+    pub fn rgba(r: u8, g: u8, b: u8, a: f32) Color {
         return .{ .Literal = .{
             .r = r,
             .g = g,
@@ -1945,6 +1977,7 @@ pub const Cursor = enum(u8) {
     col_resize,
     row_resize,
     all_scroll,
+    crosshair,
 };
 
 pub const Appearance = enum(u8) {
@@ -2163,6 +2196,30 @@ pub const PackedCaret = packed struct {
     color: PackedColor = .{},
 };
 
+pub const ColorProp = enum(u8) {
+    default,
+    text_color,
+    background_color,
+    border_color,
+    fill_color,
+    stroke_color,
+};
+
+pub const ColorMix = struct {
+    color: ?Color = null,
+    color_prop: ColorProp = .default,
+    percentage: f32 = 0,
+    pub fn darken(color_prop: ColorProp, color: ?Color, percentage: f32) ColorMix {
+        return .{ .color_prop = color_prop, .color = color, .percentage = percentage };
+    }
+};
+
+pub const PackedColorMix = packed struct {
+    color: PackedColor = .{},
+    color_prop: ColorProp = .default,
+    percentage: f32 = 0,
+};
+
 pub const Visual = struct {
     /// Color color as RGBA array [red, green, blue, alpha] (0-255 each)
     /// Default: transparent black
@@ -2243,6 +2300,8 @@ pub const Visual = struct {
     white_space: ?WhiteSpace = null,
 
     resize: ?Resize = null,
+
+    color_mix: ?ColorMix = null,
 
     pub fn font(size: u8, weight: ?u16, color: ?Color) Visual {
         return .{
@@ -2353,6 +2412,8 @@ pub const PackedLayout = packed struct {
     aspect_ratio: AspectRatio = .none,
     placement: AnchorPlacement = .none,
     parent_direction: Direction = .row,
+    column_count: u8 = 0,
+    column_spacing: f32 = 0,
 };
 
 pub const PackedPosition = packed struct {
@@ -2446,7 +2507,7 @@ pub const PackedTransform = packed struct {
 
     pub fn set(packed_transform: *PackedTransform, transform: *const Transform) void {
         const type_slice = transform.type;
-        var slice: []TransformType = Vapor.frame_arena.persistentAllocator().alloc(TransformType, type_slice.len) catch unreachable;
+        var slice: []TransformType = Vapor.arena(.frame).alloc(TransformType, type_slice.len) catch unreachable;
         for (type_slice, 0..) |element, i| {
             slice[i] = element;
         }
@@ -2525,6 +2586,7 @@ pub const PackedVisual = packed struct {
     resize: Resize = .default,
     new_shadow: u32 = 0, // Replaces ptr + len
     edges_handle: u32 = StringTable.null_handle, // Replaces ptr + len
+    color_mix: PackedColorMix = .{},
 };
 
 pub const PackedInteractive = packed struct {
@@ -2830,6 +2892,7 @@ const InputType = enum(u8) {
     email = 5,
     search = 6,
     telephone = 7,
+    date = 8,
 };
 const Callback = *const fn (*Event) void;
 pub const InputParamsStr = struct {
@@ -2896,6 +2959,14 @@ pub const InputParamsString = struct {
     max_len: ?u32 = null,
 };
 
+pub const InputParamsDate = struct {
+    type: InputTypes = .date,
+    default_ptr: ?[*]const u8 = null,
+    default_len: usize = 0,
+    value_ptr: ?[*]const u8 = null,
+    value_len: usize = 0,
+};
+
 const InputParamsRadio = struct {
     tag: []const u8,
     value: []const u8,
@@ -2941,6 +3012,7 @@ pub const InputTypes = enum(u8) {
     email,
     file,
     telephone,
+    date,
     none,
 };
 
@@ -2955,6 +3027,7 @@ pub const TextFieldParams = union(enum) {
     email: InputParamsEmail,
     telephone: InputParamsTelephone,
     file: InputParamsFile,
+    date: InputParamsDate,
 };
 
 pub const StateType = enum {
@@ -3000,6 +3073,7 @@ pub const ElementDeclaration = struct {
     hover_style_fields: ?[]const StyleFields = null,
     inlineStyle: ?[]const u8 = null,
     accessibility: ?Accessibility = null,
+    can_have_children: bool = true,
 };
 
 pub const Tooltip = struct {
@@ -3110,4 +3184,5 @@ pub const Video = struct {
     muted: bool = false,
     loop: bool = false,
     controls: bool = false,
+    lazy: bool = false,
 };

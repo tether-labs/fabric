@@ -16,6 +16,7 @@ const Item = @import("UITree.zig").Item;
 // This gets attached to each route in your radix tree
 pub const RouteFrameArena = struct {
     frames: [NUMBER_OF_FRAMES]FrameData,
+    view: FrameData,
     current_frame: usize = 0,
 
     pub fn init(backing_allocator: Allocator) RouteFrameArena {
@@ -24,16 +25,26 @@ pub const RouteFrameArena = struct {
                 .{ .arena = Arena.init(backing_allocator) },
                 .{ .arena = Arena.init(backing_allocator) },
             },
+            .view = .{ .arena = Arena.init(backing_allocator) },
         };
     }
 
     pub fn deinit(self: *RouteFrameArena) void {
         self.frames[0].arena.deinit();
         self.frames[1].arena.deinit();
+        self.view.arena.deinit();
     }
 
     pub fn allocator(self: *RouteFrameArena) Allocator {
         return self.frames[self.current_frame].arena.allocator();
+    }
+
+    pub fn viewAllocator(self: *RouteFrameArena) Allocator {
+        return self.view.arena.allocator();
+    }
+
+    pub fn beginView(self: *RouteFrameArena) void {
+        _ = self.view.arena.reset(.retain_capacity);
     }
 
     pub fn beginFrame(self: *RouteFrameArena) void {
@@ -113,7 +124,7 @@ backing_allocator: Allocator,
 pub fn init(backing_allocator: Allocator) FrameAllocator {
     var views: [NUMBER_OF_FRAMES]FrameData = undefined;
     for (0..NUMBER_OF_FRAMES) |i| {
-        views[i] = .{ .arena = std.heap.ArenaAllocator.init(backing_allocator) };
+        views[i] = .{ .arena = Arena.init(backing_allocator) };
     }
 
     return .{
@@ -161,18 +172,21 @@ pub fn beginFrame(self: *FrameAllocator) void {
 }
 
 pub fn beginView(self: *FrameAllocator) void {
-    // Move to next frame
-    const next_route = (self.current_route + 1) % NUMBER_OF_FRAMES;
-
-    // Clear the route we're about to use
-    _ = self.view[next_route].arena.reset(.retain_capacity);
-    self.view[next_route].stats = .{};
-
-    self.current_route = next_route;
+    if (self.current_route_arena) |route| {
+        route.beginView();
+    }
+    // // Move to next frame
+    // const next_route = (self.current_route + 1) % NUMBER_OF_FRAMES;
+    //
+    // // Clear the route we're about to use
+    // _ = self.view[next_route].arena.reset(.retain_capacity);
+    // self.view[next_route].stats = .{};
+    //
+    // self.current_route = next_route;
 }
 
 pub fn persistentAllocator(self: *FrameAllocator) Allocator {
-    return self.persistent_arena.allocator();
+    return self.backing_allocator;
 }
 
 pub fn requestAllocator(self: *FrameAllocator) Allocator {

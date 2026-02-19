@@ -46,18 +46,41 @@ pub fn init(year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8) Dat
 }
 
 /// Creates a DateTime instance from a Unix timestamp
-pub fn fromTimestamp(timestamp: i64) DateTime {
-    const epoch_seconds = std.time.epoch.EpochSeconds{
-        .secs = @as(u64, @intCast(@as(u64, @bitCast(timestamp)))),
-    };
-    const epoch_day = epoch_seconds.getEpochDay();
-    const day_seconds = epoch_seconds.getDaySeconds();
+pub fn fromTimestamp(timestamp: i64) !DateTime {
+    // Basic sanity check:
+    // If the number is huge, it's likely ms or us, not seconds.
+    // 253402300800 is the year 9999.
+    if (timestamp > 253402300800) {
+        return error.TimestampLikelyInWrongUnits;
+    }
 
+    const epoch_seconds = std.time.epoch.EpochSeconds{
+        .secs = @intCast(timestamp),
+    };
+
+    // 1. Check for negative timestamps (if you only support Epoch onwards)
+    if (timestamp < 0) {
+        return error.InvalidTimestamp;
+    }
+
+    // 2. Check for overflow before casting
+    // The maximum value for u64 is much larger than what is safe for
+    // many calendar calculations.
+
+    const epoch_day = epoch_seconds.getEpochDay();
+
+    // 3. (Optional) Check if the year exceeds your DateTime's storage (e.g., i32)
+    // std.time.epoch handles the math, but we should verify the result.
     const year_day = epoch_day.calculateYearDay();
+    if (year_day.year > 100000) { // Example threshold
+        return error.TimestampTooLarge;
+    }
+
+    const day_seconds = epoch_seconds.getDaySeconds();
     const month_day = year_day.calculateMonthDay();
 
-    return .{
-        .year = @as(i32, @intCast(year_day.year)),
+    return DateTime{
+        .year = @intCast(year_day.year),
         .month = month_day.month.numeric(),
         .day = month_day.day_index + 1,
         .hour = day_seconds.getHoursIntoDay(),
@@ -91,7 +114,7 @@ pub fn fromMonth(month: u8, year: i32) DateTime {
 /// Gets the current date and time
 pub fn now() DateTime {
     const timestamp = std.time.timestamp();
-    return DateTime.fromTimestamp(timestamp);
+    return DateTime.fromTimestamp(timestamp) catch unreachable;
 }
 
 /// Gets the month in string format
