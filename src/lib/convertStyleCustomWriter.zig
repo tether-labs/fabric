@@ -1112,6 +1112,21 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         writePropValue("box-shadow", .{ .tag = .shadow, .data = .{ .shadow = visual.shadow } }, writer);
     }
 
+    if (visual.text_shadow.blur > 0 or visual.text_shadow.spread > 0 or
+        visual.text_shadow.top != 0 or visual.text_shadow.left != 0)
+    {
+        const shadow = visual.text_shadow;
+        writer.write("text-shadow:") catch {};
+        writer.writeI16(shadow.left) catch {};
+        writer.write("px ") catch {};
+        writer.writeI16(shadow.top) catch {};
+        writer.write("px ") catch {};
+        writer.writeU8Num(shadow.blur) catch {};
+        writer.write("px ") catch {};
+        colorToCSS(shadow.color, writer) catch {};
+        writer.write(";\n") catch {};
+    }
+
     if (visual.new_shadow > 0) {
         const shadow = Vapor.shadows.get(visual.new_shadow) orelse unreachable;
         writer.write("box-shadow:") catch {};

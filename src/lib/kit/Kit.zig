@@ -11,6 +11,10 @@ pub const Json = @import("JSON.zig");
 
 pub const Kit = @This();
 
+pub fn init() void {
+    Vapor.fetch_registry = std.AutoHashMap(u32, *Kit.FetchNode).init(Vapor.arena(.persist)); ///// This bad boy is 19kb addition
+}
+
 /// This function takes a slice of json and parses it into a struct
 /// # Parameters:
 /// - `T`: struct type

@@ -10,7 +10,6 @@ const PureTree = @import("PureTree.zig");
 const UINode = @import("UITree.zig").UINode;
 const CommandsTree = UIContext.CommandsTree;
 const Rune = @import("Rune.zig");
-const GrainStruct = @import("Grain.zig");
 const TransitionState = @import("Transition.zig").TransitionState;
 const Router = @import("Router.zig");
 pub const Element = @import("Element.zig").Element;
@@ -22,12 +21,10 @@ pub const Wasm = @import("WASM.zig");
 const getVisualStyle = @import("convertStyleCustomWriter.zig").getVisualStyle;
 pub const Bridge = @import("Bridge.zig");
 pub const Event = @import("Event.zig");
-const Canopy = @import("Canopy.zig");
 const CSSGenerator = @import("CSSGenerator.zig");
 const hashKey = utils.hashKey;
 const Pool = @import("Pool.zig");
 const mutateDomElementStyleString = @import("Element.zig").mutateDomElementStyleString;
-const Static = @import("Static.zig");
 const HtmlGenerator = @import("HtmlGenerator.zig");
 const mode_options = @import("build_options");
 const Packer = @import("Packer.zig");
@@ -56,8 +53,6 @@ pub var Timer = struct {
 }{};
 // const getFocusStyle = @import("convertFocus.zig").getFocusStyle;
 // const getFocusWithinStyle = @import("convertFocusWithin.zig").getFocusWithinStyle;
-const Chain = @import("Static.zig").Chain;
-const ChainPure = @import("Pure.zig").Chain;
 const getStyle = @import("convertStyleCustomWriter.zig").getStyle;
 const StyleCompiler = @import("convertStyleCustomWriter.zig");
 const grabInputDetails = @import("grabInputDetails.zig");
@@ -114,7 +109,6 @@ pub const Kit = @import("kit/Kit.zig");
 // pub const Chart = @import("components/charts/Chart.zig");
 pub const Style = types.Style;
 pub const Signal = Rune.Signal;
-pub const Grain = GrainStruct.Grain;
 pub const Types = types;
 pub const DateTime = @import("DateTime.zig");
 pub const Animation = @import("Animation.zig");
@@ -422,7 +416,6 @@ fn initRegistries(persistent_allocator: std.mem.Allocator) void {
     callback_registry = std.AutoHashMap(u32, *const fn () void).init(persistent_allocator);
     ctx_callback_registry = std.AutoHashMap(u32, *Node).init(persistent_allocator);
     animation_frame_callbacks = std.array_list.Managed(*Node).init(persistent_allocator);
-    fetch_registry = std.AutoHashMap(u32, *Kit.FetchNode).init(persistent_allocator); ///// This bad boy is 19kb addition
     // response_registry = std.AutoHashMap(u32, Kit.Response).init(persistent_allocator);
 }
 
@@ -1284,26 +1277,32 @@ pub inline fn elementEventListener(
     event_type: types.EventType,
     cb: *const fn (event: *Event) void,
 ) ?usize {
-    var onid = hashKey(ui_node.uuid);
-    onid +%= @intFromEnum(event_type);
-    events_callbacks.put(onid, .{ .cb = cb, .ui_node = ui_node, .evt_type = event_type }) catch |err| {
-        println("Event Callback Error: {any}\n", .{err});
-    };
+    if (isWasi) {
+        var onid = hashKey(ui_node.uuid);
+        onid +%= @intFromEnum(event_type);
+        events_callbacks.put(onid, .{ .cb = cb, .ui_node = ui_node, .evt_type = event_type }) catch |err| {
+            println("Event Callback Error: {any}\n", .{err});
+        };
 
-    const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
-    Wasm.createElementEventListener(ui_node.uuid.ptr, ui_node.uuid.len, event_type_str.ptr, event_type_str.len, onid);
-    return onid;
+        const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
+        Wasm.createElementEventListener(ui_node.uuid.ptr, ui_node.uuid.len, event_type_str.ptr, event_type_str.len, onid);
+        return onid;
+    }
+    return null;
 }
 
 pub inline fn removeElementEventListener(
     ui_node: *UINode,
     event_type: types.EventType,
 ) ?usize {
-    var onid = hashKey(ui_node.uuid);
-    onid +%= @intFromEnum(event_type);
-    const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
-    Wasm.removeElementEventListener(ui_node.uuid.ptr, ui_node.uuid.len, event_type_str.ptr, event_type_str.len, onid);
-    return onid;
+    if (isWasi) {
+        var onid = hashKey(ui_node.uuid);
+        onid +%= @intFromEnum(event_type);
+        const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
+        Wasm.removeElementEventListener(ui_node.uuid.ptr, ui_node.uuid.len, event_type_str.ptr, event_type_str.len, onid);
+        return onid;
+    }
+    return null;
 }
 
 pub fn addGlobalListener(event_type: EventType, cb: *const fn (*Event) void) ?usize {
@@ -2632,294 +2631,294 @@ pub fn checkWasmMemory() void {
     Wasm.checkMemoryGrowthWasm();
 }
 
-pub const API = struct {
-    // --- Context & Callbacks ---
+// pub const API = struct {
+// --- Context & Callbacks ---
 
-    pub fn onEndCtxCallback() callconv(.c) void {
-        const length = Vapor.on_end_ctx_funcs.items.len;
-        if (length == 0) return;
-        var i: usize = length - 1;
-        while (i >= 0) : (i -= 1) {
-            const node = Vapor.on_end_ctx_funcs.orderedRemove(i);
-            @call(.auto, node.data.runFn, .{&node.data});
-            if (i == 0) return;
-        }
-    }
-
-    pub fn getVideo(uinode: *UINode) callconv(.c) ?*const types.Video {
-        if (uinode.video) |video| {
-            return video;
-        }
-        return null;
-    }
-
-    export fn hooksMountedCallbackCtx(id: u32) void {
-        const kv = Vapor.mounted_ctx_funcs.fetchRemove(id) orelse {
-            printlnSrcErr("Mounted Function {d} not found\n", .{id}, @src());
-            return;
-        };
-        const node = kv.value;
+pub export fn onEndCtxCallback() callconv(.c) void {
+    const length = Vapor.on_end_ctx_funcs.items.len;
+    if (length == 0) return;
+    var i: usize = length - 1;
+    while (i >= 0) : (i -= 1) {
+        const node = Vapor.on_end_ctx_funcs.orderedRemove(i);
         @call(.auto, node.data.runFn, .{&node.data});
-    }
-
-    // pub fn clearOnEnd() callconv(.c) void {
-    //     on_end_funcs.clearRetainingCapacity();
-    // }
-
-    pub fn onEndCallback() callconv(.c) void {
-        const length = Vapor.on_end_funcs.items.len;
-        if (length == 0) return;
-        var i: usize = length - 1;
-        while (i >= 0) : (i -= 1) {
-            const call = Vapor.on_end_funcs.orderedRemove(i);
-            @call(.auto, call, .{});
-            if (i == 0) return;
-        }
-    }
-
-    pub fn onPopStateCallback() callconv(.c) void {
-        const length = Vapor.pop_state_funcs.items.len;
-        if (length == 0) return;
-        var i: usize = length - 1;
-        while (i >= 0) : (i -= 1) {
-            const call = Vapor.pop_state_funcs.items[i];
-            @call(.auto, call, .{});
-            if (i == 0) return;
-        }
-    }
-
-    pub fn onPushStateCallback() callconv(.c) void {
-        const length = Vapor.push_state_funcs.items.len;
-        if (length == 0) return;
-        var i: usize = length - 1;
-        while (i >= 0) : (i -= 1) {
-            const call = Vapor.push_state_funcs.orderedRemove(i);
-            @call(.auto, call, .{});
-            if (i == 0) return;
-        }
-    }
-
-    pub fn callbackCtx(callback_ptr: u32, object_ptr: ?*DynamicObject) callconv(.c) void {
-        const node = Vapor.ctx_callback_registry.get(callback_ptr) orelse {
-            Vapor.printlnSrcErr("Callback not found\n", .{}, @src());
-            return;
-        };
-        node.data.dynamic_object = object_ptr;
-        @call(.auto, node.data.runFn, .{&node.data});
-        if (Vapor.mode == .atomic) {
-            Vapor.cycle();
-        }
-    }
-
-    // --- Rendering & Tree Management ---
-
-    pub fn renderUI(route: [*:0]u8) callconv(.c) u32 {
-        Vapor.renderCycle(route) catch |err| {
-            printlnSrcErr("Error while rendering", .{}, @src());
-            switch (err) {
-                error.NoRouteFound => {
-                    printlnSrcErr("No Route found", .{}, @src());
-                },
-            }
-            return 0;
-        };
-        return 1;
-    }
-
-    pub fn getRenderTreePtr() callconv(.c) ?*UIContext.CommandsTree {
-        const tree_op = Vapor.current_ctx.ui_tree;
-        if (tree_op != null) {
-            return Vapor.current_ctx.ui_tree.?;
-        }
-        return null;
-    }
-
-    pub fn getRenderUINodeRootPtr() callconv(.c) ?*UINode {
-        if (Vapor.current_ctx.root == null) return null;
-        return Vapor.current_ctx.root.?;
-    }
-
-    pub fn getUINodeChildrenCount(node_ptr: ?*UINode) callconv(.c) usize {
-        const node = node_ptr orelse return 0;
-        return node.children_count;
-    }
-
-    pub fn getUINodeChild(node_ptr: ?*UINode, index: u32) callconv(.c) ?*UINode {
-        const node = node_ptr orelse return null;
-        return node.childAt(index);
-    }
-
-    // Zig side - export first child and next sibling
-    pub fn getUINodeFirstChild(node_ptr: ?*UINode) callconv(.c) ?*UINode {
-        const node = node_ptr orelse return null;
-        return node.first_child;
-    }
-
-    pub fn getUINodeNextSibling(node_ptr: ?*UINode) callconv(.c) ?*UINode {
-        const node = node_ptr orelse return null;
-        return node.next_sibling;
-    }
-
-    pub fn getDirtyNodeCount() callconv(.c) usize {
-        return Vapor.dirty_nodes.items.len;
-    }
-
-    pub fn markCurrentTreeNotDirty() callconv(.c) void {
-        if (!Vapor.has_context) return;
-        const root = Vapor.current_ctx.root orelse return;
-        Vapor.markChildrenNotDirty(root);
-    }
-
-    // --- Layout & Allocation ---
-
-    pub fn allocateLayoutInfo() callconv(.c) *u8 {
-        const info_ptr: *u8 = @ptrCast(&Vapor.layout_info);
-        return info_ptr;
-    }
-
-    pub fn allocateUINodeLayoutInfo() callconv(.c) *u8 {
-        const ui_info_ptr: *u8 = @ptrCast(&Vapor.ui_node_layout_info);
-        return ui_info_ptr;
-    }
-
-    pub fn allocUint8(length: u32) callconv(.c) [*]const u8 {
-        const slice = Vapor.allocator_global.alloc(u8, length) catch
-            @panic("failed to allocate memory");
-        return slice.ptr;
-    }
-
-    pub fn allocUint8Frame(length: u32) callconv(.c) [*]const u8 {
-        const slice = Vapor.getFrameAllocator().alloc(u8, length) catch
-            @panic("failed to allocate memory");
-        return slice.ptr;
-    }
-
-    pub fn allocate(size: usize) callconv(.c) ?[*]f32 {
-        const buf = Vapor.allocator_global.alloc(f32, size) catch |err| {
-            Vapor.println("{any}\n", .{err});
-            return null;
-        };
-        return buf.ptr;
-    }
-
-    pub fn allocateU32(size: usize) callconv(.c) ?[*]u32 {
-        const buf = Vapor.arena(.persist).alloc(u32, size) catch |err| {
-            Vapor.println("{any}\n", .{err});
-            return null;
-        };
-        return buf.ptr;
-    }
-
-    // --- CSS & Commands ---
-
-    pub fn getCSS() callconv(.c) ?[*]const u8 {
-        return Vapor.generator.buffer[0..Vapor.generator.end].ptr;
-    }
-
-    pub fn getCSSLen() callconv(.c) usize {
-        return Vapor.generator.end;
-    }
-
-    pub fn getRenderCommandPtr(tree: *CommandsTree) callconv(.c) [*]u8 {
-        if (std.mem.eql(u8, tree.node.id, "global-style")) {
-            Vapor.println("getRenderCommandPtr {any}\n", .{tree.node.node_ptr.dirty});
-        }
-        return @ptrCast(tree.node);
-    }
-
-    pub fn getTreeNodeChildrenCount(tree: *CommandsTree) callconv(.c) usize {
-        return tree.children.items.len;
-    }
-
-    pub fn getTreeNodeChild(tree: *CommandsTree, index: usize) callconv(.c) *CommandsTree {
-        const child = tree.children.items[index];
-        return child;
-    }
-
-    pub fn getRenderCommandSize() callconv(.c) usize {
-        return @sizeOf(RenderCommand);
-    }
-
-    // --- Removal Handling ---
-
-    pub fn shouldRerender() callconv(.c) bool {
-        return Vapor.global_rerender;
-    }
-
-    pub fn rerenderEverything() callconv(.c) bool {
-        return Vapor.rerender_everything;
-    }
-
-    pub fn hasDirty() callconv(.c) bool {
-        return Vapor.has_dirty;
-    }
-
-    pub fn resetRerender() callconv(.c) void {
-        Vapor.global_rerender = false;
-        Vapor.rerender_everything = false;
-        Vapor.has_dirty = false;
-        Vapor.status = .{};
-    }
-
-    pub fn callRouteRenderCycle(ptr: [*:0]u8) callconv(.c) u32 {
-        Packer.animations.clearRetainingCapacity();
-        Packer.layouts.clearRetainingCapacity();
-        Packer.positions.clearRetainingCapacity();
-        Packer.margins_paddings.clearRetainingCapacity();
-        Packer.visuals.clearRetainingCapacity();
-        Packer.interactives.clearRetainingCapacity();
-        Packer.transforms.clearRetainingCapacity();
-        UIContext.element_style_hash_map.clearRetainingCapacity();
-        Vapor.renderCycle(ptr) catch |err| {
-            printlnSrcErr("Error while rendering", .{}, @src());
-            switch (err) {
-                error.NoRouteFound => {
-                    printlnSrcErr("No Route found", .{}, @src());
-                },
-            }
-            return 0;
-        };
-        Vapor.markChildrenDirty(Vapor.current_ctx.root.?);
-        return 1;
-    }
-
-    pub fn setRouteRenderTree(ptr: [*:0]u8) callconv(.c) u32 {
-        Vapor.renderCycle(ptr) catch |err| {
-            printlnSrcErr("Error while rendering", .{}, @src());
-            switch (err) {
-                error.NoRouteFound => {
-                    printlnSrcErr("No Route found", .{}, @src());
-                },
-            }
-            return 0;
-        };
-        return 1;
-    }
-
-    pub fn setRerenderTrue() callconv(.c) void {
-        Vapor.cycle();
-    }
-
-    pub fn getDirtyValue(node: *UINode) callconv(.c) bool {
-        return node.dirty;
-    }
-};
-
-// --- Auto-Export Magic ---
-comptime {
-    const decls = std.meta.declarations(API);
-    for (decls) |decl| {
-        // We only care about public functions inside the API struct
-        const val = @field(API, decl.name);
-        const Type = @TypeOf(val);
-
-        // Check if it is a function
-        if (@typeInfo(Type) == .@"fn") {
-            // Export it using its declared name
-            @export(&val, .{ .name = decl.name });
-        }
+        if (i == 0) return;
     }
 }
+
+pub export fn getVideo(uinode: *UINode) callconv(.c) ?*const types.Video {
+    if (uinode.video) |video| {
+        return video;
+    }
+    return null;
+}
+
+export fn hooksMountedCallbackCtx(id: u32) void {
+    const kv = Vapor.mounted_ctx_funcs.fetchRemove(id) orelse {
+        printlnSrcErr("Mounted Function {d} not found\n", .{id}, @src());
+        return;
+    };
+    const node = kv.value;
+    @call(.auto, node.data.runFn, .{&node.data});
+}
+
+// pub export fn clearOnEnd() callconv(.c) void {
+//     on_end_funcs.clearRetainingCapacity();
+// }
+
+pub export fn onEndCallback() callconv(.c) void {
+    const length = Vapor.on_end_funcs.items.len;
+    if (length == 0) return;
+    var i: usize = length - 1;
+    while (i >= 0) : (i -= 1) {
+        const call = Vapor.on_end_funcs.orderedRemove(i);
+        @call(.auto, call, .{});
+        if (i == 0) return;
+    }
+}
+
+pub export fn onPopStateCallback() callconv(.c) void {
+    const length = Vapor.pop_state_funcs.items.len;
+    if (length == 0) return;
+    var i: usize = length - 1;
+    while (i >= 0) : (i -= 1) {
+        const call = Vapor.pop_state_funcs.items[i];
+        @call(.auto, call, .{});
+        if (i == 0) return;
+    }
+}
+
+pub export fn onPushStateCallback() callconv(.c) void {
+    const length = Vapor.push_state_funcs.items.len;
+    if (length == 0) return;
+    var i: usize = length - 1;
+    while (i >= 0) : (i -= 1) {
+        const call = Vapor.push_state_funcs.orderedRemove(i);
+        @call(.auto, call, .{});
+        if (i == 0) return;
+    }
+}
+
+pub export fn callbackCtx(callback_ptr: u32, object_ptr: ?*DynamicObject) callconv(.c) void {
+    const node = Vapor.ctx_callback_registry.get(callback_ptr) orelse {
+        Vapor.printlnSrcErr("Callback not found\n", .{}, @src());
+        return;
+    };
+    node.data.dynamic_object = object_ptr;
+    @call(.auto, node.data.runFn, .{&node.data});
+    if (Vapor.mode == .atomic) {
+        Vapor.cycle();
+    }
+}
+
+// --- Rendering & Tree Management ---
+
+pub export fn renderUI(route: [*:0]u8) callconv(.c) u32 {
+    Vapor.renderCycle(route) catch |err| {
+        printlnSrcErr("Error while rendering", .{}, @src());
+        switch (err) {
+            error.NoRouteFound => {
+                printlnSrcErr("No Route found", .{}, @src());
+            },
+        }
+        return 0;
+    };
+    return 1;
+}
+
+pub export fn getRenderTreePtr() callconv(.c) ?*UIContext.CommandsTree {
+    const tree_op = Vapor.current_ctx.ui_tree;
+    if (tree_op != null) {
+        return Vapor.current_ctx.ui_tree.?;
+    }
+    return null;
+}
+
+pub export fn getRenderUINodeRootPtr() callconv(.c) ?*UINode {
+    if (Vapor.current_ctx.root == null) return null;
+    return Vapor.current_ctx.root.?;
+}
+
+pub export fn getUINodeChildrenCount(node_ptr: ?*UINode) callconv(.c) usize {
+    const node = node_ptr orelse return 0;
+    return node.children_count;
+}
+
+pub export fn getUINodeChild(node_ptr: ?*UINode, index: u32) callconv(.c) ?*UINode {
+    const node = node_ptr orelse return null;
+    return node.childAt(index);
+}
+
+// Zig side - export first child and next sibling
+pub export fn getUINodeFirstChild(node_ptr: ?*UINode) callconv(.c) ?*UINode {
+    const node = node_ptr orelse return null;
+    return node.first_child;
+}
+
+pub export fn getUINodeNextSibling(node_ptr: ?*UINode) callconv(.c) ?*UINode {
+    const node = node_ptr orelse return null;
+    return node.next_sibling;
+}
+
+pub export fn getDirtyNodeCount() callconv(.c) usize {
+    return Vapor.dirty_nodes.items.len;
+}
+
+pub export fn markCurrentTreeNotDirty() callconv(.c) void {
+    if (!Vapor.has_context) return;
+    const root = Vapor.current_ctx.root orelse return;
+    Vapor.markChildrenNotDirty(root);
+}
+
+// --- Layout & Allocation ---
+
+pub export fn allocateLayoutInfo() callconv(.c) *u8 {
+    const info_ptr: *u8 = @ptrCast(&Vapor.layout_info);
+    return info_ptr;
+}
+
+pub export fn allocateUINodeLayoutInfo() callconv(.c) *u8 {
+    const ui_info_ptr: *u8 = @ptrCast(&Vapor.ui_node_layout_info);
+    return ui_info_ptr;
+}
+
+pub export fn allocUint8(length: u32) callconv(.c) [*]const u8 {
+    const slice = Vapor.allocator_global.alloc(u8, length) catch
+        @panic("failed to allocate memory");
+    return slice.ptr;
+}
+
+pub export fn allocUint8Frame(length: u32) callconv(.c) [*]const u8 {
+    const slice = Vapor.getFrameAllocator().alloc(u8, length) catch
+        @panic("failed to allocate memory");
+    return slice.ptr;
+}
+
+pub export fn allocate(size: usize) callconv(.c) ?[*]f32 {
+    const buf = Vapor.allocator_global.alloc(f32, size) catch |err| {
+        Vapor.println("{any}\n", .{err});
+        return null;
+    };
+    return buf.ptr;
+}
+
+pub export fn allocateU32(size: usize) callconv(.c) ?[*]u32 {
+    const buf = Vapor.arena(.persist).alloc(u32, size) catch |err| {
+        Vapor.println("{any}\n", .{err});
+        return null;
+    };
+    return buf.ptr;
+}
+
+// --- CSS & Commands ---
+
+pub export fn getCSS() callconv(.c) ?[*]const u8 {
+    return Vapor.generator.buffer[0..Vapor.generator.end].ptr;
+}
+
+pub export fn getCSSLen() callconv(.c) usize {
+    return Vapor.generator.end;
+}
+
+pub export fn getRenderCommandPtr(tree: *CommandsTree) callconv(.c) [*]u8 {
+    if (std.mem.eql(u8, tree.node.id, "global-style")) {
+        Vapor.println("getRenderCommandPtr {any}\n", .{tree.node.node_ptr.dirty});
+    }
+    return @ptrCast(tree.node);
+}
+
+pub export fn getTreeNodeChildrenCount(tree: *CommandsTree) callconv(.c) usize {
+    return tree.children.items.len;
+}
+
+pub export fn getTreeNodeChild(tree: *CommandsTree, index: usize) callconv(.c) *CommandsTree {
+    const child = tree.children.items[index];
+    return child;
+}
+
+pub export fn getRenderCommandSize() callconv(.c) usize {
+    return @sizeOf(RenderCommand);
+}
+
+// --- Removal Handling ---
+
+pub export fn shouldRerender() callconv(.c) bool {
+    return Vapor.global_rerender;
+}
+
+pub export fn rerenderEverything() callconv(.c) bool {
+    return Vapor.rerender_everything;
+}
+
+pub export fn hasDirty() callconv(.c) bool {
+    return Vapor.has_dirty;
+}
+
+pub export fn resetRerender() callconv(.c) void {
+    Vapor.global_rerender = false;
+    Vapor.rerender_everything = false;
+    Vapor.has_dirty = false;
+    Vapor.status = .{};
+}
+
+pub export fn callRouteRenderCycle(ptr: [*:0]u8) callconv(.c) u32 {
+    Packer.animations.clearRetainingCapacity();
+    Packer.layouts.clearRetainingCapacity();
+    Packer.positions.clearRetainingCapacity();
+    Packer.margins_paddings.clearRetainingCapacity();
+    Packer.visuals.clearRetainingCapacity();
+    Packer.interactives.clearRetainingCapacity();
+    Packer.transforms.clearRetainingCapacity();
+    UIContext.element_style_hash_map.clearRetainingCapacity();
+    Vapor.renderCycle(ptr) catch |err| {
+        printlnSrcErr("Error while rendering", .{}, @src());
+        switch (err) {
+            error.NoRouteFound => {
+                printlnSrcErr("No Route found", .{}, @src());
+            },
+        }
+        return 0;
+    };
+    Vapor.markChildrenDirty(Vapor.current_ctx.root.?);
+    return 1;
+}
+
+pub export fn setRouteRenderTree(ptr: [*:0]u8) callconv(.c) u32 {
+    Vapor.renderCycle(ptr) catch |err| {
+        printlnSrcErr("Error while rendering", .{}, @src());
+        switch (err) {
+            error.NoRouteFound => {
+                printlnSrcErr("No Route found", .{}, @src());
+            },
+        }
+        return 0;
+    };
+    return 1;
+}
+
+pub export fn setRerenderTrue() callconv(.c) void {
+    Vapor.cycle();
+}
+
+pub export fn getDirtyValue(node: *UINode) callconv(.c) bool {
+    return node.dirty;
+}
+// };
+
+// // --- Auto-Export Magic ---
+// comptime {
+//     const decls = std.meta.declarations(API);
+//     for (decls) |decl| {
+//         // We only care about public functions inside the API struct
+//         const val = @field(API, decl.name);
+//         const Type = @TypeOf(val);
+//
+//         // Check if it is a function
+//         if (@typeInfo(Type) == .@"fn") {
+//             // Export it using its declared name
+//             @export(&val, .{ .name = decl.name });
+//         }
+//     }
+// }
 
 pub const std_options = std.Options{
     // Set the log level (optional, defaults to .info in safe modes)

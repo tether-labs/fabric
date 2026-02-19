@@ -703,6 +703,10 @@ pub const Background = struct {
         return solid(Color.hex(hex_str));
     }
 
+    pub fn rgba(r: u8, g: u8, b: u8, a: f32) Background {
+        return solid(Color.rgba(r, g, b, a));
+    }
+
     pub fn palette(thematic: ThemeTokens) Background {
         return solid(Color.palette(thematic));
     }
@@ -2282,6 +2286,7 @@ pub const Visual = struct {
 
     /// Shadow configuration for drop shadows
     shadow: ?Shadow = null,
+    text_shadow: ?Shadow = null,
 
     new_shadow: ?NewShadow = null,
 
@@ -2582,6 +2587,7 @@ pub const PackedVisual = packed struct {
     has_outline_color: bool = false,
     outline_color: PackedColor = .{},
     shadow: PackedShadow = .{},
+    text_shadow: PackedShadow = .{},
     has_white_space: bool = false,
     white_space: WhiteSpace = .normal,
     cursor: Cursor = .default,

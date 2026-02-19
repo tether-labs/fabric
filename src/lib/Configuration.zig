@@ -1095,6 +1095,18 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
         packet_visual.shadow.color = shadow_color;
     }
 
+    if (visual.text_shadow) |text_shadow| {
+        packet_visual.text_shadow = .{
+            .blur = text_shadow.blur,
+            .spread = text_shadow.spread,
+            .top = text_shadow.top,
+            .left = text_shadow.left,
+        };
+        var text_shadow_color = packet_visual.text_color;
+        packColor(text_shadow.color, &text_shadow_color);
+        packet_visual.text_shadow.color = text_shadow_color;
+    }
+
     if (visual.cursor) |cursor| {
         packet_visual.cursor = cursor;
     }

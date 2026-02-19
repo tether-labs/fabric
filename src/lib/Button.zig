@@ -172,25 +172,25 @@ pub fn Builder(comptime state_type: types.StateType) type {
             const Closure = struct {
                 id: []const u8,
                 arguments: Args,
-                run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn, .argsFn = argsFn } },
+                run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
                 fn runFn(action: *Vapor.Action) void {
                     const run_node: *Vapor.Node = @fieldParentPtr("data", action);
                     const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
                     @call(.auto, func, closure.arguments);
 
-                    Vapor.trace_buffer.push(.{
-                        .timestamp = std.time.microTimestamp(),
-                        .event_type = .click,
-                        .element_id = Vapor.allocator_global.dupe(u8, closure.id) catch "<failed>",
-                        .serialized_args = serializeArgs(Vapor.arena(.persist), closure.arguments, .{}) catch "<failed>",
-                    });
+                    // Vapor.trace_buffer.push(.{
+                    //     .timestamp = std.time.microTimestamp(),
+                    //     .event_type = .click,
+                    //     .element_id = Vapor.allocator_global.dupe(u8, closure.id) catch "<failed>",
+                    //     .serialized_args = serializeArgs(Vapor.arena(.persist), closure.arguments, .{}) catch "<failed>",
+                    // });
                 }
-                fn argsFn(action: *Vapor.Action) []const u8 {
-                    const run_node: *Vapor.Node = @fieldParentPtr("data", action);
-                    const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
-                    return serializeArgs(Vapor.arena(.frame), closure.arguments, .{}) catch
-                        "\"<serialization failed>\"";
-                }
+                // fn argsFn(action: *Vapor.Action) []const u8 {
+                //     const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+                //     const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+                //     return serializeArgs(Vapor.arena(.frame), closure.arguments, .{}) catch
+                //         "\"<serialization failed>\"";
+                // }
                 fn deinitFn(_: *Vapor.Node) void {}
             };
 
