@@ -625,7 +625,7 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     }
 
     if (current_open.event_handlers) |handlers| {
-        for (handlers.handlers.items) |handler| {
+        for (handlers.items.items) |handler| {
             current_open.finger_print +%= @intFromEnum(handler.event_type);
         }
     }
@@ -1095,6 +1095,18 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
         packet_visual.shadow.color = shadow_color;
     }
 
+    if (visual.text_shadow) |text_shadow| {
+        packet_visual.text_shadow = .{
+            .blur = text_shadow.blur,
+            .spread = text_shadow.spread,
+            .top = text_shadow.top,
+            .left = text_shadow.left,
+        };
+        var text_shadow_color = packet_visual.text_color;
+        packColor(text_shadow.color, &text_shadow_color);
+        packet_visual.text_shadow.color = text_shadow_color;
+    }
+
     if (visual.cursor) |cursor| {
         packet_visual.cursor = cursor;
     }
@@ -1133,18 +1145,6 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
 
     if (visual.resize) |resize| {
         packet_visual.resize = resize;
-    }
-
-    if (visual.text_shadow) |text_shadow| {
-        packet_visual.text_shadow = .{
-            .blur = text_shadow.blur,
-            .spread = text_shadow.spread,
-            .top = text_shadow.top,
-            .left = text_shadow.left,
-        };
-        var text_shadow_color = packet_visual.text_color;
-        packColor(text_shadow.color, &text_shadow_color);
-        packet_visual.text_shadow.color = text_shadow_color;
     }
 
     if (visual.new_shadow) |new_shadow| {

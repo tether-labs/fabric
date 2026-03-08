@@ -119,6 +119,7 @@ pub fn now() DateTime {
 
 /// Gets the month in string format
 pub fn monthString(month_index: usize) []const u8 {
+    if (month_index < 1 or month_index > 12) return "Invalid Month";
     return monthsStrings[month_index - 1];
 }
 

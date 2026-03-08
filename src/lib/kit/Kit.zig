@@ -1438,14 +1438,6 @@ pub const Observer = struct {
             },
         }
     }
-
-    // pub fn observe(self: *Observer, items: []const Vapor.ObserverNode) void {
-    //     self.oberver_nodes.appendSlice(items) catch unreachable;
-    //     Vapor.observer_nodes.put(self.name, self.oberver_nodes) catch unreachable;
-    //     Wasm.observeWasm(self.name.ptr, self.name.len);
-    // }
-
-    // fn addCallBack(name: []const u8, cb: anytype, comptime T: type) void {}
 };
 
 const ObserverExport = DynamicObject.exportStruct(ObserverOptions);

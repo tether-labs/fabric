@@ -241,14 +241,14 @@ pub const Element = struct {
         self: *const Element,
         event_type: types.EventType,
         cb: anytype,
-        construct: anytype,
-    ) ?usize {
+        args: anytype,
+    ) void {
         if (!Vapor.isWasi) return null;
         const ui_node = self._node_ptr orelse {
             Vapor.printlnSrc("Node is null", .{}, @src());
-            return null;
+            unreachable;
         };
-        return Vapor.elementInstEventListener(ui_node, event_type, construct, cb);
+        return Vapor.attachEventCtxCallback(ui_node, event_type, cb, args) catch unreachable;
     }
 
     // pub fn getElementUnderMouse(self: *Element) ?Element {

@@ -161,7 +161,8 @@ pub fn frameAllocator(self: *FrameAllocator) Allocator {
         return route.allocator();
     }
     std.log.err("Cannot access the frame allocator, first create the Route via Page() then proceed with initliazation", .{});
-    @panic("No route set - call setCurrentRoute first");
+    return self.persistentAllocator();
+    // @panic("No route set - call setCurrentRoute first");
 }
 
 // Begin frame on the current route

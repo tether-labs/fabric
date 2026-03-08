@@ -2141,6 +2141,14 @@ pub const BorderGrouped = struct {
         return .{ .thickness = .l(thickness), .color = color };
     }
 
+    pub fn b(thickness: u8, color: Color) BorderGrouped {
+        return .{ .thickness = .b(thickness), .color = color };
+    }
+
+    pub fn t(thickness: u8, color: Color) BorderGrouped {
+        return .{ .thickness = .t(thickness), .color = color };
+    }
+
     pub fn tb(color: Color) BorderGrouped {
         return .{ .thickness = .tb(1), .color = color };
     }

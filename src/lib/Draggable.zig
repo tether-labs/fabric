@@ -73,7 +73,7 @@ pub const Draggable = struct {
 
         // Setup listeners on the element or handle
         const target = self.config.handle orelse element;
-        _ = target.addInstListener(.pointerdown, handlePointerDown, .{self}) orelse unreachable;
+        target.addInstListener(.pointerdown, handlePointerDown, .{self});
 
         return self;
     }
@@ -82,7 +82,7 @@ pub const Draggable = struct {
     pub fn addStartListener(self: *Draggable) void {
         // Setup listeners on the element or handle
         const target = self.element;
-        _ = target.addInstListener(.pointerdown, handlePointerDown, .{self}) orelse unreachable;
+        target.addInstListener(.pointerdown, handlePointerDown, .{self});
     }
 
     pub fn deinit(self: *Draggable) void {
@@ -148,8 +148,8 @@ pub const Draggable = struct {
         self.initial_y = evt.clientY();
 
         // Add document-level listeners for move and up
-        self.move_listener_id = Vapor.addGlobalListenerCtx(.pointermove, handlePointerMove, self) orelse unreachable;
-        self.up_listener_id = Vapor.addGlobalListenerCtx(.pointerup, handlePointerUp, self) orelse unreachable;
+        self.move_listener_id = Vapor.addGlobalListenerCtx(.pointermove, handlePointerMove, .{self}) orelse unreachable;
+        self.up_listener_id = Vapor.addGlobalListenerCtx(.pointerup, handlePointerUp, .{self}) orelse unreachable;
 
         // User callback
         if (self.on_drag_start) |callback| {

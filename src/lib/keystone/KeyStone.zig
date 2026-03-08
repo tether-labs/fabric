@@ -41,7 +41,7 @@ const KeyStone = @This();
 var options: Options = Options{};
 var on_auth_change: ?*const fn (Kit.Response) void = null;
 
-pub var keystone: KeyStone = undefined;
+pub var keystone: KeyStone = .{ .clients = .{} };
 clients: Clients = undefined,
 provider: Provider = undefined,
 

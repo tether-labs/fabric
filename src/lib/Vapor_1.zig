@@ -186,8 +186,7 @@ pub const EventHandler = struct {
 };
 
 pub const EventHandlers = struct {
-    // handlers: std.ArrayListUnmanaged(EventHandler),
-    handlers: std.ArrayListUnmanaged(ErasedEventCallback),
+    items: std.ArrayListUnmanaged(ErasedEventCallback),
 };
 
 pub const Action = struct {
@@ -229,6 +228,10 @@ pub var on_create_node_funcs: std.AutoHashMap(u32, *Node) = undefined;
 pub var created_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
 pub var updated_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
 pub var destroy_funcs: std.AutoHashMap(u32, *const fn () void) = undefined;
+pub var erased_registry: std.AutoHashMap(u32, ErasedCallback) = undefined;
+pub var erased_event_registry: std.AutoHashMap(u32, ErasedEventCallback) = undefined;
+
+pub var element_registry: std.AutoHashMap(u32, *Element) = undefined;
 
 pub var string_table: StringTable = undefined;
 pub var storage_table: StorageTable = undefined;
@@ -238,14 +241,12 @@ pub var packed_layers: std.AutoHashMap(u32, []Vapor.Types.PackedLayer) = undefin
 pub var packed_colors: std.AutoHashMap(u32, []Vapor.Types.PackedColor) = undefined;
 pub var packed_transitions: std.AutoHashMap(u32, []Vapor.Types.TransitionProperty) = undefined;
 pub var packed_transforms: std.AutoHashMap(u32, []Vapor.Types.TransformType) = undefined;
-pub var element_registry: std.AutoHashMap(u32, *Binded) = undefined;
 
 const RemovedNode = struct { uuid: []const u8, index: usize };
 pub const ObserverNode = union(enum) {
     type: ElementType,
     uuid: []const u8,
 };
-// pub var removed_nodes: std.array_list.Managed(RemovedNode) = undefined;
 pub var observer_nodes: std.StringHashMap(std.array_list.Managed(ObserverNode)) = undefined;
 pub var added_nodes: std.array_list.Managed(*UINode) = undefined;
 pub var dirty_nodes: std.array_list.Managed(*UINode) = undefined;
@@ -397,7 +398,6 @@ pub fn init(config: VaporConfig) void {
     observer_nodes = std.StringHashMap(std.array_list.Managed(ObserverNode)).init(allocator);
     added_nodes = std.array_list.Managed(*UINode).init(allocator);
     dirty_nodes = std.array_list.Managed(*UINode).init(allocator);
-    element_registry = std.AutoHashMap(u32, *Binded).init(allocator);
 
     // action_log = Structures.BoundedArray(ErrorReport, 512).init(512) catch unreachable;
 
@@ -415,12 +415,12 @@ fn initRegistries(persistent_allocator: std.mem.Allocator) void {
     animation_frame_callbacks = std.array_list.Managed(*Node).init(persistent_allocator);
 }
 
-pub var erased_registry: std.AutoHashMap(u32, ErasedCallback) = undefined;
-pub var erased_event_registry: std.AutoHashMap(u32, ErasedEventCallback) = undefined;
 fn initCalls(persistent_allocator: std.mem.Allocator) void {
     events_callbacks = std.AutoHashMap(u32, EventNode).init(persistent_allocator);
     nodes_with_events = std.AutoHashMap(u32, *UINode).init(persistent_allocator);
     cached_event_handlers = std.AutoHashMap(u32, EventHandlers).init(persistent_allocator);
+    // node_events_callbacks = std.AutoHashMap(u32, *CtxAwareEventNode).init(persistent_allocator);
+    // events_inst_callbacks = std.AutoHashMap(u32, *EvtInstNode).init(persistent_allocator);
     hooks_inst_callbacks = std.AutoHashMap(u32, *const fn (HookContext) void).init(persistent_allocator);
     mounted_funcs = std.AutoHashMap(u32, *const fn () void).init(persistent_allocator);
     on_end_funcs = std.array_list.Managed(*const fn () void).init(persistent_allocator);
@@ -436,6 +436,7 @@ fn initCalls(persistent_allocator: std.mem.Allocator) void {
     created_funcs = std.AutoHashMap(u32, *const fn () void).init(persistent_allocator);
     erased_registry = std.AutoHashMap(u32, ErasedCallback).init(persistent_allocator);
     erased_event_registry = std.AutoHashMap(u32, ErasedEventCallback).init(persistent_allocator);
+    element_registry = std.AutoHashMap(u32, *Element).init(persistent_allocator);
 }
 
 fn initContextData(persistent_allocator: std.mem.Allocator) void {
@@ -665,8 +666,11 @@ pub fn renderCycle(route_ptr: [*:0]u8) !void {
     added_nodes.clearRetainingCapacity();
     dirty_nodes.clearRetainingCapacity();
     // potential_nodes.clearRetainingCapacity();
+    // node_events_callbacks.clearRetainingCapacity();
     // events_callbacks.clearRetainingCapacity();
     nodes_with_events.clearRetainingCapacity();
+    // erased_event_registry.clearRetainingCapacity();
+    erased_registry.clearRetainingCapacity();
     UIContext.indexes.clearRetainingCapacity();
 
     packed_layers.clearRetainingCapacity();
@@ -790,6 +794,7 @@ pub fn renderCycle(route_ptr: [*:0]u8) !void {
 //     added_nodes.clearRetainingCapacity();
 //     dirty_nodes.clearRetainingCapacity();
 //     // potential_nodes.clearRetainingCapacity();
+//     node_events_callbacks.clearRetainingCapacity();
 //     events_callbacks.clearRetainingCapacity();
 //     nodes_with_events.clearRetainingCapacity();
 //     UIContext.indexes.clearRetainingCapacity();
@@ -1058,9 +1063,7 @@ const LayoutOptions = struct {
     reset: bool = false,
 };
 
-pub const PageFn = *const fn () void;
-pub const LayoutFn = fn (*const fn () void) void;
-pub fn registerLayout(path: []const u8, layout: LayoutFn, options: LayoutOptions) !void {
+pub fn registerLayout(path: []const u8, layout: fn (*const fn () void) void, options: LayoutOptions) !void {
     if (std.mem.eql(u8, path, "/root")) return error.CannotRegisterRootPath;
     if (std.mem.eql(u8, path, "/")) {
         layout_map.put(hashKey("/root"), .{ .call_fn = layout, .reset = options.reset }) catch |err| {
@@ -1127,6 +1130,9 @@ pub inline fn destroyElementInstEventListener(
 ) ?bool {
     const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
     Wasm.removeElementEventListener(element_uuid.ptr, element_uuid.len, event_type_str.ptr, event_type_str.len, cb_id);
+    // if (events_inst_callbacks.remove(cb_id)) {
+    //     return true;
+    // }
     return false;
 }
 
@@ -1156,39 +1162,54 @@ pub inline fn focused(element_uuid: []const u8) bool {
 
 const serializeArgs = utils.serializeArgs;
 
-pub const ErasedEventCallback = struct {
-    ctx: *anyopaque,
-    callFn: *const fn (*anyopaque, *Event) void,
-    event_type: EventType,
-    dynamic_object: ?*DynamicObject = null,
+pub fn attachEventCtxCallback(ui_node: *UINode, event_type: EventType, cb: anytype, args: anytype) !void {
+    if (!isWasi) return;
 
-    pub fn call(self: *const ErasedEventCallback, evt: *Event) void {
-        self.callFn(self.ctx, evt);
-    }
-
-    pub fn make(allocator: std.mem.Allocator, event_type: EventType, cb: anytype, args: anytype) !ErasedEventCallback {
-        const Args = @TypeOf(args);
-
-        const Closure = struct {
-            arguments: Args,
-
-            fn run(ptr: *anyopaque, evt: *Event) void {
-                const self: *@This() = @ptrCast(@alignCast(ptr));
-                // cb is comptime-captured, append evt to the args
-                @call(.auto, cb, self.arguments ++ .{evt});
+    // Check for duplicates
+    if (ui_node.event_handlers) |handlers| {
+        for (handlers.items.items) |handler| {
+            if (handler.event_type == event_type) {
+                return error.EventCtxCallbackError;
             }
-        };
-
-        const closure = try allocator.create(Closure);
-        closure.* = .{ .arguments = args };
-
-        return .{
-            .ctx = @ptrCast(closure),
-            .callFn = Closure.run,
-            .event_type = event_type,
-        };
+        }
     }
-};
+
+    const erased = try ErasedEventCallback.make(arena(.frame), event_type, cb, args);
+
+    // Ensure handlers list exists
+    if (ui_node.event_handlers == null) {
+        const handlers = try arena(.frame).create(EventHandlers);
+        handlers.* = .{ .items = .{} };
+        ui_node.event_handlers = handlers;
+    }
+
+    try ui_node.event_handlers.?.items.append(arena(.frame), erased);
+
+    const onid = hashKey(ui_node.uuid);
+    try nodes_with_events.put(onid, ui_node);
+}
+
+export fn dispatchNodeEvent(node_ptr: *UINode, event_type_int: u32, callback_id: u32) void {
+    const handlers = node_ptr.event_handlers orelse return;
+    const event_type: EventType = @enumFromInt(event_type_int);
+
+    var event = Event{
+        .id = callback_id,
+        .type = event_type,
+    };
+
+    for (handlers.items.items) |*handler| {
+        if (handler.event_type == event_type) {
+            handler.call(&event);
+            if (Vapor.mode == .atomic and event_type != .pointermove) {
+                if (node_ptr.type != .Form) {
+                    Vapor.cycle();
+                }
+            }
+            return;
+        }
+    }
+}
 
 export fn dispatchEvent(event_type_int: u32, callback_id: u32) void {
     const event_type: EventType = @enumFromInt(event_type_int);
@@ -1211,66 +1232,12 @@ export fn dispatchEvent(event_type_int: u32, callback_id: u32) void {
     }
 }
 
-export fn dispatchNodeEvent(node_ptr: *UINode, event_type_int: u32) void {
-    const handlers = node_ptr.event_handlers orelse return;
-    const event_type: EventType = @enumFromInt(event_type_int);
-    const hash = node_ptr.hash + event_type_int;
-
-    var event = Event{
-        .id = hash,
-        .type = event_type,
-    };
-
-    for (handlers.handlers.items) |*handler| {
-        if (handler.event_type == event_type) {
-            handler.call(&event);
-            if (Vapor.mode == .atomic and event_type != .pointermove) {
-                if (node_ptr.type != .Form) {
-                    Vapor.cycle();
-                }
-            }
-            return;
-        }
-    }
-}
-
-pub fn attachEventCtxCallback(ui_node: *UINode, event_type: EventType, cb: anytype, args: anytype) !void {
-    if (!isWasi) return;
-
-    // Check for duplicates
-    if (ui_node.event_handlers) |handlers| {
-        for (handlers.handlers.items) |handler| {
-            if (handler.event_type == event_type) {
-                return error.EventCtxCallbackError;
-            }
-        }
-    }
-
-    const erased = try ErasedEventCallback.make(arena(.frame), event_type, cb, args);
-
-    // Ensure handlers list exists
-    if (ui_node.event_handlers == null) {
-        const handlers = try arena(.frame).create(EventHandlers);
-        handlers.* = .{ .handlers = .{} };
-        ui_node.event_handlers = handlers;
-    }
-
-    try ui_node.event_handlers.?.handlers.append(arena(.frame), erased);
-
-    var type_onid = hashKey(ui_node.uuid);
-    type_onid +%= @intFromEnum(event_type);
-    erased_event_registry.put(type_onid, erased) catch unreachable;
-
-    const onid = hashKey(ui_node.uuid);
-    try nodes_with_events.put(onid, ui_node);
-}
-
 pub fn attachEventCallback(ui_node: *UINode, event_type: EventType, cb: fn (event: *Event) void) !void {
     if (!isWasi) return;
 
     // Check for duplicates
     if (ui_node.event_handlers) |handlers| {
-        for (handlers.handlers.items) |handler| {
+        for (handlers.items.items) |handler| {
             if (handler.event_type == event_type) {
                 return error.EventCtxCallbackError;
             }
@@ -1282,11 +1249,11 @@ pub fn attachEventCallback(ui_node: *UINode, event_type: EventType, cb: fn (even
     // Ensure handlers list exists
     if (ui_node.event_handlers == null) {
         const handlers = try arena(.frame).create(EventHandlers);
-        handlers.* = .{ .handlers = .{} };
+        handlers.* = .{ .items = .{} };
         ui_node.event_handlers = handlers;
     }
 
-    try ui_node.event_handlers.?.handlers.append(arena(.frame), erased);
+    try ui_node.event_handlers.?.items.append(arena(.frame), erased);
 
     const onid = hashKey(ui_node.uuid);
     try nodes_with_events.put(onid, ui_node);
@@ -1352,11 +1319,17 @@ pub fn addGlobalListener(event_type: EventType, cb: fn (*Event) void) ?usize {
     return @intCast(id);
 }
 
+pub fn removeGlobalListener(event_type: EventType, cb_idx: u32) ?bool {
+    const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
+    Wasm.removeEventListener(event_type_str.ptr, event_type_str.len, cb_idx);
+    return true;
+}
+
 /// USes persist under the hood
 pub fn addGlobalListenerCtx(event_type: EventType, cb: anytype, args: anytype) ?u32 {
     if (!isWasi) return;
 
-    const erased = ErasedEventCallback.make(arena(.persist), event_type, cb, args) catch unreachable;
+    const erased = try ErasedEventCallback.make(arena(.persist), event_type, cb, args);
 
     const id = erased_event_registry.count() + 1;
     erased_event_registry.put(id, erased) catch |err| {
@@ -1369,12 +1342,6 @@ pub fn addGlobalListenerCtx(event_type: EventType, cb: anytype, args: anytype) ?
         Wasm.createEventListenerGlobal(event_type_str.ptr, event_type_str.len, id);
     }
     return @intCast(id);
-}
-
-pub fn removeGlobalListener(event_type: EventType, cb_idx: u32) ?bool {
-    const event_type_str = std.enums.tagName(types.EventType, event_type) orelse return null;
-    Wasm.removeEventListener(event_type_str.ptr, event_type_str.len, cb_idx);
-    return true;
 }
 
 pub const HookInst = struct {
@@ -1547,8 +1514,11 @@ pub fn generateHtml(route: []const u8, dir: []const u8) void {
     added_nodes.clearRetainingCapacity();
     dirty_nodes.clearRetainingCapacity();
     // potential_nodes.clearRetainingCapacity();
+    // node_events_callbacks.clearRetainingCapacity();
     // events_callbacks.clearRetainingCapacity();
     nodes_with_events.clearRetainingCapacity();
+    // erased_event_registry.clearRetainingCapacity();
+    erased_registry.clearRetainingCapacity();
     UIContext.indexes.clearRetainingCapacity();
     // on_end_funcs.clearRetainingCapacity();
 
@@ -2335,47 +2305,152 @@ pub fn println(
     }
 }
 
-/// name: name of the interval
-/// cb: callback function
-/// args: arguments to pass to the callback function
-/// delay: delay in ms
-pub fn loopInterval(name: []const u8, delay_ms: u32, cb: anytype, args: anytype) void {
-    const Args = @TypeOf(args);
-    const Closure = struct {
-        arguments: Args,
-        run_node: Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-        //
-        fn runFn(action: *Action) void {
-            const run_node: *Node = @fieldParentPtr("data", action);
-            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
-            @call(.auto, cb, closure.arguments);
-        }
-        //
-        fn deinitFn(node: *Node) void {
-            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", node));
-            allocator_global.destroy(closure);
-        }
-    };
+pub const ErasedEventCallback = struct {
+    ctx: *anyopaque,
+    callFn: *const fn (*anyopaque, *Event) void,
+    event_type: EventType,
+    dynamic_object: ?*DynamicObject = null,
 
-    const closure = allocator_global.create(Closure) catch |err| {
-        println("Error could not create closure {any}\n ", .{err});
-        unreachable;
-    };
-    closure.* = .{
-        .arguments = args,
+    pub fn call(self: *const ErasedEventCallback, evt: *Event) void {
+        self.callFn(self.ctx, evt);
+    }
+
+    pub fn make(allocator: std.mem.Allocator, event_type: EventType, cb: anytype, args: anytype) !ErasedEventCallback {
+        const Args = @TypeOf(args);
+
+        const Closure = struct {
+            arguments: Args,
+
+            fn run(ptr: *anyopaque, evt: *Event) void {
+                const self: *@This() = @ptrCast(@alignCast(ptr));
+                // cb is comptime-captured, append evt to the args
+                @call(.auto, cb, self.arguments ++ .{evt});
+            }
+        };
+
+        const closure = try allocator.create(Closure);
+        closure.* = .{ .arguments = args };
+
+        return .{
+            .ctx = @ptrCast(closure),
+            .callFn = Closure.run,
+            .event_type = event_type,
+        };
+    }
+};
+
+pub const ErasedCallback = struct {
+    ctx: *anyopaque,
+    callFn: *const fn (*anyopaque) void,
+    deinitFn: *const fn (*anyopaque) void,
+
+    pub fn call(self: *ErasedCallback) void {
+        self.callFn(self.ctx);
+    }
+
+    pub fn deinit(self: *ErasedCallback) void {
+        self.deinitFn(self.ctx);
+    }
+
+    pub fn make(allocator: std.mem.Allocator, cb: anytype, args: anytype) !ErasedCallback {
+        const Args = @TypeOf(args);
+
+        // cb is captured by the comptime closure below — not stored in the struct
+        const Closure = struct {
+            arguments: Args,
+
+            fn run(ptr: *anyopaque) void {
+                const self: *@This() = @ptrCast(@alignCast(ptr));
+                @call(.auto, cb, self.arguments);
+            }
+
+            fn destroy(_: *anyopaque) void {
+                // const self: *@This() = @ptrCast(@alignCast(ptr));
+                // allocator.destroy(self);
+            }
+        };
+
+        const closure = try allocator.create(Closure);
+        closure.* = .{
+            .arguments = args,
+        };
+
+        return .{
+            .ctx = @ptrCast(closure),
+            .callFn = Closure.run,
+            .deinitFn = Closure.destroy,
+        };
+    }
+};
+
+pub fn loopInterval(name: []const u8, delay_ms: u32, cb: anytype, args: anytype) void {
+    const erased = ErasedCallback.make(allocator_global, cb, args) catch |err| {
+        println("Error could not create closure {any}\n", .{err});
+        return;
     };
 
     const callback_id = hashKey(name);
-    ctx_callback_registry.put(callback_id, &closure.run_node) catch |err| {
-        println("Button Function Registry {any}\n", .{err});
+    // Store just the ErasedCallback instead of *Node
+    erased_registry.put(callback_id, erased) catch |err| {
+        println("Registry error {any}\n", .{err});
+        return;
     };
 
     if (isWasi) {
         Wasm.createInterval(callback_id, delay_ms);
-    } else {
-        return;
     }
 }
+
+// The JS/WASM side calls back with the id:
+export fn invokeErasedCallback(id: u32) void {
+    var erased = erased_registry.get(id) orelse return;
+    erased.call();
+    if (Vapor.mode == .atomic) {
+        Vapor.cycle();
+    }
+}
+
+// /// name: name of the interval
+// /// cb: callback function
+// /// args: arguments to pass to the callback function
+// /// delay: delay in ms
+// pub fn loopInterval(name: []const u8, delay_ms: u32, cb: anytype, args: anytype) void {
+//     const Args = @TypeOf(args);
+//     const Closure = struct {
+//         arguments: Args,
+//         run_node: Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+//         //
+//         fn runFn(action: *Action) void {
+//             const run_node: *Node = @fieldParentPtr("data", action);
+//             const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+//             @call(.auto, cb, closure.arguments);
+//         }
+//         //
+//         fn deinitFn(node: *Node) void {
+//             const closure: *@This() = @alignCast(@fieldParentPtr("run_node", node));
+//             allocator_global.destroy(closure);
+//         }
+//     };
+//
+//     const closure = allocator_global.create(Closure) catch |err| {
+//         println("Error could not create closure {any}\n ", .{err});
+//         unreachable;
+//     };
+//     closure.* = .{
+//         .arguments = args,
+//     };
+//
+//     const callback_id = hashKey(name);
+//     ctx_callback_registry.put(callback_id, &closure.run_node) catch |err| {
+//         println("Button Function Registry {any}\n", .{err});
+//     };
+//
+//     if (isWasi) {
+//         Wasm.createInterval(callback_id, delay_ms);
+//     } else {
+//         return;
+//     }
+// }
 
 pub fn registerCtxTimeout(callback_name: []const u8, ms: u32, cb: anytype, args: anytype) void {
     const Args = @TypeOf(args);
@@ -3155,57 +3230,4 @@ pub fn log(
 export fn recordState(err_str: [*:0]u8, event_str: ?[*:0]u8) void {
     _ = err_str;
     _ = event_str;
-}
-
-pub const ErasedCallback = struct {
-    ctx: *anyopaque,
-    callFn: *const fn (*anyopaque) void,
-    deinitFn: *const fn (*anyopaque) void,
-
-    pub fn call(self: *ErasedCallback) void {
-        self.callFn(self.ctx);
-    }
-
-    pub fn deinit(self: *ErasedCallback) void {
-        self.deinitFn(self.ctx);
-    }
-
-    pub fn make(allocator: std.mem.Allocator, cb: anytype, args: anytype) !ErasedCallback {
-        const Args = @TypeOf(args);
-
-        // cb is captured by the comptime closure below — not stored in the struct
-        const Closure = struct {
-            arguments: Args,
-
-            fn run(ptr: *anyopaque) void {
-                const self: *@This() = @ptrCast(@alignCast(ptr));
-                @call(.auto, cb, self.arguments);
-            }
-
-            fn destroy(_: *anyopaque) void {
-                // const self: *@This() = @ptrCast(@alignCast(ptr));
-                // allocator.destroy(self);
-            }
-        };
-
-        const closure = try allocator.create(Closure);
-        closure.* = .{
-            .arguments = args,
-        };
-
-        return .{
-            .ctx = @ptrCast(closure),
-            .callFn = Closure.run,
-            .deinitFn = Closure.destroy,
-        };
-    }
-};
-
-// The JS/WASM side calls back with the id:
-export fn invokeErasedCallback(id: u32) void {
-    var erased = erased_registry.get(id) orelse return;
-    erased.call();
-    if (Vapor.mode == .atomic) {
-        Vapor.cycle();
-    }
 }

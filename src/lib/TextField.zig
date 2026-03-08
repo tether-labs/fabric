@@ -99,12 +99,19 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 unreachable;
             };
 
-            return Self{
+            var self = Self{
                 ._elem_type = .TextArea,
                 ._ui_node = ui_node,
                 ._text_field_type = .string,
                 ._text_field_params = .{ .string = .{} },
             };
+
+            var visual = types.Visual{};
+            visual.outline = .none;
+            visual = visual;
+            self._visual = visual;
+
+            return self;
         }
 
         pub fn TextField(textfield_type: types.InputTypes) Self {
@@ -286,7 +293,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         pub fn valStr(self: *const Self, value: []const u8) Self {
             var new_self: Self = self.*;
             if (self._elem_type != .TextField and self._elem_type != .TextArea) {
-                Vapor.printlnErr("bindValue only works on TextField", .{});
+                Vapor.printlnErr("bindValue only works on TextField and TextArea", .{});
                 return self.*;
             }
 
@@ -329,7 +336,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         pub fn val(self: *const Self, value: anytype) Self {
             var new_self: Self = self.*;
             if (self._elem_type != .TextField and self._elem_type != .TextArea) {
-                Vapor.printlnErr("bindValue only works on TextField", .{});
+                Vapor.printlnErr("bindValue only works on TextField or TextArea", .{});
                 return self.*;
             }
             if (@typeInfo(@TypeOf(value)) != .pointer) {
@@ -671,7 +678,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return self;
         }
 
-        pub fn onEvent(self: *const Self, event: types.EventType, cb: *const fn (*Vapor.Event) void) Self {
+        pub fn onEvent(self: *const Self, event: types.EventType, cb: fn (*Vapor.Event) void) Self {
             var new_self: Self = self.*;
 
             const ui_node = self.getOrCreateNode(&new_self);
@@ -683,14 +690,12 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn onEventCtx(self: *const Self, event: types.EventType, func: anytype, ctx: anytype) *const Self {
-            if (!Vapor.isWasi) return self;
+        pub fn onEventCtx(self: *const Self, event: types.EventType, func: anytype, args: anytype) *const Self {
             const ui_node = self._ui_node orelse {
                 Vapor.printlnSrcErr("Node is null", .{}, @src());
                 unreachable;
             };
-
-            Vapor.attachEventCtxCallback(ui_node, event, func, ctx) catch |err| {
+            Vapor.attachEventCtxCallback(ui_node, event, func, args) catch |err| {
                 Vapor.println("OnEventCtx: Could not attach event callback {any}\n", .{err});
                 unreachable;
             };

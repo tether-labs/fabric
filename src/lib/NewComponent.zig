@@ -129,6 +129,7 @@ fn mergeVisualFields(target: *types.Visual, source: types.Visual) void {
     if (source.cursor != null) target.cursor = source.cursor;
     if (source.layer != null) target.layer = source.layer;
     if (source.layers != null) target.layers = source.layers;
+    if (source.text_shadow != null) target.text_shadow = source.text_shadow;
 }
 
 fn mergeHoverVisualFields(target: *types.Visual, source: types.Visual) void {
@@ -920,7 +921,7 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn onLeave(self: *const Self, cb: *const fn (*Vapor.Event) void) Self {
+    pub fn onLeave(self: *const Self, cb: fn (*Vapor.Event) void) Self {
         var n = self.*;
         const ui_node = self.getOrCreateNode(&n);
         Vapor.attachEventCallback(ui_node, .mouseleave, cb) catch |err| {
@@ -930,13 +931,14 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn onEvent(self: *const Self, event: types.EventType, cb: *const fn (*Vapor.Event) void) Self {
+    pub fn onEvent(self: *const Self, event: types.EventType, cb: fn (*Vapor.Event) void) Self {
         var n = self.*;
         const ui_node = self.getOrCreateNode(&n);
         Vapor.attachEventCallback(ui_node, event, cb) catch |err| {
             Vapor.println("ONEVENT: Could not attach event callback {any}\n", .{err});
             unreachable;
         };
+
         return n;
     }
 
@@ -1698,3 +1700,4 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
     _ = state_type;
     return ComponentBuilder;
 }
+

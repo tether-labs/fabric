@@ -311,25 +311,62 @@ pub fn getEventDataNumber(id: u32, ptr: [*]const u8, len: u32) f32 {
     }
 }
 
+// export fn eventCallback(id: u32) void {
+//     const evt_node = Vapor.events_callbacks.get(id) orelse {
+//         Vapor.printlnSrcErr("Event Callback not found\n", .{}, @src());
+//         return;
+//     };
+//     var event = Event{
+//         .id = id,
+//         .type = evt_node.evt_type,
+//     };
+//     @call(.auto, evt_node.cb, .{&event});
+//     if (Vapor.mode == .atomic and evt_node.evt_type != .pointermove) {
+//         if (evt_node.ui_node) |node| {
+//             if (node.type != .Form) {
+//                 Vapor.cycle();
+//             }
+//         } else {
+//             Vapor.cycle();
+//         }
+//     }
+// }
+
+// export fn eventInstCallback(id: u32) void {
+//     const evt_node = Vapor.events_inst_callbacks.get(id) orelse {
+//         Vapor.printlnSrcErr("Event Callback not found\n", .{}, @src());
+//         return;
+//     };
+//
+//     var event = Event{
+//         .id = id,
+//         .type = evt_node.evt_type,
+//     };
+//     @call(.auto, evt_node.data.evt_cb, .{ &evt_node.data, &event });
+//     if (Vapor.mode == .atomic and evt_node.evt_type != .pointermove and evt_node.evt_type != .submit) {
+//         Vapor.cycle();
+//     }
+// }
+
 export fn registerAllListenerCallbacks() void {
     if (!isWasi) return;
     var evt_itr = Vapor.nodes_with_events.iterator();
     while (evt_itr.next()) |entry| {
         const ui_node = entry.value_ptr.*;
         if (ui_node.event_handlers) |handlers| {
-            for (handlers.handlers.items) |handler| {
-                if (handler.event_type == .blur or handler.event_type == .focus or handler.event_type == .input or handler.event_type == .change or handler.event_type == .dblclick) {
-                    continue;
-                }
-
-                if (handler.event_type == .submit or handler.event_type == .keydown or handler.event_type == .keyup) {
-                    continue;
-                }
-
+            for (handlers.items.items) |handler| {
                 const event_type_str = std.enums.tagName(Vapor.Types.EventType, handler.event_type) orelse unreachable;
                 var callback_id = hashKey(ui_node.uuid);
                 callback_id +%= @intFromEnum(handler.event_type);
                 Wasm.createElementEventListener(ui_node.uuid.ptr, ui_node.uuid.len, event_type_str.ptr, event_type_str.len, callback_id);
+
+                // if (handler.ctx_aware) {
+                //     const ctx_node: *const Vapor.CtxAwareEventNode = @ptrCast(@alignCast(handler.cb_opaque));
+                //     @call(.auto, ctx_node.data.runFn, .{&ctx_node.data});
+                // } else {
+                //     const cb: *const fn (*Vapor.Event) void = @ptrCast(@alignCast(handler.cb_opaque));
+                //     _ = Vapor.elementEventListener(ui_node, handler.type, cb);
+                // }
             }
         }
     }

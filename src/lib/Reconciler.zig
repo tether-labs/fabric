@@ -439,16 +439,16 @@ pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
                 // Remove old handlers whose type isn't in the new set
                 for (old_h.handlers.items) |old_handler| {
                     const still_exists = for (new_h.handlers.items) |new_handler| {
-                        if (old_handler.type == new_handler.type) break true;
+                        if (old_handler.event_type == new_handler.event_type) break true;
                     } else false;
                     if (!still_exists) {
-                        _ = Vapor.removeElementEventListener(old_node, old_handler.type);
+                        _ = Vapor.removeElementEventListener(old_node, old_handler.event_type);
                     }
                 }
             } else {
                 // No new handlers at all, remove everything
                 for (old_h.handlers.items) |old_handler| {
-                    _ = Vapor.removeElementEventListener(old_node, old_handler.type);
+                    _ = Vapor.removeElementEventListener(old_node, old_handler.event_type);
                 }
             }
         }

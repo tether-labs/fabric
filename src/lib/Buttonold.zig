@@ -16,7 +16,7 @@ const onCreateNode = @import("Hooks.zig").onCreateNode;
 const Shadow = @import("Shadow.zig");
 const Accessibility = @import("Accessibility.zig").Accessibility;
 const Edges = @import("Edges.zig").Edges;
-const GenericBuilder = @import("NewComponent.zig").Builder;
+const GenericBuilder = @import("NewComponent.zig").GenericBuilder;
 const serializeArgs = utils.serializeArgs;
 
 pub fn Builder(comptime state_type: types.StateType) type {
@@ -57,7 +57,6 @@ pub fn Builder(comptime state_type: types.StateType) type {
         _accessibility: ?Accessibility = null,
         _used_style: bool = false,
         _flex_type: types.FlexType = .flex,
-        _font_family: []const u8 = "",
 
         // In your component builder (e.g., ButtonBuilder.zig or Div builder)
 
@@ -72,9 +71,8 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return self.*;
         }
 
-        pub fn Button(cb: fn () void) Self {
+        pub fn Button(click_fn: ?*const fn () void) Self {
             const elem_decl = ElementDecl{
-                .state_type = _state_type,
                 .elem_type = .Button,
             };
             const ui_node = LifeCycle.open(elem_decl) orelse {
@@ -82,22 +80,10 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 unreachable;
             };
 
-            const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), cb, .{}) catch |err| {
-                println("Error could not create closure {any}\n", .{err});
-                unreachable;
-            };
-
-            const callback_id = hashKey(ui_node.uuid);
-            // Store just the ErasedCallback instead of *Node
-            Vapor.erased_registry.put(callback_id, erased) catch |err| {
-                println("Registry error {any}\n", .{err});
-                unreachable;
-            };
-
             return Self{
                 ._elem_type = .Button,
                 ._ui_node = ui_node,
-                // ._on_press = click_fn,
+                ._on_press = click_fn,
             };
         }
 
@@ -171,7 +157,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
         //     return Self{ ._elem_type = .CtxButton, ._ui_node = ui_node };
         // }
 
-        pub fn CtxButton(cb: anytype, args: anytype) Self {
+        pub fn CtxButton(func: anytype, args: anytype) Self {
             const elem_decl = ElementDecl{
                 .state_type = _state_type,
                 .elem_type = .CtxButton,
@@ -182,15 +168,43 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 unreachable;
             };
 
-            const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), cb, args) catch |err| {
-                println("Error could not create closure {any}\n", .{err});
-                unreachable;
+            const Args = @TypeOf(args);
+            const Closure = struct {
+                id: []const u8,
+                arguments: Args,
+                run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+                fn runFn(action: *Vapor.Action) void {
+                    const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+                    const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+                    @call(.auto, func, closure.arguments);
+
+                    // Vapor.trace_buffer.push(.{
+                    //     .timestamp = std.time.microTimestamp(),
+                    //     .event_type = .click,
+                    //     .element_id = Vapor.allocator_global.dupe(u8, closure.id) catch "<failed>",
+                    //     .serialized_args = serializeArgs(Vapor.arena(.persist), closure.arguments, .{}) catch "<failed>",
+                    // });
+                }
+                // fn argsFn(action: *Vapor.Action) []const u8 {
+                //     const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+                //     const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+                //     return serializeArgs(Vapor.arena(.frame), closure.arguments, .{}) catch
+                //         "\"<serialization failed>\"";
+                // }
+                fn deinitFn(_: *Vapor.Node) void {}
             };
 
-            const callback_id = hashKey(ui_node.uuid);
-            // Store just the ErasedCallback instead of *Node
-            Vapor.erased_registry.put(callback_id, erased) catch |err| {
-                println("Registry error {any}\n", .{err});
+            const closure = Vapor.arena(.frame).create(Closure) catch |err| {
+                println("Error could not create closure {any}\n ", .{err});
+                unreachable;
+            };
+            closure.* = .{
+                .id = ui_node.uuid,
+                .arguments = args,
+            };
+
+            Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+                println("Button Function Registry {any}\n", .{err});
                 unreachable;
             };
 
@@ -531,28 +545,6 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return self;
         }
 
-        pub fn fontFamily(self: *const Self, font_family: []const u8) Self {
-            var n = self.*;
-            n._font_family = font_family;
-            return n;
-        }
-
-        pub fn fill(self: *const Self, value: types.Color) Self {
-            var n = self.*;
-            var v = n._visual orelse types.Visual{};
-            v.fill = value;
-            n._visual = v;
-            return n;
-        }
-
-        pub fn stroke(self: *const Self, value: types.Color) Self {
-            var n = self.*;
-            var v = n._visual orelse types.Visual{};
-            v.stroke = value;
-            n._visual = v;
-            return n;
-        }
-
         pub fn onHoverCtx(self: *const Self, cb: anytype, args: anytype) Self {
             var new_self: Self = self.*;
 
@@ -761,6 +753,33 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 elem_decl.style = &mutable_style;
             }
 
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // const ui_node = self._ui_node orelse unreachable;
+                // if (style_ptr.id) |element_id| {
+                //     const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
+                //     Vapor.ctx_callback_registry.put(hashKey(element_id), kv.value) catch |err| {
+                //         println("Button Function Registry {any}\n", .{err});
+                //         unreachable;
+                //     };
+                // }
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
             Vapor.LifeCycle.configure(elem_decl);
             return new_self;
         }
@@ -793,6 +812,33 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 var mutable_style = style_ptr.*;
                 mutable_style.style_id = _class;
                 elem_decl.style = &mutable_style;
+            }
+
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // const ui_node = self._ui_node orelse unreachable;
+                // if (style_ptr.id) |element_id| {
+                //     const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
+                //     Vapor.ctx_callback_registry.put(hashKey(element_id), kv.value) catch |err| {
+                //         println("Button Function Registry {any}\n", .{err});
+                //         unreachable;
+                //     };
+                // }
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
             }
 
             Vapor.LifeCycle.configure(elem_decl);
@@ -1160,6 +1206,10 @@ pub fn Builder(comptime state_type: types.StateType) type {
             if (mutable_style.flex_wrap == null) mutable_style.flex_wrap = self._flex_wrap;
             mutable_style.direction = self._direction;
 
+            // if (self._tooltip) |_tooltip| {
+            //     elem_decl.tooltip = &_tooltip;
+            // }
+
             if (self._id) |_id| {
                 mutable_style.id = _id;
             }
@@ -1174,13 +1224,41 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .accessibility = self._accessibility,
             };
 
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // const ui_node = self._ui_node orelse unreachable;
+                // if (elem_decl.style.?.style_id) |element_id| {
+                //     const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
+                //     Vapor.ctx_callback_registry.put(hashKey(element_id), kv.value) catch |err| {
+                //         println("Button Function Registry {any}\n", .{err});
+                //         unreachable;
+                //     };
+                // }
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
+            // Vapor.LifeCycle.configure(elem_decl);
             _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
             return Vapor.LifeCycle.close({});
         }
 
         pub fn child(self: *const Self, item: anytype) void {
-            if (@TypeOf(item) == GenericBuilder(.pure)) {
-                var added_node: GenericBuilder(.pure) = item;
+            if (@TypeOf(item) == GenericBuilder(.pure, false)) {
+                var added_node: GenericBuilder(.pure, false) = item;
                 added_node._ui_node = item._ui_node;
                 added_node.end();
             }
@@ -1266,6 +1344,30 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .accessibility = self._accessibility,
             };
 
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+                //     println("Button Function Registry {any}\n", .{err});
+                //     unreachable;
+                // };
+
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
             Vapor.LifeCycle.configure(elem_decl);
             // return self;
             return Vapor.LifeCycle.close({});
@@ -1273,8 +1375,8 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
         pub fn items(self: *const Self, nodes: anytype) void {
             inline for (nodes) |kid| {
-                if (@TypeOf(kid) == GenericBuilder(.pure)) {
-                    var added_node: GenericBuilder(.pure) = kid;
+                if (@TypeOf(kid) == GenericBuilder(.pure, false)) {
+                    var added_node: GenericBuilder(.pure, false) = kid;
                     added_node._ui_node = kid._ui_node;
                     added_node.end();
                     // config(&added_node);
@@ -1362,7 +1464,32 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .accessibility = self._accessibility,
             };
 
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+                //     println("Button Function Registry {any}\n", .{err});
+                //     unreachable;
+                // };
+
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
             Vapor.LifeCycle.configure(elem_decl);
+            // return self;
             return Vapor.LifeCycle.close({});
         }
 
@@ -1422,7 +1549,6 @@ pub fn Builder(comptime state_type: types.StateType) type {
             if (mutable_style.flex_wrap == null) mutable_style.flex_wrap = self._flex_wrap;
             mutable_style.direction = self._direction;
             if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
-            if (mutable_style.font_family == null) mutable_style.font_family = self._font_family;
 
             if (self._id) |_id| {
                 mutable_style.id = _id;
@@ -1450,6 +1576,30 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .accessibility = self._accessibility,
             };
 
+            if (self._ui_node == null) {
+                const ui_node = Vapor.LifeCycle.open(elem_decl) orelse unreachable;
+                if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                    if (self._on_press) |on_press| {
+                        Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                            println("Button Function Registry {any}\n", .{err});
+                        };
+                    }
+                }
+            } else if (self._elem_type == .CtxButton) {
+                // Vapor.ctx_callback_registry.put(hashKey(ui_node.uuid), &closure.run_node) catch |err| {
+                //     println("Button Function Registry {any}\n", .{err});
+                //     unreachable;
+                // };
+
+            } else if (self._elem_type == .Button or self._elem_type == .ButtonCycle) {
+                const ui_node = self._ui_node orelse unreachable;
+                if (self._on_press) |on_press| {
+                    Vapor.callback_registry.put(hashKey(ui_node.uuid), on_press) catch |err| {
+                        println("Button Function Registry {any}\n", .{err});
+                    };
+                }
+            }
+
             _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
             return Vapor.LifeCycle.close({});
         }
@@ -1468,6 +1618,26 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
 var alt_len: usize = 0;
 const API = struct {
+    pub fn buttonCallback(id_ptr: [*:0]u8) callconv(.c) void {
+        const id = std.mem.span(id_ptr);
+        defer Vapor.allocator_global.free(id);
+        const func = Vapor.callback_registry.get(hashKey(id)) orelse return;
+        @call(.auto, func, .{});
+        if (Vapor.mode == .atomic) {
+            Vapor.cycle();
+        }
+    }
+
+    pub fn ctxButtonCallback(id_ptr: [*:0]u8) callconv(.c) void {
+        const id = std.mem.span(id_ptr);
+        defer Vapor.allocator_global.free(id);
+        const node = Vapor.ctx_callback_registry.get(hashKey(id)) orelse return;
+        @call(.auto, node.data.runFn, .{&node.data});
+        if (Vapor.mode == .atomic) {
+            Vapor.cycle();
+        }
+    }
+
     pub fn getHeadingLevel(ptr: ?*UINode) callconv(.c) u8 {
         const node_ptr = ptr orelse return 0;
         const heading = node_ptr.type == .Heading;

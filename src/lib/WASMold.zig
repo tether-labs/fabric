@@ -53,7 +53,14 @@ pub extern fn alertWasm(ptr: [*]const u8, len: usize) void;
 // =============================================================================
 
 /// Registers a global event listener for a given event type and callback.
-pub extern fn createEventListenerGlobal(
+pub extern fn createEventListener(
+    event_ptr: [*]const u8,
+    event_type_len: usize,
+    cb_id: u32,
+) void;
+
+/// Registers a global event listener with context preservation.
+pub extern fn createEventListenerCtx(
     event_ptr: [*]const u8,
     event_type_len: usize,
     cb_id: u32,
@@ -72,6 +79,15 @@ pub extern fn removeEventListener(
 
 /// Registers an event listener on a specific element.
 pub extern fn createElementEventListener(
+    element_ptr: [*]const u8,
+    element_len: usize,
+    event_ptr: [*]const u8,
+    event_type_len: usize,
+    cb_id: u32,
+) void;
+
+/// Registers an event listener on a specific element instance.
+pub extern fn createElementEventInstListener(
     element_ptr: [*]const u8,
     element_len: usize,
     event_ptr: [*]const u8,
