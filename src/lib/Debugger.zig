@@ -1,5 +1,5 @@
 const std = @import("std");
-const Vapor = @import("vapor");
+const Vapor = @import("Vapor.zig");
 const Static = Vapor.Static;
 const Pure = Vapor.Pure;
 const UIContext = @import("UITree.zig");

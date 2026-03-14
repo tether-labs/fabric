@@ -1,5 +1,5 @@
 const std = @import("std");
-const Vapor = @import("vapor");
+const Vapor = @import("Vapor.zig");
 const Wasm = Vapor.Wasm;
 const isWasi = Vapor.lib.isWasi;
 const utils = @import("utils.zig");

@@ -295,7 +295,7 @@ const text_decoration_type_map = [_][]const u8{ "default", "none", "overline", "
 const text_decoration_style_map = [_][]const u8{ "default", "solid", "double", "dotted", "dashed", "wavy", "inherit", "initial", "revert", "unset" };
 const appearance_map = [_][]const u8{ "none", "auto", "button", "textfield", "menulist", "searchfield", "textarea", "checkbox", "radio", "inherit", "initial", "revert", "unset" };
 const outline_map = [_][]const u8{ "default", "none", "auto", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset", "inherit", "initial", "revert", "unset" };
-const cursor_map = [_][]const u8{ "default", "pointer", "help", "grab", "zoom-in", "zoom-out", "ew-resize", "ns-resize", "col-resize", "row-resize", "all-scroll", "crosshair" };
+const cursor_map = [_][]const u8{ "default", "pointer", "help", "grab", "zoom-in", "zoom-out", "ew-resize", "ns-resize", "col-resize", "row-resize", "all-scroll", "crosshair", "grabbing" };
 const box_sizing_map = [_][]const u8{ "content-box", "border-box", "padding-box", "inherit", "initial", "revert", "unset" };
 const list_style_map = [_][]const u8{ "default", "none", "disc", "circle", "square", "decimal", "decimal-leading-zero", "lower-roman", "upper-roman", "lower-alpha", "upper-alpha", "lower-greek", "armenian", "georgian", "inherit", "initial", "revert", "unset" };
 const flex_wrap_map = [_][]const u8{ "none", "nowrap", "wrap", "wrap-reverse", "inherit", "initial", "revert", "unset" };
@@ -1241,7 +1241,11 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("max-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
             writer.write("px;\n") catch {};
-        } else if (size.width.type == .min_px) {
+        } else if (size.height.type == .min_percent) {
+            writer.write("min-width:") catch {};
+            writer.writeF32(size.width.size.min) catch {};
+            writer.write("%;\n") catch {};
+        } else if (size.height.type == .min_px) {} else if (size.width.type == .min_px) {
             writer.write("min-width:") catch {};
             writer.writeF32(size.width.size.min) catch {};
             writer.write("px;\n") catch {};
@@ -1297,6 +1301,10 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("max-height:") catch {};
             writer.writeF32(size.height.size.max) catch {};
             writer.write("px;\n") catch {};
+        } else if (size.height.type == .min_percent) {
+            writer.write("min-height:") catch {};
+            writer.writeF32(size.height.size.min) catch {};
+            writer.write("%;\n") catch {};
         } else if (size.height.type == .min_px) {
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};

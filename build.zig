@@ -20,25 +20,18 @@ pub fn build(b: *std.Build) void {
     const static_mode = b.option(bool, "static", "Enable static mode") orelse false;
     const enable_atomic = b.option(bool, "atomic", "Enable atomic operations") orelse true;
 
-    var generator: std.Build.Step.Run = undefined;
+    // var generator: std.Build.Step.Run = undefined;
 
     // Create build_options module
     const build_options = b.addOptions();
     build_options.addOption(bool, "static_mode", static_mode);
     build_options.addOption(bool, "enable_atomic", enable_atomic); // 2. Create a module from the user's file path only if provided
 
-    // const vapor_config = b.addModule("user_config", .{
-    //     .root_source_file = b.path("src/lib/config.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
     // Every executable or library we compile will be based on one or more modules.
     var vapor_imports = std.array_list.Managed(std.Build.Module.Import).init(b.allocator);
     vapor_imports.append(.{ .name = "build_options", .module = build_options.createModule() }) catch @panic("OOM");
-    // vapor_imports.append(.{ .name = "user_config", .module = vapor_config }) catch @panic("OOM");
 
     const vapor_runtime = b.addLibrary(.{
         .name = "vapor_runtime",
@@ -68,7 +61,7 @@ pub fn build(b: *std.Build) void {
     // // We will also create a module for our other entry point, 'main.zig'.
     var exe_imports = std.array_list.Managed(std.Build.Module.Import).init(b.allocator);
     exe_imports.append(.{ .name = "vapor", .module = mod }) catch @panic("OOM");
-    exe_imports.append(.{ .name = "build_options", .module = build_options.createModule() }) catch @panic("OOM");
+    // exe_imports.append(.{ .name = "build_options", .module = build_options.createModule() }) catch @panic("OOM");
     // exe_imports.append(.{ .name = "user_config", .module = vapor_config }) catch @panic("OOM");
 
     const exe_mod = b.createModule(.{
@@ -89,7 +82,6 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
-            // .imports = &.{.{ .name = "user_config", .module = vapor_config }},
         }),
     });
 
@@ -102,9 +94,9 @@ pub fn build(b: *std.Build) void {
 
     exe.linkLibrary(lib);
 
-    if (static_mode) {
-        exe.step.dependOn(&generator.step);
-    }
+    // if (static_mode) {
+    //     exe.step.dependOn(&generator.step);
+    // }
 
     b.installArtifact(lib);
     b.installArtifact(exe);

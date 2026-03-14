@@ -146,7 +146,7 @@ pub const SizingType = enum(u8) {
     max_percent,
 };
 
-const MinMax = packed struct {
+const MinMax = struct {
     min: f32 = 0,
     max: f32 = 0,
 
@@ -155,7 +155,7 @@ const MinMax = packed struct {
     }
 };
 
-const Clamp = packed struct {
+const Clamp = struct {
     min: f32 = 0,
     max: f32 = 0,
     preferred: f32 = 0,
@@ -171,13 +171,13 @@ const Tag = enum {
 };
 
 // Make it a tagged union by adding an enum
-pub const SizingConstraint = packed struct {
+pub const SizingConstraint = struct {
     min: f32 = 0,
     max: f32 = 0,
     preferred: f32 = 0,
 };
 
-// const SizingConstraint = packed struct {
+// const SizingConstraint = struct {
 //     tag: Tag,
 //     data: SizingUnion,
 //     // minmax: MinMax,
@@ -199,7 +199,7 @@ pub const SizingConstraint = packed struct {
 //     // }
 // };
 
-pub const Size = packed struct {
+pub const Size = struct {
     width: Sizing = .{},
     height: Sizing = .{},
     pub const full = Size{ .width = .percent(100), .height = .percent(100) };
@@ -266,7 +266,7 @@ pub const Size = packed struct {
     }
 };
 
-pub const Sizing = packed struct {
+pub const Sizing = struct {
     size: SizingConstraint = .{},
     type: SizingType = .none,
 
@@ -351,7 +351,7 @@ pub const PosType = enum(u8) {
     fixed = 3,
 };
 
-pub const Pos = packed struct {
+pub const Pos = struct {
     type: SizingType = .none,
     value: f32 = 0,
 
@@ -411,7 +411,7 @@ const DirectionType = enum(u8) {
     angle,
 };
 
-pub const GradientDirection = packed struct {
+pub const GradientDirection = struct {
     type: DirectionType = .none,
     angle: f32 = 0,
     pub const to_top = GradientDirection{ .type = .to_top };
@@ -811,11 +811,11 @@ pub const Background = struct {
 //     pub const transparent = Background.solid(.transparent);
 // };
 
-pub const Thematic = packed struct {
+pub const Thematic = struct {
     token: ThemeTokens,
     alpha: f32 = -1,
 };
-pub const Rgba = packed struct { r: u8 = 0, g: u8 = 0, b: u8 = 0, a: f32 = 0 };
+pub const Rgba = struct { r: u8 = 0, g: u8 = 0, b: u8 = 0, a: f32 = 0 };
 pub const Color = union(enum) {
     Literal: Rgba, // A hardcoded, specific color
     Thematic: Thematic, // A token name, like "primaryText" or "accentColor"
@@ -984,7 +984,7 @@ pub const Color = union(enum) {
     }
 };
 
-pub const Padding = packed struct {
+pub const Padding = struct {
     top: u8 = 0,
     bottom: u8 = 0,
     left: u8 = 0,
@@ -1082,7 +1082,7 @@ pub const Padding = packed struct {
     }
 };
 
-pub const Margin = packed struct {
+pub const Margin = struct {
     top: i16 = 0,
     bottom: i16 = 0,
     left: i16 = 0,
@@ -1163,7 +1163,7 @@ pub const Overflow = enum(u8) {
     hidden,
 };
 
-pub const Scroll = packed struct {
+pub const Scroll = struct {
     x: Overflow = .default,
     y: Overflow = .default,
 
@@ -1191,7 +1191,7 @@ pub const Scroll = packed struct {
     }
 };
 
-pub const BorderRadius = packed struct {
+pub const BorderRadius = struct {
     top_left: u16 = 0,
     top_right: u16 = 0,
     bottom_left: u16 = 0,
@@ -1339,7 +1339,7 @@ pub const Shadow = struct {
         };
     }
 };
-pub const Border = packed struct {
+pub const Border = struct {
     top: u8 = 0,
     bottom: u8 = 0,
     left: u8 = 0,
@@ -2032,7 +2032,7 @@ pub const TransformOrigin = enum(u8) {
     center_left,
 };
 
-pub const Layout = packed struct {
+pub const Layout = struct {
     x: Alignment = .none,
     y: Alignment = .none,
     pub const in_line = Layout{ .x = .in_line, .y = .in_line };
@@ -2213,7 +2213,7 @@ pub const Caret = struct {
     color: ?Color = null,
 };
 
-pub const PackedCaret = packed struct {
+pub const PackedCaret = struct {
     type: CaretType = .none,
     color: PackedColor = .{},
 };
@@ -2236,7 +2236,7 @@ pub const ColorMix = struct {
     }
 };
 
-pub const PackedColorMix = packed struct {
+pub const PackedColorMix = struct {
     color: PackedColor = .{},
     color_prop: ColorProp = .default,
     percentage: f32 = 0,
@@ -2411,7 +2411,7 @@ const PackedPosType = enum(u8) {
     none = 8,
 };
 
-const PackedSizeType = packed struct {
+const PackedSizeType = struct {
     type: SizingType = .fit,
     value: f32 = 0,
 };
@@ -2423,7 +2423,7 @@ pub const AspectRatio = enum(u8) {
     landscape = 3,
 };
 
-pub const PackedLayout = packed struct {
+pub const PackedLayout = struct {
     flex: FlexType = .default,
     layout: Layout = .{},
     direction: Direction = .row,
@@ -2439,44 +2439,42 @@ pub const PackedLayout = packed struct {
     column_spacing: f32 = 0,
 };
 
-pub const PackedPosition = packed struct {
+pub const PackedPosition = struct {
     position_type: PositionType = .none,
     top: Pos = .{},
     right: Pos = .{},
     bottom: Pos = .{},
     left: Pos = .{},
     z_index: i16 = 0,
-    // anchor_name_ptr: ?[*]const u8 = null,
-    // anchor_name_len: u32 = 0,
     anchor_name_handle: u32 = StringTable.null_handle, // Replaces ptr + len
     position_anchor_handle: u32 = StringTable.null_handle, // Replaces ptr + len
 };
 
-pub const PackedMarginsPaddings = packed struct {
+pub const PackedMarginsPaddings = struct {
     padding: Padding = .{},
     margin: Margin = .{},
 };
 
-pub const PackedGrid = packed struct {
+pub const PackedGrid = struct {
     size: u8 = 0,
     thickness: u8 = 1,
     packed_color: PackedColor = .{},
 };
 
-pub const PackedLines = packed struct {
+pub const PackedLines = struct {
     direction: LinesDirection = .horizontal,
     color: PackedColor = .{},
     thickness: u8 = 1,
     spacing: u8 = 10,
 };
 
-pub const PackedDots = packed struct {
+pub const PackedDots = struct {
     radius: f16 = 0,
     spacing: u8 = 0,
     packed_color: PackedColor = .{},
 };
 
-pub const PackedGradient = packed struct {
+pub const PackedGradient = struct {
     type: GradientType = .none,
     direction: GradientDirection = .{},
     colors_ptr: u32 = 0,
@@ -2491,14 +2489,14 @@ pub const PackedLayer = union(enum) {
     Lines: PackedLines,
 };
 
-pub const PackedColor = packed struct {
+pub const PackedColor = struct {
     has_token: bool = false,
     has_color: bool = false,
     color: Rgba = undefined,
     token: Thematic = undefined,
 };
 
-pub const PackedShadow = packed struct {
+pub const PackedShadow = struct {
     top: i16 = 0,
     left: i16 = 0,
     blur: u8 = 0,
@@ -2514,7 +2512,7 @@ pub const SizeType = enum(u8) {
     none,
 };
 
-pub const PackedTransform = packed struct {
+pub const PackedTransform = struct {
     size_type: SizeType = .none,
     type: TransformType = .none,
     scale_size: f16 = 1,
@@ -2558,18 +2556,18 @@ pub const Ellipsis = enum(u8) {
     dash,
 };
 
-pub const PackedLayers = packed struct {
+pub const PackedLayers = struct {
     items_ptr: u32 = 0,
     len: u32 = 0,
 };
 
-pub const PackedTextDecoration = packed struct {
+pub const PackedTextDecoration = struct {
     type: TextDecorationType = .none,
     style: TextDecorationStyle = .default,
     color: PackedColor = .{},
 };
 
-pub const PackedVisual = packed struct {
+pub const PackedVisual = struct {
     animation_name_handle: u32 = StringTable.null_handle, // Replaces ptr + len
     animation: u32 = StringTable.null_handle, // Replaces ptr + len
     background: PackedColor = .{},
@@ -2626,14 +2624,14 @@ pub const PackedInteractive = struct {
     hover_transform: PackedTransform = undefined,
 };
 
-pub const PackedAnimations = packed struct {
+pub const PackedAnimations = struct {
     has_animation_enter: bool = false,
     has_animation_exit: bool = false,
     animation_enter: u32 = StringTable.null_handle, // Replaces ptr + len
     animation_exit: u32 = StringTable.null_handle, // Replaces ptr + len
 };
 
-pub const PackedTransforms = packed struct {
+pub const PackedTransforms = struct {
     has_transform: bool = false,
     transform: PackedTransform = undefined,
     transform_origin: TransformOrigin = .default,

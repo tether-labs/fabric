@@ -1,5 +1,5 @@
 const std = @import("std");
-const Vapor = @import("vapor");
+const Vapor = @import("../Vapor.zig");
 const print = Vapor.print;
 
 const secret_jwt = "your-jwt-secret";

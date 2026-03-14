@@ -12,7 +12,11 @@ const println = Vapor.println;
 
 var writer: *std.Io.Writer = undefined;
 
-const mode_options = @import("build_options");
+const mode_options =
+    struct {
+        pub const static_mode = false;
+        pub const enable_atomic = true;
+    };
 
 pub fn generate(root: *UINode, new_writer: *std.Io.Writer, style_path: []const u8) void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

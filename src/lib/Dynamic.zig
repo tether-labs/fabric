@@ -1,5 +1,5 @@
 const std = @import("std");
-const Vapor = @import("vapor");
+const Vapor = @import("Vapor.zig");
 const utils = @import("utils.zig");
 const getUnderlyingType = utils.getUnderlyingType;
 
@@ -157,8 +157,8 @@ pub fn exportStruct(comptime T: type) type {
 pub const API = struct {
     // --- Dynamic Object Construction ---
     pub fn startObject() callconv(.c) usize {
-        current_object = Vapor.lib.allocator_global.create(DynamicObject) catch return 0;
-        current_object.?.* = DynamicObject.init(Vapor.lib.allocator_global);
+        current_object = Vapor.allocator_global.create(DynamicObject) catch return 0;
+        current_object.?.* = DynamicObject.init(Vapor.allocator_global);
         return @intFromPtr(current_object.?);
     }
 
@@ -208,13 +208,13 @@ pub const API = struct {
     }
 
     pub fn readObject(callback_ptr: u32, object_ptr: ?*DynamicObject) callconv(.c) void {
-        const node = Vapor.lib.ctx_callback_registry.get(callback_ptr) orelse {
-            Vapor.printSrcErr("Callback not found\n", .{}, @src());
+        const node = Vapor.ctx_callback_registry.get(callback_ptr) orelse {
+            Vapor.printlnSrcErr("Callback not found\n", .{}, @src());
             return;
         };
         node.data.dynamic_object = object_ptr;
         @call(.auto, node.data.runFn, .{&node.data});
-        if (Vapor.lib.mode == .atomic) {
+        if (Vapor.mode == .atomic) {
             Vapor.cycle();
         }
     }

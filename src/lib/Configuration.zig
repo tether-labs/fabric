@@ -25,6 +25,22 @@ const buildClassString = @import("UITree.zig").buildClassString;
 
 const Accessibility = @import("Accessibility.zig");
 
+fn hashPacked(comptime T: type, value: *const T) u32 {
+    const is_wasm = @import("builtin").target.cpu.arch == .wasm32;
+    if (!is_wasm) {
+        // Native: fast path, hash raw bytes
+        return std.hash.XxHash32.hash(0, std.mem.asBytes(value));
+    }
+    // WASM: hash each field individually
+    var hasher = std.hash.XxHash32.init(0);
+    inline for (std.meta.fields(T)) |field| {
+        const field_value = @field(value.*, field.name);
+        const bytes = std.mem.asBytes(&field_value);
+        hasher.update(bytes);
+    }
+    return hasher.final();
+}
+
 /// Helper to pack a color union (`.Literal` or `.Thematic`) into a PackedColor struct.
 fn packColor(source_color: types.Color, packed_color: *types.PackedColor) void {
     switch (source_color) {
@@ -109,6 +125,7 @@ fn configureLayouts(ui_node: *UINode, style: *const Vapor.Style) u32 {
     if (style.scroll) |scroll| packed_layout.scroll = scroll;
     if (style.aspect_ratio) |aspect_ratio| packed_layout.aspect_ratio = aspect_ratio;
 
+    // hash_l = hashPacked(types.PackedLayout, &packed_layout);
     hash_l = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layout));
 
     if (hash_id) {
@@ -141,6 +158,7 @@ fn configureTransforms(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     hash_t +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_transforms));
+    // hash_t +%= hashPacked(types.PackedTransforms, &packed_transforms);
     //
     if (style.visual) |visual| {
         if (visual.transform) |transform| {
@@ -182,6 +200,7 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packColor(grid.color, &grid_color);
             packed_layer.Grid.packed_color = grid_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
+            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         .Lines => |lines| {
             packed_layer = .{ .Lines = .{} };
@@ -192,6 +211,7 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packColor(lines.color, &lines_color);
             packed_layer.Lines.color = lines_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
+            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         // .Image => {},
         .Dot => |dots| {
@@ -202,6 +222,7 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packColor(dots.color, &dots_color);
             packed_layer.Dot.packed_color = dots_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
+            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         .Gradient => |gradient| {
             packed_layer = .{ .Gradient = .{} };
@@ -217,6 +238,7 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packed_layer.Gradient.colors_len = @intCast(gradient_colors.len);
             packed_layer.Gradient.clip = gradient.clip;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
+            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         else => {
             Vapor.printlnSrcErr("Not implemented yet {any}", .{layer}, @src());
@@ -272,6 +294,7 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
     if (style.list_style) |list_style| packed_visual.list_style = list_style;
 
     hash_v = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_visual));
+    // hash_v = hashPacked(types.PackedVisual, &packed_visual);
 
     if (style.font_family) |font_family| {
         hash_v +%= hashKey(font_family);
@@ -363,6 +386,7 @@ fn configurePositions(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     hash_p = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_position));
+    // hash_p = hashPacked(types.PackedPosition, &packed_position);
 
     if (hash_id) {
         const packed_position_ptr = Packer.positions_pool.create() catch unreachable;
@@ -387,6 +411,7 @@ fn configureMarginsPaddings(ui_node: *UINode, style: *const Vapor.Style) u32 {
     if (style.margin) |margin| packed_margins_paddings.margin = margin;
 
     // This is an expensive operation, since the the visual hash is quite large
+    // hash_mp = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_margins_paddings));
     hash_mp = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_margins_paddings));
     if (hash_id) {
         const packed_margin_paddings_ptr = Packer.margins_paddings_pool.create() catch unreachable;
@@ -445,6 +470,7 @@ fn configureAnimations(ui_node: *UINode, elem_decl: ElemDecl) u32 {
     if (!packed_animations.has_animation_enter and !packed_animations.has_animation_exit) return 0;
 
     hash_a = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_animations));
+    // hash_a = hashPacked(types.PackedAnimations, &packed_animations);
 
     if (hash_id) {
         const packed_animations_ptr = Packer.animations_pool.create() catch unreachable;
@@ -497,6 +523,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     hash_i = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_interactive));
+    // hash_i = hashPacked(types.PackedInteractive, &packed_interactive);
 
     if (interactive.hover) |hover| {
         if (hover.animation) |animation| {

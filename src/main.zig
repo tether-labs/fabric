@@ -2,7 +2,6 @@
 //! you are building an executable. If you are making a library, the convention
 //! is to delete this file and start with root.zig instead.
 
-const Vapor = @import("vapor");
 const std = @import("std");
 pub fn main() !void {
     // const route = std.mem.Allocator.dupeZ(std.heap.page_allocator, u8, "/root/index.html") catch unreachable;

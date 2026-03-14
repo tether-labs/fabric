@@ -3,7 +3,7 @@
 // JavaScript interop declarations organized by functional domain
 // =============================================================================
 
-const Vapor = @import("vapor");
+const Vapor = @import("Vapor.zig");
 
 // =============================================================================
 // CORE / SYSTEM

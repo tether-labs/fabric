@@ -58,7 +58,6 @@ pub const getComponentBounds = lib.getComponentBounds;
 pub const onEnd = lib.onEnd;
 pub const onCommit = lib.onCommit;
 pub const mutateById = lib.mutateById;
-pub const Mark = @import("lib/Mark.zig");
 pub const print = lib.print;
 pub const printSrcErr = lib.printlnSrcErr;
 pub const cast = utils.cast;

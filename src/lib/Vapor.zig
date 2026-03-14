@@ -26,7 +26,7 @@ const hashKey = utils.hashKey;
 const Pool = @import("Pool.zig");
 const mutateDomElementStyleString = @import("Element.zig").mutateDomElementStyleString;
 const HtmlGenerator = @import("HtmlGenerator.zig");
-const mode_options = @import("build_options");
+// const mode_options = @import("build_options");
 const Packer = @import("Packer.zig");
 const ClassCache = @import("ClassCache.zig").ClassCache;
 const DynamicObject = @import("Dynamic.zig").DynamicObject;
@@ -630,6 +630,23 @@ pub fn renderCycle(route_ptr: [*:0]u8) !void {
     const start = nowMs();
     UIContext.cache_count = 0;
     status = .{};
+
+    std.log.info("PackedLayout: {any}", .{@bitSizeOf(types.PackedLayout)});
+    std.log.info("PackedVisual: {any}", .{@bitSizeOf(types.PackedVisual)});
+    std.log.info("PackedPosition: {any}", .{@bitSizeOf(types.PackedPosition)});
+    std.log.info("PackedMarginsPaddings: {any}", .{@bitSizeOf(types.PackedMarginsPaddings)});
+    std.log.info("PackedGrid: {any}", .{@bitSizeOf(types.PackedGrid)});
+    std.log.info("PackedLines: {any}", .{@bitSizeOf(types.PackedLines)});
+    std.log.info("PackedDots: {any}", .{@bitSizeOf(types.PackedDots)});
+    std.log.info("PackedGradient: {any}", .{@bitSizeOf(types.PackedGradient)});
+    std.log.info("PackedLayer: {any}", .{@bitSizeOf(types.PackedLayer)});
+    std.log.info("PackedColor: {any}", .{@bitSizeOf(types.PackedColor)});
+    std.log.info("PackedShadow: {any}", .{@bitSizeOf(types.PackedShadow)});
+    std.log.info("PackedTransform: {any}", .{@bitSizeOf(types.PackedTransform)});
+    std.log.info("PackedTransition: {any}", .{@bitSizeOf(types.PackedTransition)});
+    std.log.info("PackedInteractive: {any}", .{@bitSizeOf(types.PackedInteractive)});
+    std.log.info("PackedAnimations: {any}", .{@bitSizeOf(types.PackedAnimations)});
+    std.log.info("PackedTransforms: {any}", .{@bitSizeOf(types.PackedTransforms)});
 
     const route = std.mem.span(route_ptr);
 
@@ -1466,7 +1483,7 @@ var writer: std.Io.Writer = undefined;
 var generated_file: std.fs.File = undefined;
 var generating: bool = false;
 pub fn generate() void {
-    Vapor.println("Generating... {any}\n", .{mode_options.static_mode});
+    // Vapor.println("Generating... {any}\n", .{mode_options.static_mode});
     generating = true;
     std.fs.cwd().makeDir("static") catch |err| {
         switch (err) {
@@ -2315,6 +2332,7 @@ pub fn print(
 ) void {
     if (isWasi and build_options.enable_debug) {
         const buf = std.fmt.allocPrint(allocator_global, fmt, args) catch return;
+        std.debug.print(buf, .{});
         _ = Wasm.consoleLogWasm(buf.ptr, buf.len);
         allocator_global.free(buf);
     } else if (!isWasi) {

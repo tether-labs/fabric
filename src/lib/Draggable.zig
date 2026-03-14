@@ -1,5 +1,5 @@
 const std = @import("std");
-const Vapor = @import("vapor");
+const Vapor = @import("Vapor.zig");
 
 // Draggable behavior that can be attached to any element
 pub const Draggable = struct {
