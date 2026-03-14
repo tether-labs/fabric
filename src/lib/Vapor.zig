@@ -631,23 +631,6 @@ pub fn renderCycle(route_ptr: [*:0]u8) !void {
     UIContext.cache_count = 0;
     status = .{};
 
-    std.log.info("PackedLayout: {any}", .{@bitSizeOf(types.PackedLayout)});
-    std.log.info("PackedVisual: {any}", .{@bitSizeOf(types.PackedVisual)});
-    std.log.info("PackedPosition: {any}", .{@bitSizeOf(types.PackedPosition)});
-    std.log.info("PackedMarginsPaddings: {any}", .{@bitSizeOf(types.PackedMarginsPaddings)});
-    std.log.info("PackedGrid: {any}", .{@bitSizeOf(types.PackedGrid)});
-    std.log.info("PackedLines: {any}", .{@bitSizeOf(types.PackedLines)});
-    std.log.info("PackedDots: {any}", .{@bitSizeOf(types.PackedDots)});
-    std.log.info("PackedGradient: {any}", .{@bitSizeOf(types.PackedGradient)});
-    std.log.info("PackedLayer: {any}", .{@bitSizeOf(types.PackedLayer)});
-    std.log.info("PackedColor: {any}", .{@bitSizeOf(types.PackedColor)});
-    std.log.info("PackedShadow: {any}", .{@bitSizeOf(types.PackedShadow)});
-    std.log.info("PackedTransform: {any}", .{@bitSizeOf(types.PackedTransform)});
-    std.log.info("PackedTransition: {any}", .{@bitSizeOf(types.PackedTransition)});
-    std.log.info("PackedInteractive: {any}", .{@bitSizeOf(types.PackedInteractive)});
-    std.log.info("PackedAnimations: {any}", .{@bitSizeOf(types.PackedAnimations)});
-    std.log.info("PackedTransforms: {any}", .{@bitSizeOf(types.PackedTransforms)});
-
     const route = std.mem.span(route_ptr);
 
     // Get the old context for current route
