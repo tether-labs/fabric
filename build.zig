@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     const static_mode = b.option(bool, "static", "Enable static mode") orelse false;
     const enable_atomic = b.option(bool, "atomic", "Enable atomic operations") orelse true;
 
-    // var generator: std.Build.Step.Run = undefined;
+    var generator: std.Build.Step.Run = undefined;
 
     // Create build_options module
     const build_options = b.addOptions();
@@ -94,9 +94,9 @@ pub fn build(b: *std.Build) void {
 
     exe.linkLibrary(lib);
 
-    // if (static_mode) {
-    //     exe.step.dependOn(&generator.step);
-    // }
+    if (static_mode) {
+        exe.step.dependOn(&generator.step);
+    }
 
     b.installArtifact(lib);
     b.installArtifact(exe);
