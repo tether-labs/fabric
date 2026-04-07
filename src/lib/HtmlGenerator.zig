@@ -41,7 +41,7 @@ pub fn generate(root: *UINode, new_writer: *std.Io.Writer, style_path: []const u
     // writer.writeAll("\n</head>") catch unreachable;
 
     // Find the contents div
-    const target = "<div id=\"contents\" style=\"display: contents\">";
+    const target = "<main id=\"contents\" style=\"display: contents\">";
     var end = std.mem.indexOf(u8, html_template, target) orelse unreachable;
     end += target.len;
 
