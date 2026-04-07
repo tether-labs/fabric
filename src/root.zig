@@ -1,6 +1,6 @@
 const types = @import("lib/types.zig");
 pub const lib = @import("lib/Vapor.zig");
-pub const IconTokens = @import("user_config").IconTokens;
+pub const IconTokens = @import("config").IconTokens;
 pub const init = lib.init;
 pub const Wasm = lib.Wasm;
 const Rune = @import("lib/Rune.zig");

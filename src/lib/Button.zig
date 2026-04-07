@@ -8,7 +8,7 @@ const Style = types.Style;
 const ElementDecl = types.ElementDeclaration;
 const Color = types.Color;
 const Element = @import("Element.zig").Element;
-pub const IconTokens = @import("user_config").IconTokens;
+pub const IconTokens = @import("config").IconTokens;
 const utils = @import("utils.zig");
 const hashKey = utils.hashKey;
 const Draggable = @import("Draggable.zig").Draggable;
@@ -18,6 +18,123 @@ const Accessibility = @import("Accessibility.zig").Accessibility;
 const Edges = @import("Edges.zig").Edges;
 const GenericBuilder = @import("NewComponent.zig").Builder;
 const serializeArgs = utils.serializeArgs;
+
+// ============================================================
+// Shared style-merge logic — compiled ONCE, not per generic instantiation
+// ============================================================
+
+fn mergeVisualFields(target: *types.Visual, source: types.Visual) void {
+    if (source.background != null) target.background = source.background;
+    if (source.fill != null) target.fill = source.fill;
+    if (source.stroke != null) target.stroke = source.stroke;
+    if (source.border != null) target.border = source.border;
+    if (source.border_radius != null) target.border_radius = source.border_radius;
+    if (source.border_thickness != null) target.border_thickness = source.border_thickness;
+    if (source.border_color != null) target.border_color = source.border_color;
+    if (source.text_color != null) target.text_color = source.text_color;
+    if (source.font_size != null) target.font_size = source.font_size;
+    if (source.font_weight != null) target.font_weight = source.font_weight;
+    if (source.letter_spacing != null) target.letter_spacing = source.letter_spacing;
+    if (source.line_height != null) target.line_height = source.line_height;
+    if (source.opacity != null) target.opacity = source.opacity;
+    if (source.ellipsis != null) target.ellipsis = source.ellipsis;
+    if (source.shadow != null) target.shadow = source.shadow;
+    if (source.cursor != null) target.cursor = source.cursor;
+    if (source.layer != null) target.layer = source.layer;
+    if (source.layers != null) target.layers = source.layers;
+    if (source.text_shadow != null) target.text_shadow = source.text_shadow;
+}
+
+fn mergeHoverVisualFields(target: *types.Visual, source: types.Visual) void {
+    mergeVisualFields(target, source);
+    if (source.animation != null) target.animation = source.animation;
+    if (source.animation) |an| {
+        std.log.info("Animation not null {s}", .{an});
+    }
+    if (source.animation_name != null) target.animation_name = source.animation_name;
+    if (source.animation_name) |an| {
+        std.log.info("Animation not null {s}", .{an});
+    }
+}
+
+pub const StyleMergeParams = struct {
+    style_ptr: ?*const Vapor.Style,
+    pos: ?types.Position,
+    visual: ?types.Visual,
+    interactive: ?types.Interactive,
+    child_gap: ?u8,
+    transform_origin: ?types.TransformOrigin,
+    padding: ?types.Padding,
+    layout: ?types.Layout,
+    margin: ?types.Margin,
+    size: ?types.Size,
+    transition: ?types.Transition,
+    flex_wrap: ?types.FlexWrap,
+    direction: ?types.Direction,
+    font_family: ?[]const u8,
+    scroll: ?types.Scroll,
+    flex_type: types.FlexType,
+    id: ?[]const u8,
+    class: ?[]const u8,
+    edges: ?[]const u8,
+    include_extended: bool,
+    include_aspect_ratio: bool,
+};
+
+pub fn mergeStyles(p: StyleMergeParams) Style {
+    var s = if (p.style_ptr) |sp| sp.* else Style{};
+    if (s.position == null) s.position = p.pos;
+
+    if (s.visual != null and p.visual != null) {
+        var visual = s.visual.?;
+        mergeVisualFields(&visual, p.visual.?);
+        if (p.include_extended and p.edges != null) visual.edges = p.edges;
+        s.visual = visual;
+    } else if (p.visual) |v| {
+        s.visual = v;
+        if (p.include_extended) s.visual.?.edges = p.edges;
+    }
+
+    if (p.include_extended) {
+        if (s.interactive != null and p.interactive != null) {
+            const interactive = s.interactive.?;
+            const _interactive = p.interactive.?;
+            if (interactive.hover != null and _interactive.hover != null) {
+                var visual = interactive.hover.?;
+                mergeHoverVisualFields(&visual, _interactive.hover.?);
+                s.interactive.?.hover = visual;
+            }
+        } else if (p.interactive) |i| {
+            s.interactive = i;
+        }
+    } else {
+        if (s.interactive == null) s.interactive = p.interactive;
+    }
+
+    if (s.child_gap == null) s.child_gap = p.child_gap;
+    if (s.transform_origin == null) s.transform_origin = p.transform_origin;
+    if (s.padding == null) s.padding = p.padding;
+    if (s.flex_type == .default) s.flex_type = p.flex_type;
+    if (s.layout != null) {
+        if (p.layout) |l| s.layout = l;
+    } else s.layout = p.layout;
+    if (s.margin == null) s.margin = p.margin;
+    if (s.size == null) s.size = p.size;
+    if (s.transition == null) s.transition = p.transition;
+    if (s.flex_wrap == null) s.flex_wrap = p.flex_wrap;
+    if (p.direction) |d| s.direction = d;
+    if (s.font_family == null) s.font_family = p.font_family;
+    if (s.scroll == null) s.scroll = p.scroll;
+    if (p.include_aspect_ratio) {}
+    if (p.flex_type == .center) {
+        s.layout = .center;
+    } else if (p.flex_type == .stack) {
+        s.direction = .column;
+    }
+    if (p.id) |_id| s.id = _id;
+    if (p.class) |_class| s.style_id = _class;
+    return s;
+}
 
 pub fn Builder(comptime state_type: types.StateType) type {
     return struct {
@@ -57,11 +174,59 @@ pub fn Builder(comptime state_type: types.StateType) type {
         _accessibility: ?Accessibility = null,
         _used_style: bool = false,
         _flex_type: types.FlexType = .flex,
-        _font_family: []const u8 = "",
+        _font_family: ?[]const u8 = null,
 
         // In your component builder (e.g., ButtonBuilder.zig or Div builder)
 
         _edges: ?[]const u8 = null,
+
+        fn getStyleMergeParams(self: *const Self, include_extended: bool, include_aspect_ratio: bool) StyleMergeParams {
+            return .{
+                .style_ptr = self._style,
+                .pos = self._pos,
+                .visual = self._visual,
+                .interactive = self._interactive,
+                .child_gap = self._child_gap,
+                .transform_origin = self._transform_origin,
+                .padding = self._padding,
+                .layout = self._layout,
+                .margin = self._margin,
+                .size = self._size,
+                .transition = self._transition,
+                .flex_wrap = self._flex_wrap,
+                .direction = self._direction,
+                .font_family = self._font_family,
+                .scroll = self._scroll,
+                .flex_type = self._flex_type,
+                .id = self._id,
+                .class = self._class,
+                .edges = self._edges,
+                .include_extended = include_extended,
+                .include_aspect_ratio = include_aspect_ratio,
+            };
+        }
+
+        fn makeElemDecl(self: *const Self, text: ?[]const u8, mutable_style: *const Style) Vapor.ElementDecl {
+            return .{
+                .state_type = _state_type,
+                .elem_type = self._elem_type,
+                .text = text,
+                .style = mutable_style,
+                .href = self._href,
+                .svg = self._svg,
+                .alt = self._alt,
+                .aria_label = self._aria_label,
+                .animation_enter = self._animation_enter,
+                .animation_exit = self._animation_exit,
+                .name = self._name,
+                .video = self._video,
+                .style_fields = self._style_fields,
+                .hover_style_fields = self._hover_style_fields,
+                .inlineStyle = self._inlineStyle,
+                .accessibility = self._accessibility,
+                .src = self._src,
+            };
+        }
 
         pub fn edges(self: *const Self, edges_tag: ?[]const u8) Self {
             if (edges_tag) |_edges| {
@@ -197,60 +362,6 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return Self{ ._elem_type = .CtxButton, ._ui_node = ui_node };
         }
 
-        pub fn bind(self: *const Self, value: anytype) Self {
-            var new_self: Self = self.*;
-            if (self._elem_type != .TextField) {
-                Vapor.printlnErr("bindValue only works on TextField", .{});
-                return self.*;
-            }
-            if (@typeInfo(@TypeOf(value)) != .pointer) {
-                Vapor.printlnErr("bindValue only works on pointer types", .{});
-                return self.*;
-            }
-
-            const ui_node = self._ui_node orelse {
-                Vapor.printlnSrcErr("Node is null must ref() first, before setting onChange", .{}, @src());
-                unreachable;
-            };
-
-            switch (self._text_field_type) {
-                .string => {
-                    if (@TypeOf(value.*) != []const u8) {
-                        Vapor.printlnErr("bindValue and TextField type mismatch", .{});
-                        return self.*;
-                    }
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_opaque: *anyopaque, evt: *Vapor.Event) void {
-                            const value_type: *[]const u8 = @ptrCast(@alignCast(value_opaque));
-                            value_type.* = evt.text();
-                            Vapor.print("No onChange updateText: {s}\n", .{value_type.*});
-                        }
-                    }.updateText, value) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
-                },
-                .int => {
-                    if (@TypeOf(value.*) != i32) {
-                        Vapor.printlnErr("bindValue and TextField type mismatch", .{});
-                        return self.*;
-                    }
-                },
-                .float => {
-                    if (@TypeOf(value.*) != f32) {
-                        Vapor.printlnErr("bindValue and TextField type mismatch", .{});
-                        return self.*;
-                    }
-                },
-                else => {
-                    Vapor.printlnErr("NOT IMPLEMENTED", .{});
-                    return self.*;
-                },
-            }
-            new_self._value = @ptrCast(@alignCast(value));
-
-            return new_self;
-        }
         // Add these methods:
 
         /// Set full accessibility config
@@ -392,52 +503,6 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn onChange(self: *const Self, cb: fn (*Vapor.Event) void) Self {
-            var new_self: Self = self.*;
-
-            const ui_node = self._ui_node orelse blk: {
-                const ui_node = LifeCycle.open(ElementDecl{
-                    .state_type = _state_type,
-                    .elem_type = self._elem_type,
-                }) orelse {
-                    Vapor.printlnSrcErr("Node is null", .{}, @src());
-                    unreachable;
-                };
-                new_self._ui_node = ui_node;
-
-                break :blk ui_node;
-            };
-
-            // If we have a binded value we instead create a wrapper ctx around the cb passed in
-            // this way we can update the binded values from the callback and call the developer's
-            // cb with the updated value
-            if (self._value) |value| {
-                switch (self._text_field_type) {
-                    .string => {
-                        Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                            pub fn updateText(value_opaque: *anyopaque, evt: *Vapor.Event) void {
-                                const value_type: *[]const u8 = @ptrCast(@alignCast(value_opaque));
-                                value_type.* = evt.text();
-                                Vapor.print("updateText: {s}\n", .{value_type.*});
-                                @call(.auto, cb, .{evt});
-                            }
-                        }.updateText, value) catch |err| {
-                            Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                            unreachable;
-                        };
-                    },
-                    else => return self.*,
-                }
-            } else {
-                Vapor.attachEventCallback(ui_node, .input, cb) catch |err| {
-                    Vapor.println("ONLEAVE: Could not attach event callback {any}\n", .{err});
-                    unreachable;
-                };
-            }
-
-            return new_self;
-        }
-
         pub fn inlineStyle(self: *const Self, comptime fmt: []const u8, args: anytype) Self {
             var new_self: Self = self.*;
             const allocator = Vapor.arena(.frame);
@@ -516,6 +581,18 @@ pub fn Builder(comptime state_type: types.StateType) type {
             };
 
             return new_self;
+        }
+
+        pub fn onEvent(self: *const Self, event: types.EventType, func: anytype, args: anytype) *const Self {
+            const ui_node = self._ui_node orelse {
+                Vapor.printlnSrcErr("Node is null", .{}, @src());
+                unreachable;
+            };
+            Vapor.attachEventCtxCallback(ui_node, event, func, args) catch |err| {
+                Vapor.println("OnEventCtx: Could not attach event callback {any}\n", .{err});
+                unreachable;
+            };
+            return self;
         }
 
         pub fn onEventCtx(self: *const Self, event: types.EventType, func: anytype, ctx: anytype) *const Self {
@@ -734,35 +811,39 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
         pub fn style(self: *const Self, style_ptr: *const Vapor.Style) Self {
             var new_self: Self = self.*;
-            new_self._used_style = true;
-            var elem_decl = Vapor.ElementDecl{
-                .state_type = _state_type,
-                .elem_type = self._elem_type,
-                .style = style_ptr,
-                .aria_label = self._aria_label,
-                .animation_enter = self._animation_enter,
-                .animation_exit = self._animation_exit,
-                .accessibility = self._accessibility,
-            };
-
-            // if (self._tooltip) |_tooltip| {
-            //     elem_decl.tooltip = &_tooltip;
-            // }
-
-            if (self._id) |_id| {
-                var mutable_style = style_ptr.*;
-                mutable_style.id = _id;
-                elem_decl.style = &mutable_style;
-            }
-
-            if (self._class) |_class| {
-                var mutable_style = style_ptr.*;
-                mutable_style.style_id = _class;
-                elem_decl.style = &mutable_style;
-            }
-
-            Vapor.LifeCycle.configure(elem_decl);
+            new_self._style = style_ptr;
             return new_self;
+
+            // var new_self: Self = self.*;
+            // new_self._used_style = true;
+            // var elem_decl = Vapor.ElementDecl{
+            //     .state_type = _state_type,
+            //     .elem_type = self._elem_type,
+            //     .style = style_ptr,
+            //     .aria_label = self._aria_label,
+            //     .animation_enter = self._animation_enter,
+            //     .animation_exit = self._animation_exit,
+            //     .accessibility = self._accessibility,
+            // };
+            //
+            // // if (self._tooltip) |_tooltip| {
+            // //     elem_decl.tooltip = &_tooltip;
+            // // }
+            //
+            // if (self._id) |_id| {
+            //     var mutable_style = style_ptr.*;
+            //     mutable_style.id = _id;
+            //     elem_decl.style = &mutable_style;
+            // }
+            //
+            // if (self._class) |_class| {
+            //     var mutable_style = style_ptr.*;
+            //     mutable_style.style_id = _class;
+            //     elem_decl.style = &mutable_style;
+            // }
+            //
+            // Vapor.LifeCycle.configure(elem_decl);
+            // return new_self;
         }
 
         /// This function takes a const pointer to a Style Struct, and returns the body function callback
@@ -849,7 +930,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn background(self: *const Self, value: types.Background) Self {
+        pub fn background(self: *const Self, value: types.Color) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.background = value;
@@ -932,14 +1013,14 @@ pub fn Builder(comptime state_type: types.StateType) type {
         }
 
         pub fn hover(self: *const Self, value: types.Visual) Self {
-            var new_self: Self = self.*;
-            var _interactive = new_self._interactive orelse types.Interactive{};
-            _interactive.hover = value;
-            new_self._interactive = _interactive;
-            return new_self;
+            var n = self.*;
+            var i = n._interactive orelse types.Interactive{};
+            i.hover = value;
+            n._interactive = i;
+            return n;
         }
 
-        pub fn hoverBackground(self: *const Self, color: types.Background) Self {
+        pub fn hoverBackground(self: *const Self, color: types.Color) Self {
             var new_self: Self = self.*;
             var _interactive = new_self._interactive orelse types.Interactive{};
             var _hover = _interactive.hover orelse types.Visual{};
@@ -947,6 +1028,22 @@ pub fn Builder(comptime state_type: types.StateType) type {
             _interactive.hover = _hover;
             new_self._interactive = _interactive;
             return new_self;
+        }
+
+        pub fn fontWeight(self: *const Self, value: u16) Self {
+            var n = self.*;
+            var v = n._visual orelse types.Visual{};
+            v.font_weight = value;
+            n._visual = v;
+            return n;
+        }
+
+        pub fn fontColor(self: *const Self, color: ?Color) Self {
+            var n = self.*;
+            var v = n._visual orelse types.Visual{};
+            v.text_color = color;
+            n._visual = v;
+            return n;
         }
 
         pub fn pointer(self: *const Self) Self {
@@ -1368,77 +1465,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
 
         pub fn children(self: *const Self, _: void) void {
             if (self._used_style) return Vapor.LifeCycle.close({});
-            var mutable_style = Style{};
-            if (self._style) |style_ptr| {
-                mutable_style = style_ptr.*;
-            }
-            if (mutable_style.position == null) mutable_style.position = self._pos;
-            if (mutable_style.visual != null and self._visual != null) {
-                var visual = mutable_style.visual.?;
-                const _visual = self._visual.?;
-
-                if (_visual.background != null) visual.background = _visual.background;
-                if (_visual.fill != null) visual.fill = _visual.fill;
-                if (_visual.stroke != null) visual.stroke = _visual.stroke;
-                if (_visual.border != null) visual.border = _visual.border;
-                if (_visual.border_radius != null) visual.border_radius = _visual.border_radius;
-                if (_visual.border_thickness != null) visual.border_thickness = _visual.border_thickness;
-                if (_visual.border_color != null) visual.border_color = _visual.border_color;
-                if (_visual.text_color != null) visual.text_color = _visual.text_color;
-                if (_visual.font_size != null) visual.font_size = _visual.font_size;
-                if (_visual.font_weight != null) visual.font_weight = _visual.font_weight;
-                if (_visual.letter_spacing != null) visual.letter_spacing = _visual.letter_spacing;
-                if (_visual.line_height != null) visual.line_height = _visual.line_height;
-                if (_visual.font_size != null) visual.font_size = _visual.font_size;
-                if (_visual.opacity != null) visual.opacity = _visual.opacity;
-                if (_visual.ellipsis != null) visual.ellipsis = _visual.ellipsis;
-                if (_visual.shadow != null) visual.shadow = _visual.shadow;
-                if (_visual.cursor != null) visual.cursor = _visual.cursor;
-                if (self._edges != null) visual.edges = self._edges;
-
-                mutable_style.visual = visual;
-            } else if (self._visual) |_visual| {
-                mutable_style.visual = _visual;
-                mutable_style.visual.?.edges = self._edges;
-            }
-
-            if (mutable_style.interactive == null) mutable_style.interactive = self._interactive;
-            if (mutable_style.child_gap == null) mutable_style.child_gap = self._child_gap;
-            if (mutable_style.transform_origin == null) mutable_style.transform_origin = self._transform_origin;
-            if (mutable_style.padding == null) mutable_style.padding = self._padding;
-            if (mutable_style.flex_type == .default) mutable_style.flex_type = self._flex_type;
-            if (mutable_style.layout != null) {
-                if (self._layout) |_layout| {
-                    mutable_style.layout = _layout;
-                }
-            } else {
-                mutable_style.layout = self._layout;
-            }
-            if (mutable_style.margin == null) mutable_style.margin = self._margin;
-            if (mutable_style.size == null) mutable_style.size = self._size;
-            if (mutable_style.transition == null) {
-                mutable_style.transition = self._transition;
-            }
-            if (mutable_style.flex_wrap == null) mutable_style.flex_wrap = self._flex_wrap;
-            mutable_style.direction = self._direction;
-            if (mutable_style.scroll == null) mutable_style.scroll = self._scroll;
-            if (mutable_style.font_family == null) mutable_style.font_family = self._font_family;
-
-            if (self._id) |_id| {
-                mutable_style.id = _id;
-
-                const ui_node = self._ui_node orelse unreachable;
-                const kv = Vapor.ctx_callback_registry.fetchRemove(hashKey(ui_node.uuid)) orelse unreachable;
-                Vapor.ctx_callback_registry.put(hashKey(_id), kv.value) catch |err| {
-                    println("Button Function Registry {any}\n", .{err});
-                    unreachable;
-                };
-            }
-
-            if (self._class) |_class| {
-                mutable_style.style_id = _class;
-            }
-
+            var mutable_style = mergeStyles(self.getStyleMergeParams(true, false));
             const elem_decl = Vapor.ElementDecl{
                 .state_type = _state_type,
                 .elem_type = self._elem_type,
@@ -1449,8 +1476,7 @@ pub fn Builder(comptime state_type: types.StateType) type {
                 .inlineStyle = self._inlineStyle,
                 .accessibility = self._accessibility,
             };
-
-            _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
+            Vapor.LifeCycle.configure(elem_decl);
             return Vapor.LifeCycle.close({});
         }
 

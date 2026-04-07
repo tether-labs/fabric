@@ -1,7 +1,7 @@
 const std = @import("std");
 const Vapor = @import("Vapor.zig");
 const Wasm = Vapor.Wasm;
-const isWasi = Vapor.lib.isWasi;
+const isWasi = Vapor.isWasi;
 const utils = @import("utils.zig");
 const hashKey = utils.hashKey;
 const Event = @import("Event.zig");
@@ -159,11 +159,11 @@ pub fn fileInfo(file_reader: *FileReader, file_index: usize) !FileInfo {
                         };
                     } else {
                         @field(cloned_form, field.name) = @intCast(obj_value.int);
-                        Vapor.printSrcErr("WE NEED TO CHECK THIS SO THAT THE SIGNDNESS IS OKAY", .{}, @src());
+                        Vapor.printlnSrcErr("WE NEED TO CHECK THIS SO THAT THE SIGNDNESS IS OKAY", .{}, @src());
                     }
                 },
                 else => {
-                    Vapor.printlnErr("Cannot set non string or int float types TYPE: {any}", .{@TypeOf(obj_value)});
+                    Vapor.printlnSrcErr("Cannot set non string or int float types TYPE: {any}", .{@TypeOf(obj_value)});
                 },
             }
         }

@@ -245,6 +245,7 @@ pub const ScrollIntoViewOptions = struct {
 pub const ScrollBehavior = enum(u8) {
     auto,
     smooth,
+    instant,
 };
 
 pub const ScrollBlock = enum(u8) {
@@ -318,13 +319,14 @@ export fn registerAllListenerCallbacks() void {
         const ui_node = entry.value_ptr.*;
         if (ui_node.event_handlers) |handlers| {
             for (handlers.handlers.items) |handler| {
-                if (handler.event_type == .blur or handler.event_type == .focus or handler.event_type == .input or handler.event_type == .change or handler.event_type == .dblclick) {
-                    continue;
-                }
+                // if (handler.event_type == .blur or handler.event_type == .focus or handler.event_type == .input or handler.event_type == .change or handler.event_type == .dblclick) {
+                //     Vapor.printlnSrcErr("Event Type: {any} is being ignored\n", .{handler.event_type}, @src());
+                //     continue;
+                // }
 
-                if (handler.event_type == .submit or handler.event_type == .keydown or handler.event_type == .keyup) {
-                    continue;
-                }
+                // if (handler.event_type == .submit or handler.event_type == .keydown or handler.event_type == .keyup) {
+                //     continue;
+                // }
 
                 const event_type_str = std.enums.tagName(Vapor.Types.EventType, handler.event_type) orelse unreachable;
                 var callback_id = hashKey(ui_node.uuid);

@@ -13,7 +13,16 @@ pub const Kit = @This();
 
 pub fn init() void {
     Vapor.fetch_registry = std.AutoHashMap(u32, *Kit.FetchNode).init(Vapor.arena(.persist)); ///// This bad boy is 19kb addition
+    Fetch.init();
 }
+
+pub const Window = struct {
+    pub fn openTab(url: []const u8) void {
+        if (isWasi) {
+            Wasm.windowOpenWasm(url.ptr, url.len);
+        }
+    }
+};
 
 /// This function takes a slice of json and parses it into a struct
 /// # Parameters:
@@ -149,10 +158,12 @@ const AbortController = enum {
 pub const FetchAction = struct {
     runFn: FetchActionProto,
     deinitFn: FetchNodeProto,
+    allocator: FetchNodeProtoAlloc,
 };
 
 const FetchActionProto = *const fn (*FetchAction, Response) void;
 const FetchNodeProto = *const fn (*FetchNode) void;
+const FetchNodeProtoAlloc = *const fn (*FetchNode) std.mem.Allocator;
 
 pub const FetchNode = struct { data: FetchAction };
 
@@ -238,9 +249,62 @@ pub fn fetchAwait(url: []const u8, http_req: HttpReq) *Future {
 }
 
 pub const Fetch = struct {
+    pub const RequestKey = struct {
+        url: []const u8,
+        method: Methods,
+    };
+
+    pub const RequestKeyContext = struct {
+        pub fn hash(_: RequestKeyContext, key: RequestKey) u64 {
+            var h = std.hash.Wyhash.init(0);
+            h.update(key.url);
+            h.update(std.mem.asBytes(&key.method));
+            return h.final();
+        }
+
+        pub fn eql(_: RequestKeyContext, a: RequestKey, b: RequestKey) bool {
+            return a.method == b.method and std.mem.eql(u8, a.url, b.url);
+        }
+    };
+
+    pub const RequestEntry = struct {
+        arena: std.heap.ArenaAllocator,
+        callback_id: u32,
+        // The response data lives in `arena` — valid until next fetch to same key
+        last_response: ?Response = null,
+
+        pub fn allocator(self: *RequestEntry) std.mem.Allocator {
+            return self.arena.allocator();
+        }
+
+        /// Reset the arena, invalidating all previous response data
+        pub fn reset(self: *RequestEntry) void {
+            _ = self.arena.reset(.retain_capacity);
+            self.last_response = null;
+        }
+
+        pub fn deinit(self: *RequestEntry) void {
+            self.arena.deinit();
+        }
+    };
+
+    // Module-level registry: URL+method -> entry with its own arena
+    pub var request_registry: std.HashMap(
+        RequestKey,
+        *RequestEntry,
+        RequestKeyContext,
+        80, // max load percentage
+    ) = undefined;
+
+    pub fn init() void {
+        request_registry = std.HashMap(RequestKey, *RequestEntry, RequestKeyContext, 80).init(Vapor.arena(.persist));
+    }
+
     _cbs: []*const fn (Response) void = &.{},
     http_req: HttpReq,
     url: []const u8,
+    debug: bool = false,
+    force_error: bool = false,
 
     pub fn fetch(url: []const u8, http_req: HttpReq) Fetch {
         return .{
@@ -249,15 +313,44 @@ pub const Fetch = struct {
         };
     }
 
+    fn getOrCreateEntry(key: RequestKey) *RequestEntry {
+        if (request_registry.get(key)) |existing| {
+            // Same endpoint hit again — reset the arena, old response data dies
+            existing.reset();
+            return existing;
+        }
+
+        // First time hitting this endpoint — create a new entry
+        // The entry itself lives in the global allocator (it's long-lived)
+        const entry = Vapor.allocator_global.create(RequestEntry) catch unreachable;
+        entry.* = .{
+            .arena = std.heap.ArenaAllocator.init(Vapor.allocator_global),
+            .callback_id = 0,
+        };
+
+        // Key strings need to outlive the frame, so dupe into global
+        const owned_key = RequestKey{
+            .url = Vapor.allocator_global.dupe(u8, key.url) catch unreachable,
+            .method = key.method,
+        };
+        request_registry.put(owned_key, entry) catch unreachable;
+        return entry;
+    }
+
     pub fn handle(self: *const Fetch, cb: fn (Response) void) void {
         const http_req = self.http_req;
         const url = self.url;
 
+        const key = RequestKey{ .url = url, .method = http_req.method };
+        const entry = getOrCreateEntry(key);
+
+        // Build the JSON request using the entry's arena (gets reset next fetch)
+        const arena_alloc = entry.allocator();
         var writer = String.new();
-        writer.append_str("{\n\"method\": ");
-        writer.append_str("\"");
+        writer.append_str("{\n\"method\": \"");
         writer.append_str(@tagName(http_req.method));
         writer.append_str("\"");
+
         if (http_req.headers) |headers| {
             writer.append_str(",\n\"headers\": {\n");
             constructHeaders(headers, http_req.extra_headers, &writer);
@@ -268,9 +361,7 @@ pub const Fetch = struct {
             for (http_req.extra_headers) |header| {
                 writer.append_str("\"");
                 writer.append_str(header.name);
-                writer.append_str("\"");
-                writer.append_str(": ");
-                writer.append_str("\"");
+                writer.append_str("\": \"");
                 writer.append_str(header.value);
                 writer.append_str("\"");
                 if (count < http_req.extra_headers.len) {
@@ -282,8 +373,7 @@ pub const Fetch = struct {
         }
 
         if (http_req.credentials) |credentials| {
-            writer.append_str(",\n\"credentials\": ");
-            writer.append_str("\"");
+            writer.append_str(",\n\"credentials\": \"");
             writer.append_str(credentials);
             writer.append_str("\"");
         }
@@ -292,7 +382,7 @@ pub const Fetch = struct {
             writer.append_str(",\n\"body\": ");
             switch (http_req.body_type) {
                 .string => {
-                    var io_writer = std.Io.Writer.Allocating.init(Vapor.allocator_global);
+                    var io_writer = std.Io.Writer.Allocating.init(arena_alloc);
                     std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
                     defer io_writer.deinit();
                     writer.append_str(io_writer.written());
@@ -304,37 +394,179 @@ pub const Fetch = struct {
         }
         writer.append_str("\n}");
 
-        const final = writer.contents[0..writer.len];
-        const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
+        const final_str = writer.contents[0..writer.len];
+        const json = std.json.fmt(final_str, .{ .whitespace = .indent_1 }).value;
 
+        // Callback closure — allocated globally since the registry needs stable pointers
+        // but the callback itself parses into the entry's arena
         const Closure = struct {
-            fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-            fn runFn(_: *FetchAction, resp: Response) void {
+            fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn, .allocator = allocator } },
+            entry_ptr: *RequestEntry,
+
+            fn runFn(action: *FetchAction, resp: Response) void {
+                // Store the response in the entry so it's accessible between requests
+                const node: *FetchNode = @alignCast(@fieldParentPtr("data", action));
+                const self_closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
+                self_closure.entry_ptr.last_response = resp;
                 @call(.auto, cb, .{resp});
             }
+
             fn deinitFn(node: *FetchNode) void {
                 const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
                 Vapor.allocator_global.destroy(closure);
             }
+
+            fn allocator(node: *FetchNode) std.mem.Allocator {
+                const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
+                return closure.entry_ptr.allocator();
+            }
         };
 
-        const closure = Vapor.allocator_global.create(Closure) catch |err| {
-            Vapor.println("Error could not create closure {any}\n ", .{err});
-            unreachable;
-        };
-        closure.* = .{};
+        const closure = Vapor.allocator_global.create(Closure) catch unreachable;
+        closure.* = .{ .entry_ptr = entry };
 
         const id = Vapor.fetch_registry.count() + 1;
+        entry.callback_id = id;
+
         Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
-            Vapor.println("Button Function Registry {any}\n", .{err});
+            Vapor.printlnSrcErr("Registry error {any}\n", .{err}, @src());
             return;
         };
+
+        if (self.debug) {
+            std.log.info("Fetching {s}\n", .{url});
+            std.log.info("Request: {s}\n", .{json});
+        }
+
+        if (self.force_error) {
+            const resp = Response{ .Err = .{
+                .code = 404,
+                .message = "Sample error",
+                .type = "",
+                .ok = false,
+                .url = url,
+                .redirected = false,
+                .body = "",
+                .headers = null,
+                .content_type = "",
+                .content_length = 0,
+                .elapsed_ms = 0,
+                .error_kind = "",
+                .error_name = "",
+            } };
+            @call(.auto, cb, .{resp});
+            return;
+        }
+
         if (Vapor.isWasi) {
             fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
         }
-        return;
     }
 };
+
+// pub const Fetch = struct {
+//     _cbs: []*const fn (Response) void = &.{},
+//     http_req: HttpReq,
+//     url: []const u8,
+//
+//     const FetchEntry = struct {
+//         node: *FetchNode,
+//         arena: std.mem.Allocator,
+//     };
+//
+//     pub fn fetch(url: []const u8, http_req: HttpReq) Fetch {
+//         return .{
+//             .http_req = http_req,
+//             .url = url,
+//         };
+//     }
+//
+//     pub fn handle(self: *const Fetch, cb: fn (Response) void) void {
+//         const http_req = self.http_req;
+//         const url = self.url;
+//
+//         var writer = String.new();
+//         writer.append_str("{\n\"method\": ");
+//         writer.append_str("\"");
+//         writer.append_str(@tagName(http_req.method));
+//         writer.append_str("\"");
+//         if (http_req.headers) |headers| {
+//             writer.append_str(",\n\"headers\": {\n");
+//             constructHeaders(headers, http_req.extra_headers, &writer);
+//             writer.append_str("\n}");
+//         } else if (http_req.extra_headers.len > 0) {
+//             writer.append_str(",\n\"headers\": {\n");
+//             var count: usize = 1;
+//             for (http_req.extra_headers) |header| {
+//                 writer.append_str("\"");
+//                 writer.append_str(header.name);
+//                 writer.append_str("\"");
+//                 writer.append_str(": ");
+//                 writer.append_str("\"");
+//                 writer.append_str(header.value);
+//                 writer.append_str("\"");
+//                 if (count < http_req.extra_headers.len) {
+//                     writer.append_str(",\n");
+//                 }
+//                 count += 1;
+//             }
+//             writer.append_str("\n}");
+//         }
+//
+//         if (http_req.credentials) |credentials| {
+//             writer.append_str(",\n\"credentials\": ");
+//             writer.append_str("\"");
+//             writer.append_str(credentials);
+//             writer.append_str("\"");
+//         }
+//
+//         if (http_req.body) |body| {
+//             writer.append_str(",\n\"body\": ");
+//             switch (http_req.body_type) {
+//                 .string => {
+//                     var io_writer = std.Io.Writer.Allocating.init(Vapor.allocator_global);
+//                     std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
+//                     defer io_writer.deinit();
+//                     writer.append_str(io_writer.written());
+//                 },
+//                 .json => {
+//                     writer.append_str(body);
+//                 },
+//             }
+//         }
+//         writer.append_str("\n}");
+//
+//         const final = writer.contents[0..writer.len];
+//         const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
+//
+//         const Closure = struct {
+//             fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+//             fn runFn(_: *FetchAction, resp: Response) void {
+//                 @call(.auto, cb, .{resp});
+//             }
+//             fn deinitFn(node: *FetchNode) void {
+//                 const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
+//                 Vapor.allocator_global.destroy(closure);
+//             }
+//         };
+//
+//         const closure = Vapor.allocator_global.create(Closure) catch |err| {
+//             Vapor.println("Error could not create closure {any}\n ", .{err});
+//             unreachable;
+//         };
+//         closure.* = .{};
+//
+//         const id = Vapor.fetch_registry.count() + 1;
+//         Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
+//             Vapor.println("Button Function Registry {any}\n", .{err});
+//             return;
+//         };
+//         if (Vapor.isWasi) {
+//             fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
+//         }
+//         return;
+//     }
+// };
 
 pub fn fetch(url: []const u8, cb: fn (Response) void, http_req: HttpReq) void {
     var writer = String.new();
@@ -658,6 +890,17 @@ pub const OkResponse = struct {
     pub fn header(self: OkResponse, key: []const u8) ?[]const u8 {
         return self.headers.map.get(key);
     }
+
+    pub fn bind(self: *const OkResponse, comptime T: type, allocator: std.mem.Allocator) !T {
+        const parsed = std.json.parseFromSlice(
+            T,
+            allocator,
+            self.body,
+            .{},
+        ) catch return error.MalformedJson;
+
+        return parsed.value;
+    }
 };
 
 pub const ErrorKind = enum {
@@ -799,26 +1042,27 @@ pub const Response = union(enum) {
     }
 };
 
-pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
-    const resp = std.mem.span(resp_ptr);
-    const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.persist), resp, .{}) catch |err| {
-        Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
-        return;
-    };
+// pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
+//     const resp = std.mem.span(resp_ptr);
+//     const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.persist), resp, .{}) catch |err| {
+//         Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
+//         return;
+//     };
+//
+//     const json_resp: Response = parsed_value.value;
+//
+//     if (json_resp.isErr()) {
+//         const e = json_resp.err().?;
+//         Vapor.printlnErr(
+//             "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
+//             .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
+//         );
+//     }
+//
+//     const node = Vapor.fetch_registry.get(id) orelse return;
+//     @call(.auto, node.data.runFn, .{ &node.data, json_resp });
+// }
 
-    const json_resp: Response = parsed_value.value;
-
-    if (json_resp.isErr()) {
-        const e = json_resp.err().?;
-        Vapor.printlnErr(
-            "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
-            .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
-        );
-    }
-
-    const node = Vapor.fetch_registry.get(id) orelse return;
-    @call(.auto, node.data.runFn, .{ &node.data, json_resp });
-}
 pub const HttpReqOffset = struct {
     method_ptr: [*]const u8 = undefined,
     method_len: usize = 0,
@@ -1468,11 +1712,24 @@ pub const API = struct {
 
     pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
         const resp = std.mem.span(resp_ptr);
-        const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.frame), resp, .{
-            .ignore_unknown_fields = true,
-        }) catch |err| {
+
+        // Look up the fetch node to find the associated entry
+        const node = Vapor.fetch_registry.get(id) orelse return;
+
+        // Walk from node back to the Closure to get the entry
+        // const closure: *Fetch.Closure = @alignCast(@fieldParentPtr("fetch_node", node));
+        // const entry = closure.entry_ptr;
+
+        const allocator = @call(.auto, node.data.allocator, .{node});
+
+        // Parse into the entry's arena — data lives until next fetch to same endpoint
+        const parsed_value = std.json.parseFromSlice(
+            Response,
+            allocator,
+            resp,
+            .{ .ignore_unknown_fields = true },
+        ) catch |err| {
             Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
-            const node = Vapor.fetch_registry.get(id) orelse return;
             @call(.auto, node.data.runFn, .{ &node.data, Response{ .Err = .{
                 .code = 0,
                 .message = "",
@@ -1502,10 +1759,50 @@ pub const API = struct {
             );
         }
 
-        const node = Vapor.fetch_registry.get(id) orelse return;
         @call(.auto, node.data.runFn, .{ &node.data, json_resp });
         Vapor.cycle();
     }
+
+    // pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
+    //     const resp = std.mem.span(resp_ptr);
+    //     const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.frame), resp, .{
+    //         .ignore_unknown_fields = true,
+    //     }) catch |err| {
+    //         Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
+    //         const node = Vapor.fetch_registry.get(id) orelse return;
+    //         @call(.auto, node.data.runFn, .{ &node.data, Response{ .Err = .{
+    //             .code = 0,
+    //             .message = "",
+    //             .type = "",
+    //             .ok = false,
+    //             .url = "",
+    //             .redirected = false,
+    //             .body = resp,
+    //             .headers = null,
+    //             .content_type = "",
+    //             .content_length = 0,
+    //             .elapsed_ms = 0,
+    //             .error_kind = "",
+    //             .error_name = "",
+    //         } } });
+    //         Vapor.cycle();
+    //         return;
+    //     };
+    //
+    //     const json_resp: Response = parsed_value.value;
+    //
+    //     if (json_resp.isErr()) {
+    //         const e = json_resp.err().?;
+    //         std.log.err(
+    //             "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
+    //             .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
+    //         );
+    //     }
+    //
+    //     const node = Vapor.fetch_registry.get(id) orelse return;
+    //     @call(.auto, node.data.runFn, .{ &node.data, json_resp });
+    //     Vapor.cycle();
+    // }
 
     pub fn getObserverOptions(options: *ObserverOptions) callconv(.c) [*]const u8 {
         ObserverExport.init();
@@ -1702,4 +1999,17 @@ comptime {
             @export(&val, .{ .name = decl.name });
         }
     }
+}
+
+// Split string into slice of slices
+pub fn split(str: []const u8, delimiter: []const u8) std.mem.SplitIterator(u8, .sequence) {
+    return std.mem.splitSequence(u8, str, delimiter);
+}
+
+pub fn contains(str: []const u8, needle: []const u8) bool {
+    return utils.contains(str, needle);
+}
+
+pub fn startsWith(str: []const u8, prefix: []const u8) bool {
+    return utils.startsWith(str, prefix);
 }

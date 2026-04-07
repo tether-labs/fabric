@@ -293,6 +293,30 @@ pub fn getUnderlyingValue(comptime T: type, comptime OT: type, v: OT) T {
     };
 }
 
+// Trim whitespace
+pub fn trim(str: []const u8) []const u8 {
+    return std.mem.trim(u8, str, " \t\n\r");
+}
+
+// Check contains / startsWith / endsWith
+pub fn contains(haystack: []const u8, needle: []const u8) bool {
+    return std.mem.indexOf(u8, haystack, needle) != null;
+}
+
+pub fn startsWith(str: []const u8, prefix: []const u8) bool {
+    return std.mem.startsWith(u8, str, prefix);
+}
+
+// Clamp a number
+pub fn clamp(val: anytype, min_val: anytype, max_val: anytype) @TypeOf(val) {
+    return @max(min_val, @min(max_val, val));
+}
+
+// Linear interpolation — great for animations
+pub fn lerp(a: f64, b: f64, t: f64) f64 {
+    return a + (b - a) * clamp(t, 0.0, 1.0);
+}
+
 pub fn toLowerCase(str: []const u8, arena_type: Vapor.ArenaType) []const u8 {
     return std.ascii.allocLowerString(Vapor.arena(arena_type), str) catch unreachable;
 }

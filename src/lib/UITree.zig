@@ -79,6 +79,7 @@ pub const UINode = struct {
     uuid: []const u8 = "",
     uuid_buf: [32]u8 = undefined,
     href: ?[]const u8 = null,
+    src: ?[]const u8 = null,
     index: usize = 0,
     hooks: HooksIds = .{},
     text_field_params: ?*types.TextFieldParams = null,
@@ -116,6 +117,8 @@ pub const UINode = struct {
     inlineStyle: ?[]const u8 = null,
     style_hashes: [8]u32 = .{ 0, 0, 0, 0, 0, 0, 0, 0 }, // Direct access, no hashmap
     can_have_children: bool = true,
+    // mount, update, destroy, unknown
+    on_callbacks: [4]u32 = [4]u32{ 0, 0, 0, 0 },
 
     // nodes_flat_index: usize = 0,
     // tooltip: ?types.Tooltip = null,

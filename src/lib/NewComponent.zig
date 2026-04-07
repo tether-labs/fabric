@@ -8,7 +8,7 @@ const Style = types.Style;
 const ElementDecl = types.ElementDeclaration;
 const Color = types.Color;
 const Element = @import("Element.zig").Element;
-pub const IconTokens = @import("user_config").IconTokens;
+pub const IconTokens = @import("config").IconTokens;
 const utils = @import("utils.zig");
 const hashKey = utils.hashKey;
 const Draggable = @import("Draggable.zig").Draggable;
@@ -138,7 +138,7 @@ fn mergeHoverVisualFields(target: *types.Visual, source: types.Visual) void {
     if (source.animation_name != null) target.animation_name = source.animation_name;
 }
 
-const StyleMergeParams = struct {
+pub const StyleMergeParams = struct {
     style_ptr: ?*const Vapor.Style,
     pos: ?types.Position,
     visual: ?types.Visual,
@@ -152,9 +152,9 @@ const StyleMergeParams = struct {
     size: ?types.Size,
     transition: ?types.Transition,
     flex_wrap: ?types.FlexWrap,
-    direction: types.Direction,
+    direction: ?types.Direction,
     list_style: ?types.ListStyle,
-    font_family: []const u8,
+    font_family: ?[]const u8,
     scroll: ?types.Scroll,
     flex_type: types.FlexType,
     id: ?[]const u8,
@@ -166,7 +166,7 @@ const StyleMergeParams = struct {
     include_aspect_ratio: bool,
 };
 
-fn mergeStyles(p: StyleMergeParams) Style {
+pub fn mergeStyles(p: StyleMergeParams) Style {
     var s = if (p.style_ptr) |sp| sp.* else Style{};
     if (s.position == null) s.position = p.pos;
 
@@ -210,7 +210,7 @@ fn mergeStyles(p: StyleMergeParams) Style {
     if (s.size == null) s.size = p.size;
     if (s.transition == null) s.transition = p.transition;
     if (s.flex_wrap == null) s.flex_wrap = p.flex_wrap;
-    s.direction = p.direction;
+    if (p.direction) |d| s.direction = d;
     if (s.list_style == null) s.list_style = p.list_style;
     if (s.font_family == null) s.font_family = p.font_family;
     if (s.scroll == null) s.scroll = p.scroll;
@@ -228,13 +228,13 @@ fn mergeStyles(p: StyleMergeParams) Style {
     return s;
 }
 
-fn persistText(ui_node: ?*UINode, text_value: ?[]const u8) ?[]const u8 {
+pub fn persistText(ui_node: ?*UINode, text_value: ?[]const u8) ?[]const u8 {
     const value = text_value orelse return null;
     const uuid = hashKey(ui_node.?.uuid);
     const slice: []const u8 = value;
     if (text_string_table.get(uuid)) |entry| {
         const old_string = entry.persisted;
-        if (entry.len == slice.len and entry.ptr == slice.ptr) return entry.persisted;
+        if (entry.len == slice.len and entry.ptr == slice.ptr and std.mem.eql(u8, entry.persisted, slice)) return entry.persisted;
         const new_copy = Vapor.arena(.persist).dupe(u8, slice) catch unreachable;
         text_string_table.put(uuid, .{ .ptr = slice.ptr, .len = slice.len, .persisted = new_copy }) catch unreachable;
         defer Vapor.arena(.persist).free(old_string);
@@ -257,12 +257,13 @@ pub const ComponentBuilder = struct {
     _returns_close: bool = true,
     _level: ?u8 = null,
     _video: ?*const types.Video = null,
-    _font_family: []const u8 = "",
+    _font_family: ?[]const u8 = null,
     _value: ?*anyopaque = null,
     _elem_type: Vapor.ElementType,
     _flex_type: types.FlexType = .flex,
     _text: ?[]const u8 = null,
     _href: ?[]const u8 = null,
+    _src: ?[]const u8 = null,
     _alt: ?[]const u8 = null,
     _svg: []const u8 = "",
     _aria_label: ?[]const u8 = null,
@@ -287,7 +288,7 @@ pub const ComponentBuilder = struct {
     _flex_wrap: ?types.FlexWrap = null,
     _interactive: ?types.Interactive = null,
     _transition: ?types.Transition = null,
-    _direction: types.Direction = .row,
+    _direction: ?types.Direction = null,
     _list_style: ?types.ListStyle = null,
     _class: ?[]const u8 = null,
     _scroll: ?types.Scroll = null,
@@ -365,6 +366,7 @@ pub const ComponentBuilder = struct {
             .hover_style_fields = self._hover_style_fields,
             .inlineStyle = self._inlineStyle,
             .accessibility = self._accessibility,
+            .src = self._src,
         };
     }
 
@@ -396,6 +398,11 @@ pub const ComponentBuilder = struct {
     }
 
     pub fn Box() Self {
+        const ui_node = createNode(.{ .state_type = _state_type, .elem_type = .FlexBox });
+        return Self{ ._ui_node = ui_node, ._elem_type = .FlexBox, ._returns_close = true };
+    }
+
+    pub fn Row() Self {
         const ui_node = createNode(.{ .state_type = _state_type, .elem_type = .FlexBox });
         return Self{ ._ui_node = ui_node, ._elem_type = .FlexBox, ._returns_close = true };
     }
@@ -473,6 +480,32 @@ pub const ComponentBuilder = struct {
         // return Self{ ._ui_node = ui_node, ._elem_type = .FlexBox, ._flex_type = .center, ._returns_close = true };
     }
 
+    pub fn Button(cb: anytype, args: anytype) Self {
+        const elem_decl = ElementDecl{
+            .state_type = _state_type,
+            .elem_type = .CtxButton,
+        };
+
+        const ui_node = LifeCycle.open(elem_decl) orelse {
+            Vapor.printlnSrcErr("LifeCycle open could not allocate {any}\n", .{error.CouldNotAllocate}, @src());
+            unreachable;
+        };
+
+        const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), cb, args) catch |err| {
+            println("Error could not create closure {any}\n", .{err});
+            unreachable;
+        };
+
+        const callback_id = hashKey(ui_node.uuid);
+        // Store just the ErasedCallback instead of *Node
+        Vapor.erased_registry.put(callback_id, erased) catch |err| {
+            println("Registry error {any}\n", .{err});
+            unreachable;
+        };
+
+        return Self{ ._elem_type = .CtxButton, ._ui_node = ui_node, ._returns_close = true };
+    }
+
     pub fn Stack() Self {
         const ui_node = LifeCycle.open(.{ .state_type = _state_type, .elem_type = .FlexBox }) orelse {
             Vapor.printlnSrcErr("Could not add component to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
@@ -527,7 +560,23 @@ pub const ComponentBuilder = struct {
             Vapor.printlnSrcErr("Could not add component to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
             unreachable;
         };
-        return Self{ ._elem_type = .Spacer, ._ui_node = ui_node, ._size = .hw(.px(val), .percent(100)), ._returns_close = false };
+        return Self{ ._elem_type = .Spacer, ._ui_node = ui_node, ._size = .hw(.px(val), .expand), ._returns_close = false };
+    }
+
+    pub fn Divider(w: f32) Self {
+        const ui_node = LifeCycle.open(.{ .state_type = _state_type, .elem_type = .FlexBox, .can_have_children = false }) orelse {
+            Vapor.printlnSrcErr("Could not add component to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
+            unreachable;
+        };
+        return Self{ ._elem_type = .FlexBox, ._ui_node = ui_node, ._size = .hw(.expand, .px(w)), ._returns_close = false };
+    }
+
+    pub fn Iframe(src: ?[]const u8) Self {
+        const ui_node = LifeCycle.open(.{ .state_type = _state_type, .elem_type = .Iframe, .can_have_children = false }) orelse {
+            Vapor.printlnSrcErr("Could not add component to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
+            unreachable;
+        };
+        return Self{ ._elem_type = .Iframe, ._ui_node = ui_node, ._returns_close = false, ._href = src };
     }
 
     pub fn Number(value: anytype) Self {
@@ -564,8 +613,12 @@ pub const ComponentBuilder = struct {
         const self = Vapor.arena(.frame).create(Self) catch unreachable;
         const text = blk: switch (@typeInfo(@TypeOf(value))) {
             .pointer => |ptr_info| {
-                if (ptr_info.size == .one) break :blk value;
-                if (ptr_info.size == .slice) return {
+                if (ptr_info.size == .one) return {
+                    self.* = .{ ._elem_type = .Text, ._text = value, ._ui_node = ui_node, ._persisted_text = true, ._returns_close = false };
+                    return self;
+                };
+
+                if (ptr_info.size == .slice or ptr_info.size == .one) return {
                     self.* = .{ ._elem_type = .Text, ._text = value, ._ui_node = ui_node, ._persisted_text = true, ._returns_close = false };
                     return self;
                 };
@@ -593,8 +646,6 @@ pub const ComponentBuilder = struct {
 
         self.* = .{ ._elem_type = .Text, ._text = text, ._ui_node = ui_node, ._returns_close = false };
         return self;
-
-        // return Self{ ._elem_type = .Text, ._text = text, ._ui_node = ui_node, ._returns_close = false };
     }
 
     pub fn Html(text: []const u8) Self {
@@ -861,14 +912,86 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn onChange(self: *const Self, cb: fn (*Vapor.Event) void) Self {
-        var n = self.*;
-        const ui_node = self.getOrCreateNode(&n);
-        Vapor.attachEventCallback(ui_node, .input, cb) catch |err| {
+    pub fn onChange(self: *const Self, func: anytype, args: anytype) *const Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
+            unreachable;
+        };
+
+        Vapor.attachEventCallbackCtx(ui_node, .input, func, args) catch |err| {
             Vapor.println("ONCHANGE: Could not attach event callback {any}\n", .{err});
             unreachable;
         };
-        return n;
+        return self;
+    }
+
+    pub fn onMount(self: *const Self, callback: anytype, args: anytype) *const Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
+            unreachable;
+        };
+
+        const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
+            Vapor.println("Error could not create closure {any}\n", .{err});
+            return self;
+        };
+
+        var mount_node_key = hashKey(ui_node.uuid);
+        mount_node_key +%= hashKey(Vapor.on_mount_hash);
+
+        Vapor.erased_registry.put(mount_node_key, erased) catch |err| {
+            Vapor.printlnErr("Could Not add mount callback {any}", .{err});
+            return self;
+        };
+        ui_node.on_callbacks[0] = mount_node_key;
+
+        return self;
+    }
+
+    pub fn onUpdate(self: *const Self, callback: anytype, args: anytype) *const Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
+            unreachable;
+        };
+
+        const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
+            Vapor.println("Error could not create closure {any}\n", .{err});
+            return self;
+        };
+
+        var update_node_key = hashKey(ui_node.uuid);
+        update_node_key +%= hashKey(Vapor.on_update_hash);
+
+        Vapor.erased_registry.put(update_node_key, erased) catch |err| {
+            Vapor.printlnErr("Could Not add update callback {any}", .{err});
+            return self;
+        };
+        ui_node.on_callbacks[1] = update_node_key;
+
+        return self;
+    }
+
+    pub fn onDestroy(self: *const Self, callback: anytype, args: anytype) *const Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
+            unreachable;
+        };
+
+        const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
+            Vapor.println("Error could not create closure {any}\n", .{err});
+            return self;
+        };
+
+        var destroy_node_key = hashKey(ui_node.uuid);
+        destroy_node_key +%= hashKey(Vapor.on_destroy_hash);
+
+        Vapor.erased_registry.put(destroy_node_key, erased) catch |err| {
+            Vapor.printlnErr("Could Not add destroy callback {any}", .{err});
+            return self;
+        };
+        ui_node.on_callbacks[2] = destroy_node_key;
+
+        return self;
     }
 
     pub fn inlineStyle(self: *const Self, comptime fmt: []const u8, args: anytype) Self {
@@ -897,6 +1020,14 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
+    pub fn fontWeight(self: *const Self, value: u16) Self {
+        var n = self.*;
+        var v = n._visual orelse types.Visual{};
+        v.font_weight = value;
+        n._visual = v;
+        return n;
+    }
+
     pub fn weight(self: *const Self, value: u16) Self {
         var n = self.*;
         var v = n._visual orelse types.Visual{};
@@ -911,35 +1042,40 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn onHover(self: *const Self, cb: fn (*Vapor.Event) void) Self {
-        var n = self.*;
-        const ui_node = self.getOrCreateNode(&n);
-        Vapor.attachEventCallback(ui_node, .pointerenter, cb) catch |err| {
-            Vapor.println("ONHOVER: Could not attach event callback {any}\n", .{err});
+    pub fn onHover(self: *const Self, func: anytype, args: anytype) *const Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
             unreachable;
         };
-        return n;
+        Vapor.attachEventCtxCallback(ui_node, .pointerenter, func, args) catch |err| {
+            Vapor.println("OnEventCtx: Could not attach event callback {any}\n", .{err});
+            unreachable;
+        };
+        return self;
     }
 
-    pub fn onLeave(self: *const Self, cb: fn (*Vapor.Event) void) Self {
-        var n = self.*;
-        const ui_node = self.getOrCreateNode(&n);
-        Vapor.attachEventCallback(ui_node, .mouseleave, cb) catch |err| {
+    pub fn onLeave(self: *const Self, func: anytype, args: anytype) *const Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
+            unreachable;
+        };
+        Vapor.attachEventCtxCallback(ui_node, .mouseleave, func, args) catch |err| {
             Vapor.println("ONLEAVE: Could not attach event callback {any}\n", .{err});
             unreachable;
         };
-        return n;
+        return self;
     }
 
-    pub fn onEvent(self: *const Self, event: types.EventType, cb: fn (*Vapor.Event) void) Self {
-        var n = self.*;
-        const ui_node = self.getOrCreateNode(&n);
-        Vapor.attachEventCallback(ui_node, event, cb) catch |err| {
-            Vapor.println("ONEVENT: Could not attach event callback {any}\n", .{err});
+    pub fn onEvent(self: *const Self, event: types.EventType, func: anytype, args: anytype) Self {
+        const ui_node = self._ui_node orelse {
+            Vapor.printlnSrcErr("Node is null", .{}, @src());
             unreachable;
         };
-
-        return n;
+        Vapor.attachEventCtxCallback(ui_node, event, func, args) catch |err| {
+            Vapor.println("OnEventCtx: Could not attach event callback {any}\n", .{err});
+            unreachable;
+        };
+        return self.*;
     }
 
     pub fn onEventCtx(self: *const Self, event: types.EventType, func: anytype, args: anytype) *const Self {
@@ -1018,11 +1154,21 @@ pub const ComponentBuilder = struct {
         element.element_type = self._elem_type;
         element._node_ptr = ui_node;
         draggable_ptr.element = element;
-        Vapor.onEndCtx(struct {
-            pub fn attachDraggable(draggable: *Draggable) void {
-                draggable.addStartListener();
-            }
-        }.attachDraggable, .{draggable_ptr});
+        Vapor.attachEventCtxCallback(
+            ui_node,
+            .pointerdown,
+            Draggable.handlePointerDown,
+            .{draggable_ptr},
+        ) catch |err| {
+            Vapor.println("ONDRAGSTART: Could not attach event callback {any}\n", .{err});
+            unreachable;
+        };
+
+        // Vapor.onEndCtx(struct {
+        //     pub fn attachDraggable(draggable: *Draggable) void {
+        //         draggable.addStartListener();
+        //     }
+        // }.attachDraggable, .{draggable_ptr});
         return self;
     }
 
@@ -1135,6 +1281,14 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
+    pub fn fontColor(self: *const Self, color: ?Color) Self {
+        var n = self.*;
+        var v = n._visual orelse types.Visual{};
+        v.text_color = color;
+        n._visual = v;
+        return n;
+    }
+
     pub fn font(self: *const Self, font_size_val: u8, font_weight: ?u16, color: ?Color) Self {
         var n = self.*;
         var v = n._visual orelse types.Visual{};
@@ -1197,7 +1351,7 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn background(self: *const Self, value: types.Background) Self {
+    pub fn background(self: *const Self, value: types.Color) Self {
         var n = self.*;
         var v = n._visual orelse types.Visual{};
         v.background = value;
@@ -1205,12 +1359,13 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn outline(self: *const Self, value: types.Outline) Self {
-        var n = self.*;
-        var v = n._visual orelse types.Visual{};
-        v.outline = value;
-        n._visual = v;
-        return n;
+    pub fn outline(self: *const Self, value: types.Outline, color: ?Color) Self {
+        var new_self: Self = self.*;
+        var visual = new_self._visual orelse types.Visual{};
+        visual.outline = value;
+        visual.outline_color = color;
+        new_self._visual = visual;
+        return new_self;
     }
 
     pub fn shadow(self: *const Self, value: ?types.Shadow) Self {
@@ -1293,7 +1448,7 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
-    pub fn hoverBackground(self: *const Self, color: types.Background) Self {
+    pub fn hoverBackground(self: *const Self, color: types.Color) Self {
         var n = self.*;
         var i = n._interactive orelse types.Interactive{};
         var h = i.hover orelse types.Visual{};
@@ -1363,25 +1518,25 @@ pub const ComponentBuilder = struct {
     pub fn pl(self: *const Self, value: u8) Self {
         var n = self.*;
         if (n._padding == null) n._padding = .{};
-        n._padding.?.left = value;
+        n._padding.?._left = value;
         return n;
     }
     pub fn pr(self: *const Self, value: u8) Self {
         var n = self.*;
         if (n._padding == null) n._padding = .{};
-        n._padding.?.right = value;
+        n._padding.?._right = value;
         return n;
     }
     pub fn pt(self: *const Self, value: u8) Self {
         var n = self.*;
         if (n._padding == null) n._padding = .{};
-        n._padding.?.top = value;
+        n._padding.?._top = value;
         return n;
     }
     pub fn pb(self: *const Self, value: u8) Self {
         var n = self.*;
         if (n._padding == null) n._padding = .{};
-        n._padding.?.bottom = value;
+        n._padding.?._bottom = value;
         return n;
     }
     pub fn mt(self: *const Self, value: i16) Self {
@@ -1405,6 +1560,20 @@ pub const ComponentBuilder = struct {
     pub fn mr(self: *const Self, value: i16) Self {
         var n = self.*;
         if (n._margin == null) n._margin = .{};
+        n._margin.?.right = value;
+        return n;
+    }
+    pub fn my(self: *const Self, value: i16) Self {
+        var n = self.*;
+        if (n._margin == null) n._margin = .{};
+        n._margin.?.top = value;
+        n._margin.?.bottom = value;
+        return n;
+    }
+    pub fn mx(self: *const Self, value: i16) Self {
+        var n = self.*;
+        if (n._margin == null) n._margin = .{};
+        n._margin.?.left = value;
         n._margin.?.right = value;
         return n;
     }
@@ -1557,6 +1726,14 @@ pub const ComponentBuilder = struct {
         return n;
     }
 
+    pub fn colorMix(self: *const Self, value: types.ColorMix) Self {
+        var n = self.*;
+        var v = n._visual orelse types.Visual{};
+        v.color_mix = value;
+        n._visual = v;
+        return n;
+    }
+
     pub fn duration(self: *const Self, value: u32) Self {
         var n = self.*;
         n._transition = .{ .duration = value };
@@ -1580,42 +1757,72 @@ pub const ComponentBuilder = struct {
 
     pub fn style(self: *const Self, style_ptr: *const Vapor.Style) Self {
         var n = self.*;
-        var elem_decl = Vapor.ElementDecl{
+        n._style = style_ptr;
+        return n;
+
+        // var n = self.*;
+        // var elem_decl = Vapor.ElementDecl{
+        //     .state_type = _state_type,
+        //     .elem_type = self._elem_type,
+        //     .text = self._text,
+        //     .style = style_ptr,
+        //     .href = self._href,
+        //     .svg = self._svg,
+        //     .alt = self._alt,
+        //     .aria_label = self._aria_label,
+        //     .animation_enter = self._animation_enter,
+        //     .animation_exit = self._animation_exit,
+        //     .name = self._name,
+        //     .inlineStyle = self._inlineStyle,
+        // };
+        // if (self._flex_type == .center) {
+        //     var ms = style_ptr.*;
+        //     ms.layout = .center;
+        //     elem_decl.style = &ms;
+        // } else if (self._flex_type == .stack) {
+        //     var ms = style_ptr.*;
+        //     ms.direction = .column;
+        //     elem_decl.style = &ms;
+        // }
+        // if (self._id) |_id| {
+        //     var ms = style_ptr.*;
+        //     ms.id = _id;
+        //     elem_decl.style = &ms;
+        // }
+        // if (self._class) |_class| {
+        //     var ms = style_ptr.*;
+        //     ms.style_id = _class;
+        //     elem_decl.style = &ms;
+        // }
+        // n._used_style = true;
+        // _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
+        // return n;
+    }
+
+    pub fn child(self: *const Self, item: anytype) void {
+        if (@TypeOf(item) == Builder(.pure)) {
+            var added_node: Builder(.pure) = item;
+            added_node._ui_node = item._ui_node;
+            added_node.end();
+        }
+
+        var mutable_style = mergeStyles(self.getStyleMergeParams(true, false));
+        const elem_decl = Vapor.ElementDecl{
             .state_type = _state_type,
             .elem_type = self._elem_type,
             .text = self._text,
-            .style = style_ptr,
+            .style = &mutable_style,
             .href = self._href,
             .svg = self._svg,
-            .alt = self._alt,
             .aria_label = self._aria_label,
             .animation_enter = self._animation_enter,
             .animation_exit = self._animation_exit,
-            .name = self._name,
             .inlineStyle = self._inlineStyle,
+            .accessibility = self._accessibility,
         };
-        if (self._flex_type == .center) {
-            var ms = style_ptr.*;
-            ms.layout = .center;
-            elem_decl.style = &ms;
-        } else if (self._flex_type == .stack) {
-            var ms = style_ptr.*;
-            ms.direction = .column;
-            elem_decl.style = &ms;
-        }
-        if (self._id) |_id| {
-            var ms = style_ptr.*;
-            ms.id = _id;
-            elem_decl.style = &ms;
-        }
-        if (self._class) |_class| {
-            var ms = style_ptr.*;
-            ms.style_id = _class;
-            elem_decl.style = &ms;
-        }
-        n._used_style = true;
-        _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
-        return n;
+
+        Vapor.LifeCycle.configure(elem_decl);
+        return Vapor.LifeCycle.close({});
     }
 
     pub fn items(self: *const Self, nodes: anytype) void {
@@ -1691,13 +1898,24 @@ pub const ComponentBuilder = struct {
 // Backward-compatible aliases
 // ============================================================
 
+const InertBuilder = @import("Inert.zig").InertBuilder;
 pub fn Builder(comptime state_type: types.StateType) type {
     _ = state_type;
     return ComponentBuilder;
+    // switch (state_type) {
+    //     .inert => {
+    //         return InertBuilder;
+    //     },
+    //     .pure => {
+    //         return ComponentBuilder;
+    //     },
+    //     else => {
+    //         return ComponentBuilder;
+    //     },
+    // }
 }
 
 pub fn BuilderClose(comptime state_type: types.StateType) type {
     _ = state_type;
     return ComponentBuilder;
 }
-

@@ -1,15 +1,224 @@
 const types = @import("lib/types.zig");
+const std = @import("std");
 pub const lib = @import("lib/Vapor.zig");
-pub const IconTokens = @import("user_config").IconTokens;
+pub const IconTokens = @import("config").IconTokens;
 pub const init = lib.init;
 pub const Wasm = lib.Wasm;
+pub const Arena = lib.Arena;
+pub const IconType = *const IconTokens;
+pub const Bounds = lib.Bounds;
 const Rune = @import("lib/Rune.zig");
 const TransitionState = @import("lib/Transition.zig").TransitionState;
 pub const Binded = @import("lib/Element.zig").Element;
 pub const Draggable = @import("lib/Draggable.zig").Draggable;
 pub const KeyStone = @import("lib/keystone/KeyStone.zig");
 pub const utils = @import("lib/utils.zig");
-pub const TrackingAllocator = @import("lib/TrackingAllocator.zig");
+
+// vapor.zig
+pub const ArrayArena = @import("lib/Array.zig").Array;
+
+pub const persist = struct {
+    pub fn dupe(value: []const u8) []const u8 {
+        const allocator = lib.arena(.persist);
+        const buf = allocator.dupe(u8, value) catch |err| {
+            println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+            return "";
+        };
+        return buf;
+    }
+    pub fn fmt(comptime _fmt: []const u8, args: anytype) []const u8 {
+        const allocator = lib.arena(.persist);
+        const buf = std.fmt.allocPrint(allocator, _fmt, args) catch |err| {
+            println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+            return "";
+        };
+        return buf;
+    }
+    pub fn array(comptime T: type) std.array_list.Managed(T) {
+        var array_list: std.array_list.Managed(T) = undefined;
+        const allocator = lib.arena(.persist);
+        array_list = std.array_list.Managed(T).init(allocator);
+        return array_list;
+    }
+
+    pub fn arena() std.mem.Allocator {
+        return lib.arena(.persist);
+    }
+
+    pub fn Array(comptime T: type) ArrayArena(T) {
+        return ArrayArena(T).init(.persist);
+    }
+
+    // Join slices: &.{"a", "b", "c"} with ", " -> "a, b, c"
+    pub fn join(parts: []const []const u8, separator: []const u8) []const u8 {
+        const allocator = lib.arena(.persist);
+        return std.mem.join(allocator, separator, parts) catch unreachable;
+    }
+
+    // Split string into slice of slices
+    pub fn split(str: []const u8, delimiter: []const u8) std.mem.SplitIterator([]const u8, .sequence) {
+        const allocator = lib.arena(.persist);
+        var buffer = allocator.alloc(u8, str.len) catch unreachable;
+        @memcpy(buffer[0..], str);
+        return std.mem.splitSequence(u8, buffer[0..], delimiter) catch unreachable;
+    }
+
+    // Repeat: repeat("ha", 3) -> "hahaha"
+    pub fn repeat(str: []const u8, count: usize) []const u8 {
+        const allocator = lib.arena(.persist);
+        var list = allocator.alloc([]const u8, count) catch unreachable;
+        @memset(list, str);
+        return std.mem.join(allocator, "", &list) catch unreachable;
+    }
+
+    pub fn toLowerCase(str: []const u8) []const u8 {
+        return utils.toLowerCase(str, .persist);
+    }
+
+    pub fn toUpperCase(str: []const u8) []const u8 {
+        return utils.toUpperCase(str, .persist);
+    }
+
+    pub fn firstLetterToUpper(str: []const u8) []const u8 {
+        return utils.firstLetterToUpper(str, .persist);
+    }
+
+    pub fn contains(str: []const u8, needle: []const u8) bool {
+        return utils.contains(str, needle);
+    }
+
+    pub fn startsWith(str: []const u8, prefix: []const u8) bool {
+        return utils.startsWith(str, prefix);
+    }
+};
+
+pub const view = struct {
+    pub fn dupe(value: []const u8) []const u8 {
+        const allocator = lib.arena(.view);
+        const buf = allocator.dupe(u8, value) catch |err| {
+            println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+            return "";
+        };
+        return buf;
+    }
+    pub fn fmt(comptime _fmtln: []const u8, args: anytype) []const u8 {
+        const allocator = lib.arena(.view);
+        const buf = std.fmt.allocPrint(allocator, _fmtln, args) catch |err| {
+            println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+            return "";
+        };
+        return buf;
+    }
+
+    pub fn array(comptime T: type) std.array_list.Managed(T) {
+        var array_list: std.array_list.Managed(T) = undefined;
+        const allocator = lib.arena(.view);
+        array_list = std.array_list.Managed(T).init(allocator);
+        return array_list;
+    }
+
+    pub fn Array(comptime T: type) ArrayArena(T) {
+        return ArrayArena(T).init(.view);
+    }
+
+    pub fn arena() std.mem.Allocator {
+        return lib.arena(.view);
+    }
+
+    pub fn toLowerCase(str: []const u8) []const u8 {
+        return utils.toLowerCase(str, .view);
+    }
+
+    pub fn toUpperCase(str: []const u8) []const u8 {
+        return utils.toUpperCase(str, .view);
+    }
+
+    pub fn firstLetterToUpper(str: []const u8) []const u8 {
+        return utils.firstLetterToUpper(str, .view);
+    }
+
+    pub fn contains(str: []const u8, needle: []const u8) bool {
+        return utils.contains(str, needle);
+    }
+
+    pub fn startsWith(str: []const u8, prefix: []const u8) bool {
+        return utils.startsWith(str, prefix);
+    }
+};
+
+pub const frame = struct {
+    pub fn dupe(value: []const u8) []const u8 {
+        const allocator = lib.arena(.frame);
+        const buf = allocator.dupe(u8, value) catch |err| {
+            println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+            return "";
+        };
+        return buf;
+    }
+    pub fn fmt(comptime _fmtln: []const u8, args: anytype) []const u8 {
+        const allocator = lib.arena(.frame);
+        const buf = std.fmt.allocPrint(allocator, _fmtln, args) catch |err| {
+            println("Formatting, Error Could not format argument alloc Error details: {any}\n", .{err});
+            return "";
+        };
+        return buf;
+    }
+
+    pub fn array(comptime T: type) std.array_list.Managed(T) {
+        var array_list: std.array_list.Managed(T) = undefined;
+        const allocator = lib.arena(.frame);
+        array_list = std.array_list.Managed(T).init(allocator);
+        return array_list;
+    }
+
+    pub fn Array(comptime T: type) ArrayArena(T) {
+        return ArrayArena(T).init(.frame);
+    }
+
+    pub fn arena() std.mem.Allocator {
+        return lib.arena(.frame);
+    }
+
+    // Join slices: &.{"a", "b", "c"} with ", " -> "a, b, c"
+    pub fn join(parts: []const []const u8, separator: []const u8) []const u8 {
+        const allocator = lib.arena(.frame);
+        return std.mem.join(allocator, separator, parts) catch unreachable;
+    }
+
+    // Split string into slice of slices
+    pub fn split(str: []const u8, delimiter: []const u8) std.mem.SplitIterator([]const u8, .sequence) {
+        return std.mem.splitSequence(u8, str, delimiter) catch unreachable;
+    }
+
+    // Repeat: repeat("ha", 3) -> "hahaha"
+    pub fn repeat(str: []const u8, count: usize) []const u8 {
+        const allocator = lib.arena(.frame);
+        var list = allocator.alloc([]const u8, count) catch unreachable;
+        @memset(list, str);
+        return std.mem.join(allocator, "", &list) catch unreachable;
+    }
+
+    pub fn toLowerCase(str: []const u8) []const u8 {
+        return utils.toLowerCase(str, .frame);
+    }
+
+    pub fn toUpperCase(str: []const u8) []const u8 {
+        return utils.toUpperCase(str, .frame);
+    }
+
+    pub fn firstLetterToUpper(str: []const u8) []const u8 {
+        return utils.firstLetterToUpper(str, .frame);
+    }
+
+    pub fn contains(str: []const u8, needle: []const u8) bool {
+        return utils.contains(str, needle);
+    }
+
+    pub fn startsWith(str: []const u8, prefix: []const u8) bool {
+        return utils.startsWith(str, prefix);
+    }
+};
+
 // pub const renderCycle = @import("lib/Vapor.zig").renderCycle;
 pub const LifeCycle = @import("lib/Vapor.zig").LifeCycle;
 pub const ElementType = @import("lib/Vapor.zig").ElementType;
@@ -29,7 +238,7 @@ pub const isDesktop = utils.isDesktop;
 pub const cycle = lib.cycle;
 pub const Clipboard = lib.Clipboard;
 pub const registerTimeout = lib.registerTimeout;
-pub const registerCtxTimeout = lib.registerCtxTimeout;
+pub const timeout = lib.timeout;
 pub const Event = lib.Event;
 pub const fmtln = lib.fmtln;
 pub const fmtArena = lib.fmtArena;
@@ -123,11 +332,16 @@ pub const TextAreaBuilder = @import("lib/TextField.zig").BuilderClose;
 pub const registerLayout = lib.registerLayout;
 pub const PageFn = lib.PageFn;
 pub const Box = PureComponent.Box;
+pub const Row = PureComponent.Row;
 pub const Text = PureComponentClose.Text;
 pub const Link = PureComponent.Link;
 pub const Image = PureComponentClose.Image;
 pub const Spacer = PureComponentClose.Spacer;
-pub const Button = ButtonBuilder(.pure).Button;
+pub const Divider = PureComponentClose.Divider;
+pub const Iframe = PureComponentClose.Iframe;
+pub const load = lib.getStore;
+pub const store = lib.store;
+// pub const Button = ButtonBuilder(.pure).Button;
 pub const List = PureComponent.List;
 pub const ListItem = PureComponent.ListItem;
 pub const Graphic = PureComponentClose.Graphic;
@@ -137,7 +351,7 @@ pub const Icon = PureComponentClose.Icon;
 pub const Stack = PureComponent.Stack;
 pub const Center = PureComponent.Center;
 pub const CtxButton = ButtonBuilder(.pure).CtxButton;
-pub const ButtonCtx = ButtonBuilder(.pure).CtxButton;
+pub const Button =  PureComponent.Button;
 pub const TextFmt = PureComponentClose.TextFmt;
 pub const TextArea = @import("lib/TextField.zig").BuilderClose(.pure).TextArea;
 pub const Heading = PureComponentClose.Heading;
@@ -158,3 +372,4 @@ pub const TableHead = PureComponent.TableHead;
 pub const Anchor = PureComponent.Anchor;
 pub const Code = PureComponentClose.Code;
 pub const Number = PureComponentClose.Number;
+pub const Inert = @import("lib/Inert.zig").InertBuilder;

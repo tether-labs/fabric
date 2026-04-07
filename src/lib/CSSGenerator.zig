@@ -244,6 +244,13 @@ pub fn getCSS(gen: *Generator) []const u8 {
     return gen.buffer[0..gen.end];
 }
 
+pub fn getAnimations(gen: *Generator) []const u8 {
+    _ = gen;
+    const ptr = StyleWriter.getAnimationsPtr() orelse return "";
+    const len = StyleWriter.getAnimationsLen();
+    return ptr[0..len];
+}
+
 /// Uses SIMD to check if a needle exists within a haystack.
 pub fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;

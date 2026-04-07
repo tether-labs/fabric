@@ -129,13 +129,13 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
         .sizing => sizingTypeToCSS(value.data.sizing, writer) catch {},
         .font_style => fontStyleToCSS(value.data.font_style, writer) catch {},
         .padding => {
-            writer.writeU8Num(value.data.padding.top) catch {};
+            writer.writeU8Num(value.data.padding._top) catch {};
             writer.write("px ") catch {};
-            writer.writeU8Num(value.data.padding.right) catch {};
+            writer.writeU8Num(value.data.padding._right) catch {};
             writer.write("px ") catch {};
-            writer.writeU8Num(value.data.padding.bottom) catch {};
+            writer.writeU8Num(value.data.padding._bottom) catch {};
             writer.write("px ") catch {};
-            writer.writeU8Num(value.data.padding.left) catch {};
+            writer.writeU8Num(value.data.padding._left) catch {};
             writer.write("px") catch {};
         },
         .cursor => cursorToCSS(value.data.cursor, writer) catch {},
@@ -147,22 +147,22 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
                 switch (t) {
                     .scale => {
                         writer.write("scale(") catch {};
-                        writer.writeF16(transform.scale_size) catch {};
+                        writer.writeF32(transform.scale_size) catch {};
                         writer.writeByte(')') catch {};
                     },
                     .scaleY => {
                         writer.write("scaleY(") catch {};
-                        writer.writeF16(transform.scale_size) catch {};
+                        writer.writeF32(transform.scale_size) catch {};
                         writer.writeByte(')') catch {};
                     },
                     .scaleX => {
                         writer.write("scaleX(") catch {};
-                        writer.writeF16(transform.scale_size) catch {};
+                        writer.writeF32(transform.scale_size) catch {};
                         writer.writeByte(')') catch {};
                     },
                     .translateX => {
                         writer.write("translateX(") catch {};
-                        writer.writeF16(transform.trans_x) catch {};
+                        writer.writeF32(transform.trans_x) catch {};
                         if (transform.size_type == .percent) {
                             writer.write("%)") catch {};
                         } else if (transform.size_type == .px) {
@@ -171,7 +171,7 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
                     },
                     .translateY => {
                         writer.write("translateY(") catch {};
-                        writer.writeF16(transform.trans_y) catch {};
+                        writer.writeF32(transform.trans_y) catch {};
                         if (transform.size_type == .percent) {
                             writer.write("%)") catch {};
                         } else if (transform.size_type == .px) {
@@ -250,13 +250,13 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
         },
         .border => {
             const border = value.data.border;
-            writer.writeU8Num(border.top) catch {};
+            writer.writeU8Num(border._top) catch {};
             writer.write("px ") catch {};
-            writer.writeU8Num(border.right) catch {};
+            writer.writeU8Num(border._right) catch {};
             writer.write("px ") catch {};
-            writer.writeU8Num(border.bottom) catch {};
+            writer.writeU8Num(border._bottom) catch {};
             writer.write("px ") catch {};
-            writer.writeU8Num(border.left) catch {};
+            writer.writeU8Num(border._left) catch {};
             writer.write("px") catch {};
         },
         .border_radius => {
@@ -841,11 +841,11 @@ fn cursorToCSS(cursor_type: Cursor, writer: anytype) !void {
 
 fn caretToCSS(caret: Types.PackedCaret, writer: anytype) !void {
     colorToCSS(caret.color, writer) catch {};
-    // writer.write(";\n") catch {};
+    writer.write(";\n") catch {};
 
-    // writer.write("caret-shape: ") catch {};
-    // try writeMappedString(Types.CaretType, caret.type, &caret_map, writer);
-    // writer.write(";\n") catch {};
+    writer.write("caret-shape: ") catch {};
+    try writeMappedString(Types.CaretType, caret.type, &caret_map, writer);
+    writer.write(";\n") catch {};
 }
 
 fn resizeToCSS(resize: Types.Resize, writer: anytype) !void {
@@ -868,45 +868,6 @@ fn whiteSpaceToCSS(white_space: WhiteSpace, writer: anytype) !void {
 // Function to convert FlexType enum to a CSS string
 fn flexTypeToCSS(flex_type: FlexType, writer: anytype) !void {
     try writeMappedString(FlexType, flex_type, &flex_type_map, writer);
-}
-
-pub fn checkSize(size: *const Types.Size, writer: writer_t) void {
-    if (size.width.type != .none and size.width.type != .grow) {
-        if (size.width.type == .min_max_vp) {
-            writer.write("max-width:") catch {};
-            writer.writeF32(size.width.size.min_max_vp.max) catch {};
-            writer.write("vw;\n") catch {};
-            writer.write("min-width:") catch {};
-            writer.writeF32(size.width.size.min_max_vp.max) catch {};
-            writer.write("vw;\n") catch {};
-        } else if (size.width.type == .elastic_percent) {
-            writer.write("max-width:") catch {};
-            writer.writeF32(size.width.size.min_max_vp.max) catch {};
-            writer.write("%;\n") catch {};
-            writer.write("min-width:") catch {};
-            writer.writeF32(size.width.size.min_max_vp.max) catch {};
-            writer.write("%;\n") catch {};
-        } else {
-            writePropValue("width", .{ .tag = .sizing, .data = .{ .sizing = size.width } }, writer);
-        }
-    } else if (size.width.type == .grow) {
-        writer.write("flex: 1;\n") catch {};
-    }
-
-    if (size.height.type != .none and size.height.type != .grow) {
-        if (size.height.type == .min_max_vp) {
-            writer.write("min-height:") catch {};
-            writer.writeF32(size.height.size.min_max_vp.min) catch {};
-            writer.write("vh;\n") catch {};
-            writer.write("max-height:") catch {};
-            writer.writeF32(size.height.size.min_max_vp.max) catch {};
-            writer.write("vh;\n") catch {};
-        } else {
-            writePropValue("height", .{ .tag = .sizing, .data = .{ .sizing = size.height } }, writer);
-        }
-    } else if (size.height.type == .grow) {
-        writer.write("flex: 1;\n") catch {};
-    }
 }
 
 pub fn writeStyleField(field: Types.StyleFields, visual: *const Types.PackedVisual, writer: writer_t) void {
@@ -963,22 +924,6 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         writePropValue("background-color", .{ .tag = .color, .data = .{ .color = visual.background } }, writer);
     } else if (visual.background_layers.len > 0) {
         writePropValue("background", .{ .tag = .background_layers, .data = .{ .background_layers = visual.background_layers } }, writer);
-    }
-
-    if (visual.color_mix.color_prop != .default) {
-        switch (visual.color_mix.color_prop) {
-            .text_color => writer.write("color: ") catch {},
-            .background_color => writer.write("background-color: ") catch {},
-            .border_color => writer.write("border-color: ") catch {},
-            .fill_color => writer.write("fill: ") catch {},
-            .stroke_color => writer.write("stroke: ") catch {},
-            .default => unreachable,
-        }
-        writer.write("color-mix(in srgb, ") catch {};
-        colorToCSS(visual.color_mix.color, writer) catch {};
-        writer.write(", black ") catch {};
-        writer.writeF32(visual.color_mix.percentage * 100) catch {};
-        writer.write("%);\n") catch {};
     }
 
     if (visual.packed_layers.items_ptr > 0) {
@@ -1170,7 +1115,7 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         }
     }
 
-    if (visual.animation > 0) {
+    if (visual.animation != StringTable.null_handle) {
         if (Vapor.string_table.get(visual.animation)) |name| {
             const animation = Vapor.animations.get(name) orelse {
                 Vapor.printlnSrcErr("Animations stringtable not found, please remember to run .build() on the animation within init", .{}, @src());
@@ -1180,6 +1125,22 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
             generateAnimation(&animation, writer);
             writer.write(";\n") catch {};
         }
+    }
+
+    if (visual.color_mix.color_prop != .default) {
+        switch (visual.color_mix.color_prop) {
+            .text_color => writer.write("color: ") catch {},
+            .background_color => writer.write("background-color: ") catch {},
+            .border_color => writer.write("border-color: ") catch {},
+            .fill_color => writer.write("fill: ") catch {},
+            .stroke_color => writer.write("stroke: ") catch {},
+            .default => unreachable,
+        }
+        writer.write("color-mix(in srgb, ") catch {};
+        colorToCSS(visual.color_mix.color, writer) catch {};
+        writer.write(", black ") catch {};
+        writer.writeF32(visual.color_mix.percentage * 100) catch {};
+        writer.write("%);\n") catch {};
     }
 }
 
@@ -1222,15 +1183,28 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
     }
 
     // Alignment
-    if (layout_ptr.child_gap > 0) {
+    if (layout_ptr.spacing > 0) {
         writer.write("gap:") catch {};
-        writer.writeU8Num(layout_ptr.child_gap) catch {};
+        writer.writeU8Num(layout_ptr.spacing) catch {};
         writer.write("px;\n") catch {};
     }
 
     const size = layout_ptr.size;
     if (size.width.type != .none and size.width.type != .grow) {
-        if (size.width.type == .min_max_vp) {
+        if (size.width.type == .clamp_px) {
+            writer.write("max-width:") catch {};
+            writer.writeF32(size.width.size.max) catch {};
+            writer.write("px;\n") catch {};
+
+            writer.write("min-width:") catch {};
+            writer.writeF32(size.width.size.min) catch {};
+            writer.write("px;\n") catch {};
+
+            writer.write("width: fit-content;\n") catch {};
+            // writer.write("flex-grow: 1; flex-basis: ") catch {};
+            // writer.writeF32(size.width.size.preferred) catch {};
+            // writer.write("px;\n") catch {};
+        } else if (size.width.type == .min_max_vp) {
             writer.write("max-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
             writer.write("vw;\n") catch {};
@@ -1241,11 +1215,11 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("max-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
             writer.write("px;\n") catch {};
-        } else if (size.height.type == .min_percent) {
+        } else if (size.width.type == .min_percent) {
             writer.write("min-width:") catch {};
             writer.writeF32(size.width.size.min) catch {};
             writer.write("%;\n") catch {};
-        } else if (size.height.type == .min_px) {} else if (size.width.type == .min_px) {
+        } else if (size.width.type == .min_px) {} else if (size.width.type == .min_px) {
             writer.write("min-width:") catch {};
             writer.writeF32(size.width.size.min) catch {};
             writer.write("px;\n") catch {};
@@ -2031,11 +2005,11 @@ export fn getPolygonsLen() usize {
     return polygons_str.len;
 }
 
-var animations_str: []const u8 = "";
+pub var animations_str: []const u8 = "";
 pub export fn getAnimationsPtr() ?[*]const u8 {
     // Reset writer cursor
     var writer: Writer = undefined;
-    var buffer: [8192]u8 = undefined;
+    var buffer: [8192 * 4]u8 = undefined;
     writer.init(&buffer);
 
     // Generate the CSS

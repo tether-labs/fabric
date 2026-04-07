@@ -119,7 +119,8 @@ fn configureLayouts(ui_node: *UINode, style: *const Vapor.Style) u32 {
     if (style.placement) |placement| packed_layout.placement = placement;
 
     if (style.size) |size| packed_layout.size = size;
-    if (style.child_gap) |child_gap| packed_layout.child_gap = child_gap;
+    if (style.child_gap) |child_gap| packed_layout.spacing = child_gap;
+    if (style.spacing) |spacing| packed_layout.spacing = spacing;
     packed_layout.direction = style.direction;
     if (style.flex_wrap) |flex_wrap| packed_layout.flex_wrap = flex_wrap;
     if (style.scroll) |scroll| packed_layout.scroll = scroll;
@@ -285,9 +286,9 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
         checkVisual(&visual, &packed_visual, ui_node.type, &hash_v);
         // Inherited color must run after checkVisual as top not use it in the checkVisual for the actual node, it is meant for only the hover effect
         if (visual.background) |background| {
-            if (background.color) |color| {
-                inherited_color = color;
-            }
+            // if (background.color) |color| {
+            inherited_color = background;
+            // }
         }
     }
 
@@ -295,10 +296,6 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
 
     hash_v = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_visual));
     // hash_v = hashPacked(types.PackedVisual, &packed_visual);
-
-    if (style.font_family) |font_family| {
-        hash_v +%= hashKey(font_family);
-    }
 
     if (style.font_family) |font_family| {
         packed_visual.font_family_handle = Vapor.string_table.intern(font_family) catch StringTable.null_handle;
@@ -495,6 +492,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
     if (interactive.hover) |hover| {
         var packed_hover: types.PackedVisual = .{};
         checkVisual(&hover, &packed_hover, ui_node.type, &hash_i);
+
         packed_interactive.has_hover = true;
         packed_interactive.hover = packed_hover;
 
@@ -537,6 +535,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
                 packed_interactive.hover.animation_name_handle = Vapor.string_table.intern(animation_name) catch StringTable.null_handle;
             }
         }
+
         if (hover.transform) |transform| {
             var packed_transform: types.PackedTransform = undefined;
             packed_transform.set(&transform);
@@ -550,6 +549,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
         ui_node.packed_field_ptrs.?.interactive_ptr = packed_interactive_ptr;
         return hash_i;
     }
+
     ui_node.packed_field_ptrs.?.interactive_ptr = getOrPutAndUpdateHash(
         hash_i,
         types.PackedInteractive,
@@ -818,12 +818,6 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
         current_open.finger_print +%= hashKey(text);
     }
 
-    if (elem_decl.hover_style_fields) |fields| {
-        const hover_style_fields = Vapor.arena(.frame).create([]const types.StyleFields) catch unreachable;
-        hover_style_fields.* = fields;
-        current_open.hover_style_fields = hover_style_fields;
-    }
-
     if (elem_decl.text_field_params) |params| {
         const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch unreachable;
         text_field_params.* = params;
@@ -840,11 +834,90 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
                 }
                 current_open.finger_print +%= hashKey(value);
                 current_open.finger_print +%= hashKey(default_value);
-                // current_open.finger_print +%= hashKey(string.default orelse "");
                 current_open.finger_print +%= @intFromEnum(string.type);
             },
-            else => {},
+            .email => |email| {
+                var value: []const u8 = "";
+                if (email.value_ptr) |ptr| {
+                    value = ptr[0..email.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (email.default_ptr) |ptr| {
+                    default_value = ptr[0..email.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(email.type);
+            },
+            .telephone => |telephone| {
+                var value: []const u8 = "";
+                if (telephone.value_ptr) |ptr| {
+                    value = ptr[0..telephone.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (telephone.default_ptr) |ptr| {
+                    default_value = ptr[0..telephone.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(telephone.type);
+            },
+            .file => |file| {
+                var value: []const u8 = "";
+                if (file.value_ptr) |ptr| {
+                    value = ptr[0..file.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (file.default_ptr) |ptr| {
+                    default_value = ptr[0..file.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(file.type);
+            },
+            .date => |date| {
+                var value: []const u8 = "";
+                if (date.value_ptr) |ptr| {
+                    value = ptr[0..date.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (date.default_ptr) |ptr| {
+                    default_value = ptr[0..date.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(date.type);
+            },
+            .password => |password| {
+                var value: []const u8 = "";
+                if (password.value_ptr) |ptr| {
+                    value = ptr[0..password.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (password.default_ptr) |ptr| {
+                    default_value = ptr[0..password.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(password.type);
+            },
+            .int => |number| {
+                current_open.finger_print +%= @as(u32, @intCast(number.value orelse 0));
+                current_open.finger_print +%= @as(u32, @intCast(number.default orelse 0));
+                current_open.finger_print +%= @intFromEnum(number.type);
+            },
+            .float => |number| {
+                current_open.finger_print +%= @as(u32, @intFromFloat(number.value orelse 0));
+                current_open.finger_print +%= @as(u32, @intFromFloat(number.default orelse 0));
+                current_open.finger_print +%= @intFromEnum(number.type);
+            },
         }
+    }
+
+    if (elem_decl.hover_style_fields) |fields| {
+        const hover_style_fields = Vapor.arena(.frame).create([]const types.StyleFields) catch unreachable;
+        hover_style_fields.* = fields;
+        current_open.hover_style_fields = hover_style_fields;
     }
 
     if (elem_decl.accessibility) |accessibility| {
@@ -856,6 +929,7 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
     }
 
     current_open.href = elem_decl.href;
+    current_open.src = elem_decl.src;
     current_open.type = elem_decl.elem_type;
     current_open.name = elem_decl.name;
 
@@ -1012,26 +1086,12 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
     return current_open;
 }
 
-pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisual, _: types.ElementType, hash_v: *u32) void {
+pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisual, _: types.ElementType, _: *u32) void {
     // Refactored to use the packColor helper
     if (visual.background) |background| {
-        if (background.layer_count > 0) {
-            var packed_layers: []types.PackedLayer = undefined;
-            packed_layers = Vapor.arena(.frame).alloc(types.PackedLayer, background.layer_count) catch unreachable;
-            for (background.layers, 0..) |layer, i| {
-                if (layer == null) continue;
-                packed_layers[i] = createPackedLayer(layer.?, hash_v);
-            }
-
-            const count = Vapor.packed_layers.count() + 1;
-            Vapor.packed_layers.put(count, packed_layers) catch unreachable;
-            packed_visual.background_layers.items_ptr = count;
-            packed_visual.background_layers.len = @intCast(packed_layers.len);
-        } else if (background.color) |color| {
-            var background_color = packet_visual.background;
-            packColor(color, &background_color);
-            packet_visual.background = background_color;
-        }
+        var background_color = packet_visual.background;
+        packColor(background, &background_color);
+        packet_visual.background = background_color;
     }
 
     if (visual.color_mix) |color_mix| {

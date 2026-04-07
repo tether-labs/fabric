@@ -24,6 +24,9 @@ pub const TransitionProperty = enum(u8) {
     d,
     cy,
     padding,
+    background,
+    border,
+    color,
 };
 
 pub const TransitionState = packed union {

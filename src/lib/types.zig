@@ -6,7 +6,6 @@ pub const TransitionProperty = @import("Transition.zig").TransitionProperty;
 pub const PackedTransition = @import("Transition.zig").PackedTransition;
 const ColorTheme = @import("constants/Color.zig");
 const Animation = @import("Animation.zig");
-// pub const ElementType = @import("user_config").ElementType;
 pub const ThemeTokens = @import("theme").ThemeTokens;
 pub const color_theme: ColorTheme = ColorTheme{};
 const isMobile = @import("utils.zig").isMobile;
@@ -77,7 +76,7 @@ pub const ElementType = enum(u8) {
     TableHead,
     Anchor,
     Spacer,
-    Tap,
+    Iframe,
 };
 
 pub const AnchorPlacement = enum(u8) {
@@ -325,8 +324,11 @@ pub const Sizing = packed struct {
         }
     }
 
-    pub fn clamp(min: f32, preferred: f32, max: f32) Sizing {
-        return .{ .type = .clamp_px, .size = .{ .min = min, .max = max, .preferred = preferred } };
+    pub fn clamp(min: f32, preferred: f32, max: f32, unit: SizingUnit) Sizing {
+        switch (unit) {
+            .px => return .{ .type = .clamp_px, .size = .{ .min = min, .max = max, .preferred = preferred } },
+            .percent => return .{ .type = .clamp_percent, .size = .{ .min = min, .max = max, .preferred = preferred } },
+        }
     }
 
     //
@@ -342,6 +344,11 @@ pub const Sizing = packed struct {
     // pub fn eql(self: Sizing, other: Sizing) bool {
     //     return self.type == other.type and self.size.eql(other.size);
     // }
+};
+
+const SizingUnit = enum(u8) {
+    px,
+    percent,
 };
 
 pub const PosType = enum(u8) {
@@ -844,38 +851,42 @@ pub const Color = union(enum) {
         } };
     }
 
+    // pub fn darken(color_prop: ColorProp, color: ?Color, percentage: f32) ColorMix {
+    //     return .{ .color_prop = color_prop, .color = color, .percentage = percentage };
+    // }
+
     // Function to darken a hex color string by a percentage and return Color struct
-    pub fn darken(_: Color, percentage: f32) Color {
-        if (percentage < 0.0 or percentage > 100.0) {
-            @panic("Percentage must be between 0 and 100");
-        }
-        //
-        // if (color == .Thematic) return Color{ .Thematic = .{
-        //     .token = color.Thematic.token,
-        //     .alpha = alpha,
-        // } };
-        // const r = color.Literal.r;
-        // const g = color.Literal.g;
-        // const b = color.Literal.b;
-        // return .{ .Literal = .{
-        //     .r = r,
-        //     .g = g,
-        //     .b = b,
-        //     .a = alpha,
-        // } };
-        //
-        // const rgba_arr = Vapor.hexToRgba(hex_str);
-        // const factor = 1.0 - (percentage / 100.0);
-        //
-        // return .{
-        //     .Literal = .{
-        //         .r = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[0])) * factor),
-        //         .g = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[1])) * factor),
-        //         .b = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[2])) * factor),
-        //         .a = rgba_arr[3], // Keep alpha unchanged
-        //     },
-        // };
-    }
+    // pub fn darken(_: Color, percentage: f32) Color {
+    //     if (percentage < 0.0 or percentage > 100.0) {
+    //         @panic("Percentage must be between 0 and 100");
+    //     }
+    //     //
+    //     // if (color == .Thematic) return Color{ .Thematic = .{
+    //     //     .token = color.Thematic.token,
+    //     //     .alpha = alpha,
+    //     // } };
+    //     // const r = color.Literal.r;
+    //     // const g = color.Literal.g;
+    //     // const b = color.Literal.b;
+    //     // return .{ .Literal = .{
+    //     //     .r = r,
+    //     //     .g = g,
+    //     //     .b = b,
+    //     //     .a = alpha,
+    //     // } };
+    //     //
+    //     // const rgba_arr = Vapor.hexToRgba(hex_str);
+    //     // const factor = 1.0 - (percentage / 100.0);
+    //     //
+    //     // return .{
+    //     //     .Literal = .{
+    //     //         .r = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[0])) * factor),
+    //     //         .g = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[1])) * factor),
+    //     //         .b = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[2])) * factor),
+    //     //         .a = rgba_arr[3], // Keep alpha unchanged
+    //     //     },
+    //     // };
+    // }
 
     // // Function to lighten a hex color string by a percentage and return Color struct
     pub fn lighten(hex_str: []const u8, percentage: f32) Color {
@@ -985,99 +996,107 @@ pub const Color = union(enum) {
 };
 
 pub const Padding = packed struct {
-    top: u8 = 0,
-    bottom: u8 = 0,
-    left: u8 = 0,
-    right: u8 = 0,
+    _top: u8 = 0,
+    _bottom: u8 = 0,
+    _left: u8 = 0,
+    _right: u8 = 0,
+
     pub fn all(size: u8) Padding {
         return Padding{
-            .top = size,
-            .bottom = size,
-            .left = size,
-            .right = size,
-        };
-    }
-    pub fn tblr(top: u8, bottom: u8, left: u8, right: u8) Padding {
-        return Padding{
-            .top = top,
-            .bottom = bottom,
-            .left = left,
-            .right = right,
+            ._top = size,
+            ._bottom = size,
+            ._left = size,
+            ._right = size,
         };
     }
 
-    pub fn tb(top: u8, bottom: u8) Padding {
+    pub fn top(size: u8) Padding {
+        return Padding{ ._top = size };
+    }
+
+    pub fn bottom(size: u8) Padding {
+        return Padding{ ._bottom = size };
+    }
+
+    pub fn left(size: u8) Padding {
+        return Padding{ ._left = size };
+    }
+
+    pub fn right(size: u8) Padding {
+        return Padding{ ._right = size };
+    }
+
+    pub fn tblr(t: u8, b: u8, l: u8, r: u8) Padding {
         return Padding{
-            .top = top,
-            .bottom = bottom,
-            .left = 0,
-            .right = 0,
+            ._top = t,
+            ._bottom = b,
+            ._left = l,
+            ._right = r,
         };
     }
-    pub fn lr(left: u8, right: u8) Padding {
+
+    pub fn tb(t: u8, b: u8) Padding {
         return Padding{
-            .top = 0,
-            .bottom = 0,
-            .left = left,
-            .right = right,
+            ._top = t,
+            ._bottom = b,
         };
     }
+
+    pub fn lr(l: u8, r: u8) Padding {
+        return Padding{
+            ._left = l,
+            ._right = r,
+        };
+    }
+
     pub fn horizontal(size: u8) Padding {
         return Padding{
-            .top = 0,
-            .bottom = 0,
-            .left = size,
-            .right = size,
+            ._left = size,
+            ._right = size,
         };
     }
+
     pub fn vertical(size: u8) Padding {
         return Padding{
-            .top = size,
-            .bottom = size,
-            .left = 0,
-            .right = 0,
+            ._top = size,
+            ._bottom = size,
         };
     }
 
     pub fn xy(x: u8, y: u8) Padding {
         return Padding{
-            .top = y,
-            .bottom = y,
-            .left = x,
-            .right = x,
+            ._top = y,
+            ._bottom = y,
+            ._left = x,
+            ._right = x,
         };
     }
 
-    pub fn t(size: u8) Padding {
+    pub fn top_left(t: u8, l: u8) Padding {
         return Padding{
-            .top = size,
-            .bottom = 0,
-            .left = 0,
-            .right = 0,
+            ._top = t,
+            ._left = l,
         };
     }
-    pub fn l(size: u8) Padding {
+
+    pub fn top_right(t: u8, r: u8) Padding {
         return Padding{
-            .top = 0,
-            .bottom = 0,
-            .left = size,
-            .right = 0,
+            ._top = t,
+            ._right = r,
         };
     }
-    pub fn r(size: u8) Padding {
+
+    pub fn bottom_left(b: u8, l: u8) Padding {
         return Padding{
-            .top = 0,
-            .bottom = 0,
-            .left = 0,
-            .right = size,
+            ._bottom = b,
+            ._left = l,
         };
     }
-    pub fn b(size: u8) Padding {
+
+    pub fn bottom_right(b: u8, r: u8) Padding {
         return Padding{
-            .top = 0,
-            .bottom = size,
-            .left = 0,
-            .right = 0,
+            ._bottom = b,
+            ._right = r,
         };
     }
 };
@@ -1146,6 +1165,15 @@ pub const Margin = packed struct {
         return Margin{
             .top = size,
             .bottom = size,
+        };
+    }
+
+    pub fn xy(x: u8, y: u8) Margin {
+        return Margin{
+            .top = y,
+            .bottom = y,
+            .left = x,
+            .right = x,
         };
     }
 
@@ -1226,6 +1254,7 @@ pub const BorderRadius = packed struct {
             .top_right = right,
         };
     }
+
     pub fn top_bottom(top_radius: u16, bottom_radius: u16) BorderRadius {
         return BorderRadius{
             .top_left = top_radius,
@@ -1340,87 +1369,96 @@ pub const Shadow = struct {
     }
 };
 pub const Border = packed struct {
-    top: u8 = 0,
-    bottom: u8 = 0,
-    left: u8 = 0,
-    right: u8 = 0,
-    pub const solid = Border{ .top = 1, .bottom = 1, .left = 1, .right = 1 };
-    pub const none = Border{ .top = 0, .bottom = 0, .left = 0, .right = 0 };
+    _top: u8 = 0,
+    _bottom: u8 = 0,
+    _left: u8 = 0,
+    _right: u8 = 0,
+    pub const solid = Border{ ._top = 1, ._bottom = 1, ._left = 1, ._right = 1 };
+    pub const none = Border{ ._top = 0, ._bottom = 0, ._left = 0, ._right = 0 };
     pub fn default() Border {
         return Border{
-            .top = 0,
-            .bottom = 0,
-            .left = 0,
-            .right = 0,
+            ._top = 0,
+            ._bottom = 0,
+            ._left = 0,
+            ._right = 0,
         };
     }
     pub fn all(thickness: u8) Border {
         return Border{
-            .top = thickness,
-            .bottom = thickness,
-            .left = thickness,
-            .right = thickness,
+            ._top = thickness,
+            ._bottom = thickness,
+            ._left = thickness,
+            ._right = thickness,
         };
     }
-    pub fn tblr(top: u8, bottom: u8, left: u8, right: u8) Border {
+    pub fn tblr(top_thickness: u8, bottom_thickness: u8, left_thickness: u8, right_thickness: u8) Border {
         return Border{
-            .top = top,
-            .bottom = bottom,
-            .left = left,
-            .right = right,
+            ._top = top_thickness,
+            ._bottom = bottom_thickness,
+            ._left = left_thickness,
+            ._right = right_thickness,
         };
     }
 
     pub fn tb(thickness: u8) Border {
         return Border{
-            .top = thickness,
-            .bottom = thickness,
-            .left = 0,
-            .right = 0,
+            ._top = thickness,
+            ._bottom = thickness,
+            ._left = 0,
+            ._right = 0,
         };
     }
     pub fn lr(thickness: u8) Border {
         return Border{
-            .top = 0,
-            .bottom = 0,
-            .left = thickness,
-            .right = thickness,
+            ._top = 0,
+            ._bottom = 0,
+            ._left = thickness,
+            ._right = thickness,
         };
     }
 
-    pub fn b(thickness: u8) Border {
+    pub fn bottom(thickness: u8) Border {
         return Border{
-            .top = 0,
-            .bottom = thickness,
-            .left = 0,
-            .right = 0,
+            ._top = 0,
+            ._bottom = thickness,
+            ._left = 0,
+            ._right = 0,
         };
     }
 
-    pub fn t(thickness: u8) Border {
+    pub fn top(thickness: u8) Border {
         return Border{
-            .top = thickness,
-            .bottom = 0,
-            .left = 0,
-            .right = 0,
+            ._top = thickness,
+            ._bottom = 0,
+            ._left = 0,
+            ._right = 0,
         };
     }
 
-    pub fn l(thickness: u8) Border {
+    pub fn left(thickness: u8) Border {
         return Border{
-            .top = 0,
-            .bottom = 0,
-            .left = thickness,
-            .right = 0,
+            ._top = 0,
+            ._bottom = 0,
+            ._left = thickness,
+            ._right = 0,
+        };
+    }
+
+    pub fn right(thickness: u8) Border {
+        return Border{
+            ._top = 0,
+            ._bottom = 0,
+            ._left = 0,
+            ._right = thickness,
         };
     }
 
     pub fn r(thickness: u8) Border {
         return Border{
-            .top = 0,
-            .bottom = 0,
-            .left = 0,
-            .right = thickness,
+            ._top = 0,
+            ._bottom = 0,
+            ._left = 0,
+            ._right = thickness,
         };
     }
 };
@@ -1575,11 +1613,15 @@ pub const Transform = struct {
         down,
         left,
         right,
+        up_and_left,
+        up_and_right,
+        down_and_left,
+        down_and_right,
     };
     size_type: SizeType = .none,
-    scale_size: f16 = 1,
-    trans_x: f16 = 0,
-    trans_y: f16 = 0,
+    scale_size: f32 = 1,
+    trans_x: f32 = 0,
+    trans_y: f32 = 0,
     deg: f16 = 0,
     x: f16 = 0,
     y: f16 = 0,
@@ -1591,7 +1633,7 @@ pub const Transform = struct {
         return .{ .scale_size = 1.04, .type = &.{.scale}, .size_type = .scale };
     }
 
-    pub fn translate(x: f16, y: f16, unit: SizeType) Transform {
+    pub fn translate(x: f32, y: f32, unit: SizeType) Transform {
         return .{ .trans_x = x, .trans_y = y, .type = &.{ .translateX, .translateY }, .size_type = unit };
     }
 
@@ -1599,11 +1641,11 @@ pub const Transform = struct {
         return .{ .scale_size = value, .type = &.{.scale}, .size_type = .scale };
     }
 
-    pub fn up(dist: f16) Transform {
+    pub fn up(dist: f32) Transform {
         return .{ .trans_y = -dist, .type = &.{.translateY}, .size_type = .px };
     }
 
-    pub fn direction_scale(dir: Transform.Direction, dist: f16, scale_size: f16) Transform {
+    pub fn direction_scale(dir: Transform.Direction, dist: f32, scale_size: f32) Transform {
         switch (dir) {
             .up => return .{ .trans_y = -dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
             .down => return .{ .trans_y = dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
@@ -1612,31 +1654,35 @@ pub const Transform = struct {
         }
     }
 
-    pub fn distAndScale(dir: Transform.Direction, dist: f16, scale_size: f16) Transform {
+    pub fn distAndScale(dir: Transform.Direction, dist: f32, scale_size: f32) Transform {
         switch (dir) {
             .up => return .{ .trans_y = -dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
             .down => return .{ .trans_y = dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
             .left => return .{ .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateX, .scale }, .size_type = .px },
             .right => return .{ .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateX, .scale }, .size_type = .px },
+            .up_and_left => return .{ .trans_y = -dist, .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
+            .up_and_right => return .{ .trans_y = -dist, .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
+            .down_and_left => return .{ .trans_y = dist, .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
+            .down_and_right => return .{ .trans_y = dist, .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
         }
     }
 
-    pub fn down(dist: f16) Transform {
+    pub fn down(dist: f32) Transform {
         return .{ .trans_y = dist, .type = &.{.translateY}, .size_type = .px };
     }
 
-    pub fn left(dist: f16) Transform {
+    pub fn left(dist: f32) Transform {
         return .{ .trans_x = -dist, .type = &.{.translateX}, .size_type = .px };
     }
-    pub fn right(dist: f16) Transform {
+    pub fn right(dist: f32) Transform {
         return .{ .trans_x = dist, .type = &.{.translateX}, .size_type = .px };
     }
 
-    pub fn left_percent(percent: f16) Transform {
+    pub fn left_percent(percent: f32) Transform {
         return .{ .trans_x = percent, .type = &.{.translateX}, .size_type = .percent };
     }
 
-    pub fn top_percent(percent: f16) Transform {
+    pub fn top_percent(percent: f32) Transform {
         return .{ .percent = percent, .type = &.{.translateY}, .size_type = .percent };
     }
 
@@ -2044,6 +2090,7 @@ pub const Layout = packed struct {
     pub const bottom_center = Layout{ .x = .center, .y = .end };
     pub const top_right = Layout{ .x = .end, .y = .start };
     pub const top_left = Layout{ .x = .start, .y = .start };
+    pub const left_top = Layout{ .x = .start, .y = .start };
     pub const bottom_right = Layout{ .x = .end, .y = .end };
     pub const bottom_left = Layout{ .x = .start, .y = .end };
     pub const x_even = Layout{ .x = .even, .y = .start };
@@ -2119,35 +2166,35 @@ pub const BorderGrouped = struct {
 
     // Side-specific shortcuts
     pub fn bottom(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .b(thickness), .color = color };
+        return .{ .thickness = .bottom(thickness), .color = color };
     }
 
     pub fn top(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .t(thickness), .color = color };
+        return .{ .thickness = .top(thickness), .color = color };
     }
 
     pub fn left(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .l(thickness), .color = color };
+        return .{ .thickness = .left(thickness), .color = color };
     }
 
     pub fn right(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .r(thickness), .color = color };
+        return .{ .thickness = .right(thickness), .color = color };
     }
 
     pub fn l(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .l(thickness), .color = color };
+        return .{ .thickness = .left(thickness), .color = color };
     }
 
     pub fn r(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .l(thickness), .color = color };
+        return .{ .thickness = .right(thickness), .color = color };
     }
 
     pub fn b(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .b(thickness), .color = color };
+        return .{ .thickness = .bottom(thickness), .color = color };
     }
 
     pub fn t(thickness: u8, color: Color) BorderGrouped {
-        return .{ .thickness = .t(thickness), .color = color };
+        return .{ .thickness = .top(thickness), .color = color };
     }
 
     pub fn tb(color: Color) BorderGrouped {
@@ -2249,7 +2296,7 @@ pub const Visual = struct {
 
     animation: ?[]const u8 = null,
 
-    background: ?Background = null,
+    background: ?Color = null,
 
     layer: ?BackgroundLayer = null,
     layers: ?[]const BackgroundLayer = null,
@@ -2350,7 +2397,7 @@ pub const Visual = struct {
     }
 
     // Background shortcuts
-    pub fn bg(background: Background) Visual {
+    pub fn bg(background: Color) Visual {
         return .{ .background = background };
     }
 
@@ -2380,6 +2427,7 @@ pub const Interactive = struct {
     hover: ?Visual = null,
     focus: ?Visual = null,
     focus_within: ?Visual = null,
+    cursor: ?Cursor = null,
 
     pub fn hover_scale() Interactive {
         return .{
@@ -2429,6 +2477,7 @@ pub const PackedLayout = packed struct {
     direction: Direction = .row,
     size: Size = .{},
     child_gap: u8 = 0,
+    spacing: u8 = 0,
     scroll: Scroll = .{},
     flex_wrap: FlexWrap = .none,
     text_align: Layout = .{},
@@ -2517,9 +2566,9 @@ pub const SizeType = enum(u8) {
 pub const PackedTransform = packed struct {
     size_type: SizeType = .none,
     type: TransformType = .none,
-    scale_size: f16 = 1,
-    trans_x: f16 = 0,
-    trans_y: f16 = 0,
+    scale_size: f32 = 1,
+    trans_x: f32 = 0,
+    trans_y: f32 = 0,
     deg: f16 = 0,
     x: f16 = 0,
     y: f16 = 0,
@@ -2698,6 +2747,7 @@ pub const Style = struct {
 
     /// Gap between child elements in pixels
     child_gap: ?u8 = null,
+    spacing: ?u8 = null,
 
     /// Font family name (e.g., "Arial", "Helvetica", "Montserrat")
     font_family: ?[]const u8 = null,
@@ -2833,6 +2883,7 @@ pub const Style = struct {
         if (override.transform_origin != null) result.transform_origin = override.transform_origin;
         if (override.backface_visibility != null) result.backface_visibility = override.backface_visibility;
         if (override.child_gap != null) result.child_gap = override.child_gap;
+        if (override.spacing != null) result.spacing = override.spacing;
 
         return result;
     }
@@ -2867,6 +2918,7 @@ pub const Style = struct {
         if (target.transform_origin != null) self.transform_origin = target.transform_origin;
         if (target.backface_visibility != null) self.backface_visibility = target.backface_visibility;
         if (target.child_gap != null) self.child_gap = target.child_gap;
+        if (target.spacing != null) self.spacing = target.spacing;
     }
 };
 
@@ -3064,6 +3116,7 @@ pub const StateType = enum {
     removed,
     added,
     moved,
+    inert,
 };
 
 pub const ButtonType = enum {
@@ -3098,6 +3151,7 @@ pub const ElementDeclaration = struct {
     inlineStyle: ?[]const u8 = null,
     accessibility: ?Accessibility = null,
     can_have_children: bool = true,
+    src: ?[]const u8 = null,
 };
 
 pub const Tooltip = struct {

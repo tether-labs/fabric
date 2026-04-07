@@ -61,7 +61,7 @@ pub const Element = struct {
     scroll_height: f32 = 0,
     scroll_width: f32 = 0,
     scroll_left: u32 = 0,
-    scroll_top: u32 = 0,
+    scroll_top: f32 = 0,
 
     // Element properties
     id: ?[]const u8 = null,
@@ -121,14 +121,14 @@ pub const Element = struct {
         self.scroll_top = value;
     }
 
-    pub fn scrollHeight(self: *Element) u32 {
+    pub fn scrollHeight(self: *Element) f32 {
         if (!Vapor.isWasi) return 0;
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return 0;
         };
         const attribute: []const u8 = "scrollHeight";
-        return Wasm.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len);
+        return @floatFromInt(Wasm.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len));
     }
 
     pub fn scrollWidth(self: *Element) u32 {
@@ -141,7 +141,7 @@ pub const Element = struct {
         return Wasm.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len);
     }
 
-    pub fn scrollToTop(self: *Element, value: u32) void {
+    pub fn scrollToTop(self: *Element, value: f32) void {
         if (!Vapor.isWasi) return;
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
@@ -152,10 +152,21 @@ pub const Element = struct {
         self.scroll_top = value;
     }
 
-    pub fn scrollTop(self: *Element) u32 {
+    pub fn setAttribute(self: *Element, key: []const u8, value: []const u8) void {
+        const id = self._get_id() orelse {
+            Vapor.printlnSrc("Id is null", .{}, @src());
+            return;
+        };
+        if (isWasi) {
+            Vapor.Wasm.setAttributeWasm(id.ptr, id.len, key.ptr, key.len, value.ptr, value.len);
+        }
+        return;
+    }
+
+    pub fn scrollTop(self: *Element) f32 {
         if (!Vapor.isWasi) return 0;
         const attribute: []const u8 = "scrollTop";
-        self.scroll_top = self.getAttributeNumber(attribute);
+        self.scroll_top = @floatFromInt(self.getAttributeNumber(attribute));
         return self.scroll_top;
     }
 
@@ -197,12 +208,14 @@ pub const Element = struct {
         return Wasm.getAttributeWasmNumber(id.ptr, id.len, attribute.ptr, attribute.len);
     }
 
-    pub fn setCursorPosition(self: *Element, value: u32) void {
+    pub fn setCursorPosition(self: *Element, value: usize) void {
         const id = self._get_id() orelse {
             Vapor.printlnSrc("Id is null", .{}, @src());
             return;
         };
-        Wasm.setCursorPositionWasm(id.ptr, id.len, value);
+        if (isWasi) {
+            Wasm.setCursorPositionWasm(id.ptr, id.len, value);
+        }
     }
 
     pub fn selection(self: *Element) ?Selection {
@@ -248,7 +261,10 @@ pub const Element = struct {
             Vapor.printlnSrc("Node is null", .{}, @src());
             unreachable;
         };
-        return Vapor.attachEventCtxCallback(ui_node, event_type, cb, args) catch unreachable;
+        return Vapor.attachEventCtxCallback(ui_node, event_type, cb, args) catch |err| {
+            std.log.err("Event Callback Error: {any}\n", .{err});
+            unreachable;
+        };
     }
 
     // pub fn getElementUnderMouse(self: *Element) ?Element {
@@ -657,7 +673,7 @@ pub fn mutateDomElement(
     id_len: usize,
     attribute: [*]const u8,
     attribute_len: usize,
-    value: u32,
+    value: f32,
 ) void {
     if (isWasi) {
         Wasm.mutateDomElementWasm(id_ptr, id_len, attribute, attribute_len, value);

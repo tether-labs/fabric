@@ -134,7 +134,7 @@ pub extern fn mutateDomElementWasm(
     id_len: usize,
     attribute: [*]const u8,
     attribute_len: usize,
-    value: u32,
+    value: f32,
 ) void;
 
 /// Retrieves numeric attributes (e.g., width, height).
@@ -1399,3 +1399,9 @@ pub extern fn removeAttributeWasm(
     attribute_ptr: [*]const u8,
     attribute_len: usize,
 ) void;
+
+pub extern fn runPlaygroundWasm(url_ptr: [*]const u8, url_len: usize) void;
+
+pub extern fn startViewTransitionWasm(callback_id: u32) void;
+
+pub extern fn windowOpenWasm(url_ptr: [*]const u8, url_len: usize) void;

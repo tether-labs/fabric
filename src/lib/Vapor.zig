@@ -71,6 +71,9 @@ pub const on_hover_hash = "onHover";
 pub const on_submit_hash = "onSubmit";
 pub const on_focus_hash = "onFocus";
 pub const on_blur_hash = "onBlur";
+pub const on_mount_hash = "onMount";
+pub const on_update_hash = "onUpdate";
+pub const on_destroy_hash = "onDestroy";
 
 const EventType = types.EventType;
 const Active = types.Active;
@@ -283,6 +286,8 @@ pub const ArenaType = enum {
     scratch,
     request,
 };
+
+pub const Arena = ArenaType;
 
 pub fn arena(arena_type: ArenaType) std.mem.Allocator {
     if (generating) return frame_arena.persistentAllocator();
@@ -953,11 +958,6 @@ pub fn runOnAnimationFrame(callback: anytype, args: anytype) void {
     }
 }
 
-export fn callAnimationFrameCallback(onid: u32) void {
-    const node: *Node = @ptrFromInt(onid);
-    @call(.auto, node.data.runFn, .{&node.data});
-}
-
 export fn callAnimationFrameCallbacks() void {
     for (animation_frame_callbacks.items) |item| {
         @call(.auto, item.data.runFn, .{&item.data});
@@ -1241,7 +1241,8 @@ pub fn attachEventCtxCallback(ui_node: *UINode, event_type: EventType, cb: anyty
     if (ui_node.event_handlers) |handlers| {
         for (handlers.handlers.items) |handler| {
             if (handler.event_type == event_type) {
-                return error.EventCtxCallbackError;
+                std.log.err("Event: {any}", .{event_type});
+                return error.EventAlreadyAttached;
             }
         }
     }
@@ -1334,8 +1335,8 @@ pub inline fn removeElementEventListener(
     return null;
 }
 
-pub fn addGlobalListener(event_type: EventType, cb: fn (*Event) void) ?usize {
-    if (!isWasi) return;
+pub fn addGlobalListener(event_type: EventType, cb: fn (*Event) void) ?u32 {
+    if (!isWasi) return null;
 
     const erased = ErasedEventCallback.make(arena(.persist), event_type, cb, .{}) catch unreachable;
 
@@ -1550,20 +1551,7 @@ pub fn generateHtml(route: []const u8, dir: []const u8) void {
     // events_callbacks.clearRetainingCapacity();
     nodes_with_events.clearRetainingCapacity();
     UIContext.indexes.clearRetainingCapacity();
-    // on_end_funcs.clearRetainingCapacity();
 
-    // var ctx_itr = ctx_callback_registry.iterator();
-    // while (ctx_itr.next()) |entry| {
-    //     _ = entry.value_ptr.*;
-    // }
-    // ctx_callback_registry.clearRetainingCapacity();
-
-    // for (mounted_ctx_funcs.items) |node| {
-    //     node.data.deinitFn(node);
-    // }
-    // mounted_ctx_funcs.clearRetainingCapacity();
-
-    // Get the old context for current route
     const old_route_op = router.searchRoute(route) orelse blk: {
         printlnSrcErr("No Route found", .{}, @src());
         break :blk router.searchRoute("/root/error") orelse {
@@ -1619,9 +1607,11 @@ pub fn generateHtml(route: []const u8, dir: []const u8) void {
     // This calls the render tree, with render_page as the root function call
     // First it traverses the layouts calling them in order, and then it calls the render_page
     callNestedLayouts(); // 4.5ms
+
     changed_route = false;
     generator.writeAllStyles();
     const css = generator.getCSS();
+    const frames = generator.getAnimations();
     const style_path = std.fmt.allocPrint(allocator_global, "{s}/style.css", .{dir}) catch |err| {
         std.debug.print("Error: {any}\n", .{err});
         unreachable;
@@ -1631,6 +1621,7 @@ pub fn generateHtml(route: []const u8, dir: []const u8) void {
     var generated_css = std.fs.cwd().createFile(style_path, .{}) catch unreachable;
     defer generated_css.close();
     generated_css.writeAll(css) catch unreachable;
+    generated_css.writeAll(frames) catch unreachable;
 
     HtmlGenerator.generate(new_ctx.root.?, &writer, style_path);
 }
@@ -1948,6 +1939,7 @@ pub var ui_node_layout_info = packed struct {
     hooks_offset: u32,
     style_hash_offset: u32,
     accessibility_offset: u32,
+    on_callbacks_offset: u32,
 }{
     .ui_node_size = @sizeOf(UINode),
 
@@ -1967,6 +1959,7 @@ pub var ui_node_layout_info = packed struct {
     .hooks_offset = @offsetOf(UINode, "hooks"),
     .style_hash_offset = @offsetOf(UINode, "style_hash"),
     .accessibility_offset = @offsetOf(UINode, "accessibility"),
+    .on_callbacks_offset = @offsetOf(UINode, "on_callbacks"),
 };
 
 // Export memory layout information for JavaScript to correctly read the struct
@@ -2315,7 +2308,6 @@ pub fn print(
 ) void {
     if (isWasi and build_options.enable_debug) {
         const buf = std.fmt.allocPrint(allocator_global, fmt, args) catch return;
-        std.debug.print(buf, .{});
         _ = Wasm.consoleLogWasm(buf.ptr, buf.len);
         allocator_global.free(buf);
     } else if (!isWasi) {
@@ -2340,45 +2332,61 @@ pub fn println(
 /// cb: callback function
 /// args: arguments to pass to the callback function
 /// delay: delay in ms
-pub fn loopInterval(name: []const u8, delay_ms: u32, cb: anytype, args: anytype) void {
-    const Args = @TypeOf(args);
-    const Closure = struct {
-        arguments: Args,
-        run_node: Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-        //
-        fn runFn(action: *Action) void {
-            const run_node: *Node = @fieldParentPtr("data", action);
-            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
-            @call(.auto, cb, closure.arguments);
-        }
-        //
-        fn deinitFn(node: *Node) void {
-            const closure: *@This() = @alignCast(@fieldParentPtr("run_node", node));
-            allocator_global.destroy(closure);
-        }
-    };
-
-    const closure = allocator_global.create(Closure) catch |err| {
-        println("Error could not create closure {any}\n ", .{err});
+pub fn loopInterval(name: []const u8, delay_ms: u32, callback: anytype, args: anytype) void {
+    const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
+        println("Error could not create closure {any}\n", .{err});
         unreachable;
     };
-    closure.* = .{
-        .arguments = args,
-    };
 
-    const callback_id = hashKey(name);
-    ctx_callback_registry.put(callback_id, &closure.run_node) catch |err| {
-        println("Button Function Registry {any}\n", .{err});
+    const callback_id: u32 = hashKey(name);
+    // Store just the ErasedCallback instead of *Node
+    Vapor.erased_registry.put(callback_id, erased) catch |err| {
+        println("Registry error {any}\n", .{err});
+        unreachable;
     };
 
     if (isWasi) {
         Wasm.createInterval(callback_id, delay_ms);
-    } else {
-        return;
     }
+
+    // const Args = @TypeOf(args);
+    // const Closure = struct {
+    //     arguments: Args,
+    //     run_node: Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+    //     //
+    //     fn runFn(action: *Action) void {
+    //         const run_node: *Node = @fieldParentPtr("data", action);
+    //         const closure: *@This() = @alignCast(@fieldParentPtr("run_node", run_node));
+    //         @call(.auto, cb, closure.arguments);
+    //     }
+    //     //
+    //     fn deinitFn(node: *Node) void {
+    //         const closure: *@This() = @alignCast(@fieldParentPtr("run_node", node));
+    //         allocator_global.destroy(closure);
+    //     }
+    // };
+    //
+    // const closure = allocator_global.create(Closure) catch |err| {
+    //     println("Error could not create closure {any}\n ", .{err});
+    //     unreachable;
+    // };
+    // closure.* = .{
+    //     .arguments = args,
+    // };
+    //
+    // const callback_id = hashKey(name);
+    // ctx_callback_registry.put(callback_id, &closure.run_node) catch |err| {
+    //     println("Button Function Registry {any}\n", .{err});
+    // };
+    //
+    // if (isWasi) {
+    //     Wasm.createInterval(callback_id, delay_ms);
+    // } else {
+    //     return;
+    // }
 }
 
-pub fn registerCtxTimeout(callback_name: []const u8, ms: u32, cb: anytype, args: anytype) void {
+pub fn timeout(callback_name: []const u8, ms: u32, cb: anytype, args: anytype) void {
     const Args = @TypeOf(args);
     const Closure = struct {
         arguments: Args,
@@ -3201,6 +3209,24 @@ pub const ErasedCallback = struct {
         };
     }
 };
+
+pub fn startViewTransition(callback: anytype, args: anytype) void {
+    const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
+        println("Error could not create closure {any}\n", .{err});
+        unreachable;
+    };
+
+    const callback_id: u32 = hashKey("view-transition");
+    // Store just the ErasedCallback instead of *Node
+    Vapor.erased_registry.put(callback_id, erased) catch |err| {
+        println("Registry error {any}\n", .{err});
+        unreachable;
+    };
+
+    if (isWasi) {
+        Wasm.startViewTransitionWasm(callback_id);
+    }
+}
 
 // The JS/WASM side calls back with the id:
 export fn invokeErasedCallback(id: u32) void {

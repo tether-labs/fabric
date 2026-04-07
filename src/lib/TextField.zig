@@ -13,10 +13,20 @@ const hashKey = utils.hashKey;
 const DynamicObject = @import("Dynamic.zig");
 const Accessibility = @import("Accessibility.zig").Accessibility;
 
+const Ctx = struct {
+    bind_ptr: ?*anyopaque,
+    bind_fn: ?*const fn (*anyopaque, *Vapor.Event) void,
+    user_cb: ?Vapor.ErasedEventCallback,
+};
+
 pub fn BuilderClose(comptime state_type: types.StateType) type {
     return struct {
         const Self = @This();
         const _state_type: types.StateType = state_type;
+
+        _bind_ptr: ?*anyopaque = null,
+        _bind_update_fn: ?*const fn (*anyopaque, *Vapor.Event) void = null,
+        _on_change_cb: ?Vapor.ErasedEventCallback = null,
 
         _font_family: []const u8 = "",
         _value: ?*anyopaque = null,
@@ -447,11 +457,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 return self.*;
             }
 
-            const ui_node = self._ui_node orelse {
-                Vapor.printlnSrcErr("Node is null must ref() first, before setting onChange", .{}, @src());
-                unreachable;
-            };
-
             switch (self._text_field_type) {
                 .password => {
                     if (@TypeOf(value.*) != []const u8) {
@@ -465,14 +470,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
                     new_self._text_field_params.?.password.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.password.value_len = value.*.len;
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
-                            value_type.* = evt.text();
-                        }
-                    }.updateText, .{value}) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
                 },
                 .email => {
                     if (@TypeOf(value.*) != []const u8) {
@@ -486,14 +483,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
                     new_self._text_field_params.?.email.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.email.value_len = value.*.len;
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
-                            value_type.* = evt.text();
-                        }
-                    }.updateText, .{value}) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
                 },
                 .telephone => {
                     if (@TypeOf(value.*) != []const u8) {
@@ -507,14 +496,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
                     new_self._text_field_params.?.telephone.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.telephone.value_len = value.*.len;
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
-                            value_type.* = evt.text();
-                        }
-                    }.updateText, .{value}) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
                 },
                 .string => {
                     if (@TypeOf(value.*) == []u8) {
@@ -532,14 +513,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
                     new_self._text_field_params.?.string.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.string.value_len = value.*.len;
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
-                            value_type.* = evt.text();
-                        }
-                    }.updateText, .{value}) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
                 },
                 .int => {
                     if (@TypeOf(value.*) != i32) {
@@ -548,18 +521,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                     }
 
                     new_self._text_field_params.?.int.value = value.*;
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_type: *i32, evt: *Vapor.Event) void {
-                            const num = evt.number() catch |err| {
-                                Vapor.printlnErr("Error parsing int value {s} {any}", .{ evt.text(), err });
-                                return;
-                            };
-                            value_type.* = num;
-                        }
-                    }.updateText, .{value}) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
                 },
                 .float => {
                     if (@TypeOf(value.*) != f32) {
@@ -583,23 +544,50 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
                     new_self._text_field_params.?.date.value_ptr = value.*.ptr;
                     new_self._text_field_params.?.date.value_len = value.*.len;
-                    Vapor.attachEventCtxCallback(ui_node, .input, struct {
-                        pub fn updateText(value_type: *[]const u8, evt: *Vapor.Event) void {
-                            value_type.* = evt.text();
-                        }
-                    }.updateText, .{value}) catch |err| {
-                        Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-                        unreachable;
-                    };
                 },
                 else => {
                     Vapor.printlnErr("NOT IMPLEMENTED", .{});
                     return self.*;
                 },
             }
+            // Store the bound pointer
             new_self._value = @ptrCast(@alignCast(value));
 
+            // Build an erased updater fn for this specific type
+            const Updater = struct {
+                pub fn update(ptr: *anyopaque, evt: *Vapor.Event) void {
+                    const T = @TypeOf(value.*);
+                    const typed: *T = @ptrCast(@alignCast(ptr));
+
+                    typed.* = switch (@typeInfo(T)) {
+                        .int, .float, .comptime_int, .comptime_float => evt.number() catch blk: {
+                            std.log.err("Error casting number", .{});
+                            break :blk 0;
+                        },
+                        .pointer => |info| if (info.child == u8) evt.text() else @compileError("unsupported pointer type"),
+                        else => @compileError("unsupported type: " ++ @typeName(T)),
+                    };
+                }
+            };
+            new_self._bind_ptr = @ptrCast(@alignCast(value));
+            new_self._bind_update_fn = Updater.update;
+
             return new_self;
+        }
+
+        pub fn focus(self: *const Self) Self {
+            const ui_node = self._ui_node orelse {
+                Vapor.printlnSrcErr("Node is null", .{}, @src());
+                unreachable;
+            };
+
+            var uuid: []const u8 = ui_node.uuid;
+            if (self._id) |_id| {
+                uuid = _id;
+            }
+
+            Vapor.onEndCtx(Vapor.focus, .{uuid});
+            return self.*;
         }
 
         pub fn onFocus(self: *const Self, cb: fn (*Vapor.Event) void) Self {
@@ -649,45 +637,33 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn onScroll(self: *const Self, cb: fn (*Vapor.Event) void) *const Self {
-            // const element = self._element orelse {
-            //     Vapor.printlnSrcErr("Element is null must bind() first, before setting onChange", .{}, @src());
+        pub fn onScroll(self: *const Self, callback: anytype, args: anytype) Self {
+            // const ui_node = self._ui_node orelse {
+            //     Vapor.printlnSrcErr("Node is null", .{}, @src());
             //     unreachable;
             // };
             //
-            var new_self: Self = self.*;
+            // Vapor.attachEventCtxCallback(ui_node, .input, func, args) catch |err| {
+            //     Vapor.println("ONCHANGE: Could not attach event callback {any}\n", .{err});
+            //     unreachable;
+            // };
+            // return self;
 
-            const ui_node = self._ui_node orelse blk: {
-                const ui_node = LifeCycle.open(ElementDecl{
-                    .state_type = _state_type,
-                    .elem_type = self._elem_type,
-                }) orelse {
-                    Vapor.printlnSrcErr("Node is null", .{}, @src());
-                    unreachable;
-                };
-                new_self._ui_node = ui_node;
+            var new_self = self.*;
+            new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .scroll, callback, args) catch unreachable;
+            return new_self;
+        }
 
-                break :blk ui_node;
+        pub fn onEvent(self: *const Self, event: types.EventType, func: anytype, args: anytype) *const Self {
+            const ui_node = self._ui_node orelse {
+                Vapor.printlnSrcErr("Node is null", .{}, @src());
+                unreachable;
             };
-
-            // _ = element.addListener(.scroll, cb);
-            Vapor.attachEventCallback(ui_node, .scroll, cb) catch |err| {
-                Vapor.printErr("ONCHANGE: Could not attach event callback {any}\n", .{err});
+            Vapor.attachEventCtxCallback(ui_node, event, func, args) catch |err| {
+                Vapor.println("OnEventCtx: Could not attach event callback {any}\n", .{err});
                 unreachable;
             };
             return self;
-        }
-
-        pub fn onEvent(self: *const Self, event: types.EventType, cb: fn (*Vapor.Event) void) Self {
-            var new_self: Self = self.*;
-
-            const ui_node = self.getOrCreateNode(&new_self);
-            Vapor.attachEventCallback(ui_node, event, cb) catch |err| {
-                Vapor.println("ONLEAVE: Could not attach event callback {any}\n", .{err});
-                unreachable;
-            };
-
-            return new_self;
         }
 
         pub fn onEventCtx(self: *const Self, event: types.EventType, func: anytype, args: anytype) *const Self {
@@ -702,51 +678,85 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return self;
         }
 
-        pub fn onChange(self: *const Self, cb: fn (*Vapor.Event) void) Self {
-            var new_self: Self = self.*;
+        pub fn onChange(self: *const Self, func: anytype, args: anytype) Self {
+            // const ui_node = self._ui_node orelse {
+            //     Vapor.printlnSrcErr("Node is null", .{}, @src());
+            //     unreachable;
+            // };
+            //
+            // Vapor.attachEventCtxCallback(ui_node, .input, func, args) catch |err| {
+            //     Vapor.println("ONCHANGE: Could not attach event callback {any}\n", .{err});
+            //     unreachable;
+            // };
+            // return self;
 
-            const ui_node = self._ui_node orelse blk: {
-                const ui_node = LifeCycle.open(ElementDecl{
-                    .state_type = _state_type,
-                    .elem_type = self._elem_type,
-                }) orelse {
-                    Vapor.printlnSrcErr("Node is null", .{}, @src());
-                    unreachable;
-                };
-                new_self._ui_node = ui_node;
-
-                break :blk ui_node;
-            };
-
-            // If we have a binded value we instead create a wrapper ctx around the cb passed in
-            // this way we can update the binded values from the callback and call the developer's
-            // cb with the updated value
-            // if (self._value) |value| {
-            //     switch (self._text_field_type) {
-            //         .string => {
-            //             Vapor.attachEventCtxCallback(ui_node, .input, struct {
-            //                 pub fn updateText(value_opaque: *anyopaque, evt: *Vapor.Event) void {
-            //                     const value_type: *[]const u8 = @ptrCast(@alignCast(value_opaque));
-            //                     value_type.* = evt.text();
-            //                     Vapor.print("updateText: {s}\n", .{value_type.*});
-            //                     @call(.auto, cb, .{evt});
-            //                 }
-            //             }.updateText, value) catch |err| {
-            //                 Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-            //                 unreachable;
-            //             };
-            //         },
-            //         else => return self.*,
-            //     }
-            // } else {
-            Vapor.attachEventCallback(ui_node, .input, cb) catch |err| {
-                Vapor.printErr("ONCHANGE: Could not attach event callback {any}\n", .{err});
-                unreachable;
-            };
-            // }
-
+            var new_self = self.*;
+            new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .input, func, args) catch unreachable;
             return new_self;
         }
+
+        pub fn fontWeight(self: *const Self, value: u16) Self {
+            var n = self.*;
+            var v = n._visual orelse types.Visual{};
+            v.font_weight = value;
+            n._visual = v;
+            return n;
+        }
+
+        pub fn fontColor(self: *const Self, color: ?Color) Self {
+            var n = self.*;
+            var v = n._visual orelse types.Visual{};
+            v.text_color = color;
+            n._visual = v;
+            return n;
+        }
+
+        // pub fn onChange(self: *const Self, cb: fn (*Vapor.Event) void) Self {
+        //     var new_self: Self = self.*;
+        //
+        //     const ui_node = self._ui_node orelse blk: {
+        //         const ui_node = LifeCycle.open(ElementDecl{
+        //             .state_type = _state_type,
+        //             .elem_type = self._elem_type,
+        //         }) orelse {
+        //             Vapor.printlnSrcErr("Node is null", .{}, @src());
+        //             unreachable;
+        //         };
+        //         new_self._ui_node = ui_node;
+        //
+        //         break :blk ui_node;
+        //     };
+        //
+        //     // If we have a binded value we instead create a wrapper ctx around the cb passed in
+        //     // this way we can update the binded values from the callback and call the developer's
+        //     // cb with the updated value
+        //     if (self._value) |value| {
+        //         switch (self._text_field_type) {
+        //             .string => {
+        //                 Vapor.attachEventCtxCallback(ui_node, .input, struct {
+        //                     pub fn updateText(value_opaque: *anyopaque, evt: *Vapor.Event) void {
+        //                         const value_type: *[]const u8 = @ptrCast(@alignCast(value_opaque));
+        //                         value_type.* = evt.text();
+        //                         Vapor.print("updateText: {s}\n", .{value_type.*});
+        //                         @call(.auto, cb, .{evt});
+        //                     }
+        //                 }.updateText, value) catch |err| {
+        //                     Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
+        //                     unreachable;
+        //                 };
+        //             },
+        //             else => return self.*,
+        //         }
+        //     } else {
+        //         Vapor.attachEventCallback(ui_node, .input, cb) catch |err| {
+        //             Vapor.printErr("ONCHANGE: Could not attach event callback {any}\n", .{err});
+        //             Vapor.printErr("ONCHANGE: Handler Already in use from bind\n", .{});
+        //             return self.*;
+        //         };
+        //     }
+        //
+        //     return new_self;
+        // }
 
         pub fn onKeyDown(self: *const Self, cb: fn (*Vapor.Event) void) Self {
             var new_self: Self = self.*;
@@ -1055,37 +1065,49 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        pub fn whiteSpace(self: *const Self, value: types.WhiteSpace) Self {
+            var n = self.*;
+            var v = n._visual orelse types.Visual{};
+            v.white_space = value;
+            n._visual = v;
+            return n;
+        }
+
         /// This function takes a const pointer to a Style Struct, and returns the body function callback
         /// This function is static, so any styles added via chaining methods will not be applied
         /// Use baseStyle to keep all chained additions
         pub fn style(self: *const Self, style_ptr: *const Vapor.Style) Self {
             var new_self: Self = self.*;
-            new_self._used_style = true;
-            var elem_decl = Vapor.ElementDecl{
-                .state_type = _state_type,
-                .elem_type = self._elem_type,
-                .text = self._text,
-                .style = style_ptr,
-                .alt = self._alt,
-                .aria_label = self._aria_label,
-                .animation_enter = self._animation_enter,
-                .animation_exit = self._animation_exit,
-                .name = self._name,
-            };
-
-            if (self._text_field_params) |params| {
-                elem_decl.text_field_params = params;
-            }
-
-            if (self._id) |_id| {
-                var mutable_style = style_ptr.*;
-                mutable_style.id = _id;
-                elem_decl.style = &mutable_style;
-            }
-
-            _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
-            // Vapor.LifeCycle.configure(elem_decl);
+            new_self._style = style_ptr;
             return new_self;
+
+            // var new_self: Self = self.*;
+            // new_self._used_style = true;
+            // var elem_decl = Vapor.ElementDecl{
+            //     .state_type = _state_type,
+            //     .elem_type = self._elem_type,
+            //     .text = self._text,
+            //     .style = style_ptr,
+            //     .alt = self._alt,
+            //     .aria_label = self._aria_label,
+            //     .animation_enter = self._animation_enter,
+            //     .animation_exit = self._animation_exit,
+            //     .name = self._name,
+            // };
+            //
+            // if (self._text_field_params) |params| {
+            //     elem_decl.text_field_params = params;
+            // }
+            //
+            // if (self._id) |_id| {
+            //     var mutable_style = style_ptr.*;
+            //     mutable_style.id = _id;
+            //     elem_decl.style = &mutable_style;
+            // }
+            //
+            // _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
+            // // Vapor.LifeCycle.configure(elem_decl);
+            // return new_self;
         }
 
         pub fn font(self: *const Self, font_size: u8, weight: ?u16, color: ?Color) Self {
@@ -1146,7 +1168,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn background(self: *const Self, value: types.Background) Self {
+        pub fn background(self: *const Self, value: types.Color) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.background = value;
@@ -1194,10 +1216,11 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn outline(self: *const Self, value: types.Outline) Self {
+        pub fn outline(self: *const Self, value: types.Outline, color: ?Color) Self {
             var new_self: Self = self.*;
             var visual = new_self._visual orelse types.Visual{};
             visual.outline = value;
+            visual.outline_color = color;
             new_self._visual = visual;
             return new_self;
         }
@@ -1445,9 +1468,25 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 elem_decl.text_field_params = params;
             }
 
-            // Vapor.LifeCycle.configure(elem_decl);
+            if (self._bind_update_fn != null or self._on_change_cb != null) {
+                const node = self._ui_node orelse unreachable;
+
+                Vapor.attachEventCtxCallback(node, .input, struct {
+                    pub fn handler(ctx_opaque: Ctx, evt: *Vapor.Event) void {
+                        const ctx: Ctx = ctx_opaque;
+                        // 1. Update bound value if present
+                        if (ctx.bind_fn) |f| f(ctx.bind_ptr.?, evt);
+                        // 2. Call user's onChange if present
+                        if (ctx.user_cb) |cb| cb.call(evt);
+                    }
+                }.handler, .{Ctx{
+                    .bind_ptr = self._bind_ptr,
+                    .bind_fn = self._bind_update_fn,
+                    .user_cb = self._on_change_cb,
+                }}) catch unreachable;
+            }
+
             _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
-            // return Vapor.LifeCycle.close({});
         }
 
         pub fn plain(self: *const Self) void {

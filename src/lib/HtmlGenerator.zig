@@ -37,7 +37,8 @@ pub fn generate(root: *UINode, new_writer: *std.Io.Writer, style_path: []const u
     };
     // Write the style link
     writer.writeAll(style_link) catch unreachable;
-    writer.writeAll("\n</head>") catch unreachable;
+    writer.writeAll("\n<link rel=\"stylesheet\" href=\"/static/style_variables.css\" />") catch unreachable;
+    // writer.writeAll("\n</head>") catch unreachable;
 
     // Find the contents div
     const target = "<div id=\"contents\" style=\"display: contents\">";
@@ -181,18 +182,34 @@ pub fn createInput(ui_node: *UINode) void {
         //     writeOptionalProp("value", telephone.value);
         //     writeOptionalProp("placeholder", telephone.default);
         // },
-        // .file => |file| {
-        //     writeOptionalProp("value", file.value);
-        //     writeOptionalProp("placeholder", file.default);
-        // },
+        .file => |file| {
+            _ = file;
+            writeOptionalProp("type", "file");
+        },
         // .float => |float| {
         //     writeOptionalProp("value", float.value);
         //     writeOptionalProp("placeholder", float.default);
         // },
         else => {},
     }
+    _ = writer.write("/>") catch unreachable;
+    // _ = writer.write("</input>") catch unreachable;
+}
+
+pub fn createTextArea(ui_node: *UINode) void {
+    _ = writer.write("<textarea") catch unreachable;
+    writeAllProps(ui_node);
+    writeOptionalProp("name", ui_node.name);
+    const params = ui_node.text_field_params.?;
+    var default_value: []const u8 = "";
+    const string = params.string;
+    if (string.default_ptr) |ptr| {
+        default_value = ptr[0..string.default_len];
+    }
+    writeOptionalProp("type", "email");
+    writeOptionalProp("placeholder", default_value);
     _ = writer.write(">") catch unreachable;
-    _ = writer.write("</input>") catch unreachable;
+    _ = writer.write("</textarea>") catch unreachable;
 }
 
 pub fn createLabel(ui_node: *UINode) void {
@@ -336,6 +353,9 @@ pub fn createElementOpen(ui_node: *UINode) void {
         },
         .TextField => {
             createInput(ui_node);
+        },
+        .TextArea => {
+            createTextArea(ui_node);
         },
         .Label => {
             createLabel(ui_node);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Vapor = @import("Vapor.zig");
 pub const StringTable = struct {
     const Self = @This();
 
@@ -113,7 +114,7 @@ pub const StringTable = struct {
         const s = str orelse return null_handle;
         if (s.len == 0) return null_handle;
 
-        const key: u32 = @intCast(@intFromPtr(str));
+        const key: u32 = @truncate(@intFromPtr(str));
 
         // Check if this pointer is already tracked
         if (self.index_map.get(key)) |existing_index| {

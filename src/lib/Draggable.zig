@@ -137,7 +137,7 @@ pub const Draggable = struct {
     }
 
     // Internal handlers
-    fn handlePointerDown(self: *Draggable, evt: *Vapor.Event) void {
+    pub fn handlePointerDown(self: *Draggable, evt: *Vapor.Event) void {
         if (self.config.disabled) return;
 
         evt.preventDefault();
@@ -155,12 +155,6 @@ pub const Draggable = struct {
         if (self.on_drag_start) |callback| {
             callback(self, evt);
         }
-
-        // Visual feedback
-        // self.element.addClass("dragging");
-        // if (self.config.cursor.len > 0) {
-        //     Vapor.document.style.cursor = self.config.cursor;
-        // }
     }
 
     fn handlePointerMove(self: *Draggable, evt: *Vapor.Event) void {
@@ -187,26 +181,6 @@ pub const Draggable = struct {
         // Calculate new position
         const new_x = self.current_x + delta_x;
         const new_y = self.current_y + delta_y;
-
-        // Apply bounds constraints
-        // if (self.config.custom_bounds) |bounds| {
-        //     new_x = std.math.clamp(new_x, bounds.min_x, bounds.max_x);
-        //     new_y = std.math.clamp(new_y, bounds.min_y, bounds.max_y);
-        // }
-        // else if (self.config.constrain_to_parent) {
-        //     // Get parent bounds and constrain
-        //     const parent_rect = self.element.parent().getBoundingRect();
-        //     const element_rect = self.element.getBoundingRect();
-        //     new_x = std.math.clamp(new_x, 0, parent_rect.width - element_rect.width);
-        //     new_y = std.math.clamp(new_y, 0, parent_rect.height - element_rect.height);
-        // }
-
-        // Apply grid snapping
-        // if (self.config.snap_to_grid) {
-        //     const grid = self.config.grid_size;
-        //     new_x = @round(new_x / grid) * grid;
-        //     new_y = @round(new_y / grid) * grid;
-        // }
 
         // Update position
         self.x = new_x;
@@ -238,39 +212,17 @@ pub const Draggable = struct {
             self.up_listener_id = null;
         }
 
-        // // Check for drop target
-        // const drop_target = self.getDropTarget(evt);
-        //
-        // // Handle drop
-        // if (self.on_drop) |callback| {
-        //     callback(self, evt, drop_target);
-        // }
-        //
-        // // Revert if needed
-        // if (self.config.revert_on_invalid_drop and drop_target == null) {
-        //     self.revertPosition();
-        // } else {
-        // Save current position as new base
         self.current_x = self.x;
         self.current_y = self.y;
-        // }
 
         // User callback
         if (self.on_drag_end) |callback| {
             callback(self, evt);
         }
-
-        // Clean up visual feedback
-        // self.element.removeClass("dragging");
-        // Vapor.document.style.cursor = "auto";
     }
 
     pub fn updatePosition(self: *Draggable, x: f32, y: f32) void {
-        // if (self.config.use_gpu) {
         _ = self.element.translate3d(.{ .x = x, .y = y });
-        // } else {
-        //     self.element.style(.{ .left = x, .top = y });
-        // }
     }
 
     fn revertPosition(self: *Draggable) void {
@@ -328,61 +280,3 @@ pub const Draggable = struct {
 pub fn draggable(element: *Vapor.Binded) *Draggable {
     return Draggable.init(element);
 }
-
-// Helper for creating draggable lists
-pub const SortableList = struct {
-    container: *Vapor.Binded,
-    items: std.ArrayList(*Draggable),
-    config: Config,
-
-    pub const Config = struct {
-        orientation: Orientation = .vertical,
-        handle_class: ?[]const u8 = null,
-        placeholder_class: []const u8 = "sortable-placeholder",
-        animate: bool = true,
-        on_sort: ?*const fn (from: usize, to: usize) void = null,
-    };
-
-    pub const Orientation = enum { vertical, horizontal };
-
-    pub fn init(container: *Vapor.Binded, config: Config) *SortableList {
-        const self = Vapor.allocator.create(SortableList) catch unreachable;
-        self.* = .{
-            .container = container,
-            .items = std.ArrayList(*Draggable).init(Vapor.allocator),
-            .config = config,
-        };
-
-        // Make children draggable
-        const children = container.children();
-        for (children) |child| {
-            const drag = child.draggable()
-                .axis(if (config.orientation == .vertical) .y else .x)
-                .onDrag(handleItemDrag)
-                .onEnd(handleItemDrop);
-
-            if (config.handle_class) |class| {
-                const handle = child.querySelector(class);
-                if (handle) |h| {
-                    drag.handle(h);
-                }
-            }
-
-            self.items.append(drag) catch unreachable;
-        }
-
-        return self;
-    }
-
-    fn handleItemDrag(drag: *Draggable, evt: *Vapor.Event) void {
-        _ = drag;
-        _ = evt;
-        // Show placeholder, reorder items visually
-    }
-
-    fn handleItemDrop(drag: *Draggable, evt: *Vapor.Event) void {
-        _ = drag;
-        _ = evt;
-        // Finalize new order, call callback
-    }
-};
