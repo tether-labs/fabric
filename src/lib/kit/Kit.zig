@@ -9,17 +9,78 @@ const getUnderlyingValue = utils.getUnderlyingValue;
 const DynamicObject = @import("../Dynamic.zig");
 pub const Json = @import("JSON.zig");
 
+// The HTTP layer moved into Fetch.zig; these keep `Kit.Fetch` / `Kit.Response`
+// working for callers such as KeyStone.
+pub const Fetch = @import("../Fetch.zig").Fetch;
+pub const Response = @import("../Fetch.zig").Result;
+
 pub const Kit = @This();
 
-pub fn init() void {
-    Vapor.fetch_registry = std.AutoHashMap(u32, *Kit.FetchNode).init(Vapor.arena(.persist)); ///// This bad boy is 19kb addition
-    Fetch.init();
+pub fn timestamp() i64 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    const ts = std.Io.Timestamp.now(io, .real);
+    return ts.toSeconds();
+}
+
+pub fn milliTimestamp() i64 {
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    const ts = std.Io.Timestamp.now(io, .cpu_thread);
+    return ts.toMilliseconds();
 }
 
 pub const Window = struct {
     pub fn openTab(url: []const u8) void {
         if (isWasi) {
             Wasm.windowOpenWasm(url.ptr, url.len);
+        }
+    }
+
+    pub fn paramsStr() ?[]const u8 {
+        if (isWasi) {
+            const _params = getWindowParamsWasm();
+            const params_str = std.mem.span(_params);
+            if (params_str.len == 0) {
+                return null;
+            } else {
+                return params_str;
+            }
+        } else {
+            Vapor.printlnSrc("Attempted to get params, but not wasi", .{}, @src());
+            return null;
+        }
+    }
+
+    pub fn params() ?std.StringHashMap([]const u8) {
+        if (isWasi) {
+            const params_str = paramsStr() orelse return null;
+            return parseParams(params_str, Vapor.arena(.frame)) catch return null;
+        }
+        return null;
+    }
+
+    pub fn origin() []const u8 {
+        if (isWasi) {
+            const _origin = Wasm.getWindowOriginWasm();
+            const origin_str = std.mem.span(_origin);
+            return origin_str;
+        } else {
+            Vapor.printlnSrc("Attempted to get origin, but not wasi", .{}, @src());
+            return "";
+        }
+    }
+    pub fn path() []const u8 {
+        if (isWasi) {
+            return std.mem.span(getWindowInformationWasm());
+        } else {
+            const prefix = "/root";
+            if (std.mem.startsWith(u8, Vapor.current_route, prefix)) {
+                const rest = Vapor.current_route[prefix.len..];
+                return if (rest.len == 0) "/" else rest;
+            } else {
+                return Vapor.current_route;
+            }
         }
     }
 };
@@ -151,531 +212,75 @@ pub fn fastJson(comptime T: type, data: T, writer: *String) !void {
     writer.append_str("}");
 }
 
-const AbortController = enum {
-    signal,
-};
+/// Build the request JSON into the given allocator, returning an owned slice.
+/// All intermediate allocations happen in the same allocator.
+pub fn buildRequestJson(allocator: std.mem.Allocator, req: HttpReq) ![]u8 {
+    var io_writer = std.Io.Writer.Allocating.init(allocator);
+    errdefer io_writer.deinit();
+    const w = &io_writer.writer;
 
-pub const FetchAction = struct {
-    runFn: FetchActionProto,
-    deinitFn: FetchNodeProto,
-    allocator: FetchNodeProtoAlloc,
-};
+    try w.writeAll("{\"method\":\"");
+    try w.writeAll(@tagName(req.method));
+    try w.writeAll("\"");
 
-const FetchActionProto = *const fn (*FetchAction, Response) void;
-const FetchNodeProto = *const fn (*FetchNode) void;
-const FetchNodeProtoAlloc = *const fn (*FetchNode) std.mem.Allocator;
-
-pub const FetchNode = struct { data: FetchAction };
-
-const Future = struct {
-    id: u32,
-    pub fn await(future: *@This()) ?Response {
-        if (Vapor.response_registry.get(future.id)) |resp| {
-            return resp;
+    const has_static_headers = req.headers != null;
+    const has_extra = req.extra_headers.len > 0;
+    if (has_static_headers or has_extra) {
+        try w.writeAll(",\"headers\":{");
+        var first = true;
+        if (req.headers) |hs| {
+            try writeStaticHeaders(hs, &first, w);
         }
-        _ = Wasm.tick(future.id);
-        return null;
-    }
-};
-
-pub fn fetchAwait(url: []const u8, http_req: HttpReq) *Future {
-    var writer = String.new();
-    writer.append_str("{\n\"method\": ");
-    writer.append_str("\"");
-    writer.append_str(@tagName(http_req.method));
-    writer.append_str("\"");
-    if (http_req.headers) |headers| {
-        writer.append_str(",\n\"headers\": {\n");
-        constructHeaders(headers, http_req.extra_headers, &writer);
-        writer.append_str("\n}");
-    } else if (http_req.extra_headers.len > 0) {
-        writer.append_str(",\n\"headers\": {\n");
-        var count: usize = 1;
-        for (http_req.extra_headers) |header| {
-            writer.append_str("\"");
-            writer.append_str(header.name);
-            writer.append_str("\"");
-            writer.append_str(": ");
-            writer.append_str("\"");
-            writer.append_str(header.value);
-            writer.append_str("\"");
-            if (count < http_req.extra_headers.len) {
-                writer.append_str(",\n");
-            }
-            count += 1;
+        for (req.extra_headers) |h| {
+            try writeHeaderPair(h.name, h.value, &first, w);
         }
-        writer.append_str("\n}");
+        try w.writeAll("}");
     }
 
-    if (http_req.credentials) |credentials| {
-        writer.append_str(",\n\"credentials\": ");
-        writer.append_str("\"");
-        writer.append_str(credentials);
-        writer.append_str("\"");
+    if (req.credentials) |c| {
+        try w.writeAll(",\"credentials\":\"");
+        try w.writeAll(c);
+        try w.writeAll("\"");
     }
 
-    if (http_req.body) |body| {
-        writer.append_str(",\n\"body\": ");
-        switch (http_req.body_type) {
-            .string => {
-                writer.append_str("\"");
-                writer.append_str(body);
-                writer.append_str("\"");
-            },
-            .json => {
-                writer.append_str(body);
-            },
+    if (req.body) |body| {
+        try w.writeAll(",\"body\":");
+        switch (req.body_type) {
+            .string => try std.json.Stringify.encodeJsonString(body, .{}, w),
+            .json => try w.writeAll(body),
         }
     }
-    writer.append_str("\n}");
 
-    const final = writer.contents[0..writer.len];
-    const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
-
-    const id = Vapor.fetch_registry.count() + 1;
-
-    const future = Vapor.allocator_global.create(Future) catch |err| {
-        Vapor.println("Error could not create closure {any}\n ", .{err});
-        unreachable;
-    };
-    future.* = .{
-        .id = id,
-    };
-
-    if (Vapor.isWasi) {
-        fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
-    }
-    return future;
+    try w.writeAll("}");
+    return io_writer.toOwnedSlice();
 }
 
-pub const Fetch = struct {
-    pub const RequestKey = struct {
-        url: []const u8,
-        method: Methods,
-    };
+fn writeHeaderPair(name: []const u8, value: []const u8, first: *bool, w: *std.Io.Writer) !void {
+    if (!first.*) try w.writeAll(",");
+    first.* = false;
+    try w.writeAll("\"");
+    try w.writeAll(name);
+    try w.writeAll("\":\"");
+    try w.writeAll(value);
+    try w.writeAll("\"");
+}
 
-    pub const RequestKeyContext = struct {
-        pub fn hash(_: RequestKeyContext, key: RequestKey) u64 {
-            var h = std.hash.Wyhash.init(0);
-            h.update(key.url);
-            h.update(std.mem.asBytes(&key.method));
-            return h.final();
-        }
-
-        pub fn eql(_: RequestKeyContext, a: RequestKey, b: RequestKey) bool {
-            return a.method == b.method and std.mem.eql(u8, a.url, b.url);
-        }
-    };
-
-    pub const RequestEntry = struct {
-        arena: std.heap.ArenaAllocator,
-        callback_id: u32,
-        // The response data lives in `arena` — valid until next fetch to same key
-        last_response: ?Response = null,
-
-        pub fn allocator(self: *RequestEntry) std.mem.Allocator {
-            return self.arena.allocator();
-        }
-
-        /// Reset the arena, invalidating all previous response data
-        pub fn reset(self: *RequestEntry) void {
-            _ = self.arena.reset(.retain_capacity);
-            self.last_response = null;
-        }
-
-        pub fn deinit(self: *RequestEntry) void {
-            self.arena.deinit();
-        }
-    };
-
-    // Module-level registry: URL+method -> entry with its own arena
-    pub var request_registry: std.HashMap(
-        RequestKey,
-        *RequestEntry,
-        RequestKeyContext,
-        80, // max load percentage
-    ) = undefined;
-
-    pub fn init() void {
-        request_registry = std.HashMap(RequestKey, *RequestEntry, RequestKeyContext, 80).init(Vapor.arena(.persist));
-    }
-
-    _cbs: []*const fn (Response) void = &.{},
-    http_req: HttpReq,
-    url: []const u8,
-    debug: bool = false,
-    force_error: bool = false,
-
-    pub fn fetch(url: []const u8, http_req: HttpReq) Fetch {
-        return .{
-            .http_req = http_req,
-            .url = url,
-        };
-    }
-
-    fn getOrCreateEntry(key: RequestKey) *RequestEntry {
-        if (request_registry.get(key)) |existing| {
-            // Same endpoint hit again — reset the arena, old response data dies
-            existing.reset();
-            return existing;
-        }
-
-        // First time hitting this endpoint — create a new entry
-        // The entry itself lives in the global allocator (it's long-lived)
-        const entry = Vapor.allocator_global.create(RequestEntry) catch unreachable;
-        entry.* = .{
-            .arena = std.heap.ArenaAllocator.init(Vapor.allocator_global),
-            .callback_id = 0,
-        };
-
-        // Key strings need to outlive the frame, so dupe into global
-        const owned_key = RequestKey{
-            .url = Vapor.allocator_global.dupe(u8, key.url) catch unreachable,
-            .method = key.method,
-        };
-        request_registry.put(owned_key, entry) catch unreachable;
-        return entry;
-    }
-
-    pub fn handle(self: *const Fetch, cb: fn (Response) void) void {
-        const http_req = self.http_req;
-        const url = self.url;
-
-        const key = RequestKey{ .url = url, .method = http_req.method };
-        const entry = getOrCreateEntry(key);
-
-        // Build the JSON request using the entry's arena (gets reset next fetch)
-        const arena_alloc = entry.allocator();
-        var writer = String.new();
-        writer.append_str("{\n\"method\": \"");
-        writer.append_str(@tagName(http_req.method));
-        writer.append_str("\"");
-
-        if (http_req.headers) |headers| {
-            writer.append_str(",\n\"headers\": {\n");
-            constructHeaders(headers, http_req.extra_headers, &writer);
-            writer.append_str("\n}");
-        } else if (http_req.extra_headers.len > 0) {
-            writer.append_str(",\n\"headers\": {\n");
-            var count: usize = 1;
-            for (http_req.extra_headers) |header| {
-                writer.append_str("\"");
-                writer.append_str(header.name);
-                writer.append_str("\": \"");
-                writer.append_str(header.value);
-                writer.append_str("\"");
-                if (count < http_req.extra_headers.len) {
-                    writer.append_str(",\n");
-                }
-                count += 1;
-            }
-            writer.append_str("\n}");
-        }
-
-        if (http_req.credentials) |credentials| {
-            writer.append_str(",\n\"credentials\": \"");
-            writer.append_str(credentials);
-            writer.append_str("\"");
-        }
-
-        if (http_req.body) |body| {
-            writer.append_str(",\n\"body\": ");
-            switch (http_req.body_type) {
-                .string => {
-                    var io_writer = std.Io.Writer.Allocating.init(arena_alloc);
-                    std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
-                    defer io_writer.deinit();
-                    writer.append_str(io_writer.written());
-                },
-                .json => {
-                    writer.append_str(body);
-                },
-            }
-        }
-        writer.append_str("\n}");
-
-        const final_str = writer.contents[0..writer.len];
-        const json = std.json.fmt(final_str, .{ .whitespace = .indent_1 }).value;
-
-        // Callback closure — allocated globally since the registry needs stable pointers
-        // but the callback itself parses into the entry's arena
-        const Closure = struct {
-            fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn, .allocator = allocator } },
-            entry_ptr: *RequestEntry,
-
-            fn runFn(action: *FetchAction, resp: Response) void {
-                // Store the response in the entry so it's accessible between requests
-                const node: *FetchNode = @alignCast(@fieldParentPtr("data", action));
-                const self_closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
-                self_closure.entry_ptr.last_response = resp;
-                @call(.auto, cb, .{resp});
-            }
-
-            fn deinitFn(node: *FetchNode) void {
-                const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
-                Vapor.allocator_global.destroy(closure);
-            }
-
-            fn allocator(node: *FetchNode) std.mem.Allocator {
-                const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
-                return closure.entry_ptr.allocator();
-            }
-        };
-
-        const closure = Vapor.allocator_global.create(Closure) catch unreachable;
-        closure.* = .{ .entry_ptr = entry };
-
-        const id = Vapor.fetch_registry.count() + 1;
-        entry.callback_id = id;
-
-        Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
-            Vapor.printlnSrcErr("Registry error {any}\n", .{err}, @src());
-            return;
-        };
-
-        if (self.debug) {
-            std.log.info("Fetching {s}\n", .{url});
-            std.log.info("Request: {s}\n", .{json});
-        }
-
-        if (self.force_error) {
-            const resp = Response{ .Err = .{
-                .code = 404,
-                .message = "Sample error",
-                .type = "",
-                .ok = false,
-                .url = url,
-                .redirected = false,
-                .body = "",
-                .headers = null,
-                .content_type = "",
-                .content_length = 0,
-                .elapsed_ms = 0,
-                .error_kind = "",
-                .error_name = "",
-            } };
-            @call(.auto, cb, .{resp});
-            return;
-        }
-
-        if (Vapor.isWasi) {
-            fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
-        }
-    }
-};
-
-// pub const Fetch = struct {
-//     _cbs: []*const fn (Response) void = &.{},
-//     http_req: HttpReq,
-//     url: []const u8,
-//
-//     const FetchEntry = struct {
-//         node: *FetchNode,
-//         arena: std.mem.Allocator,
-//     };
-//
-//     pub fn fetch(url: []const u8, http_req: HttpReq) Fetch {
-//         return .{
-//             .http_req = http_req,
-//             .url = url,
-//         };
-//     }
-//
-//     pub fn handle(self: *const Fetch, cb: fn (Response) void) void {
-//         const http_req = self.http_req;
-//         const url = self.url;
-//
-//         var writer = String.new();
-//         writer.append_str("{\n\"method\": ");
-//         writer.append_str("\"");
-//         writer.append_str(@tagName(http_req.method));
-//         writer.append_str("\"");
-//         if (http_req.headers) |headers| {
-//             writer.append_str(",\n\"headers\": {\n");
-//             constructHeaders(headers, http_req.extra_headers, &writer);
-//             writer.append_str("\n}");
-//         } else if (http_req.extra_headers.len > 0) {
-//             writer.append_str(",\n\"headers\": {\n");
-//             var count: usize = 1;
-//             for (http_req.extra_headers) |header| {
-//                 writer.append_str("\"");
-//                 writer.append_str(header.name);
-//                 writer.append_str("\"");
-//                 writer.append_str(": ");
-//                 writer.append_str("\"");
-//                 writer.append_str(header.value);
-//                 writer.append_str("\"");
-//                 if (count < http_req.extra_headers.len) {
-//                     writer.append_str(",\n");
-//                 }
-//                 count += 1;
-//             }
-//             writer.append_str("\n}");
-//         }
-//
-//         if (http_req.credentials) |credentials| {
-//             writer.append_str(",\n\"credentials\": ");
-//             writer.append_str("\"");
-//             writer.append_str(credentials);
-//             writer.append_str("\"");
-//         }
-//
-//         if (http_req.body) |body| {
-//             writer.append_str(",\n\"body\": ");
-//             switch (http_req.body_type) {
-//                 .string => {
-//                     var io_writer = std.Io.Writer.Allocating.init(Vapor.allocator_global);
-//                     std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
-//                     defer io_writer.deinit();
-//                     writer.append_str(io_writer.written());
-//                 },
-//                 .json => {
-//                     writer.append_str(body);
-//                 },
-//             }
-//         }
-//         writer.append_str("\n}");
-//
-//         const final = writer.contents[0..writer.len];
-//         const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
-//
-//         const Closure = struct {
-//             fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-//             fn runFn(_: *FetchAction, resp: Response) void {
-//                 @call(.auto, cb, .{resp});
-//             }
-//             fn deinitFn(node: *FetchNode) void {
-//                 const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
-//                 Vapor.allocator_global.destroy(closure);
-//             }
-//         };
-//
-//         const closure = Vapor.allocator_global.create(Closure) catch |err| {
-//             Vapor.println("Error could not create closure {any}\n ", .{err});
-//             unreachable;
-//         };
-//         closure.* = .{};
-//
-//         const id = Vapor.fetch_registry.count() + 1;
-//         Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
-//             Vapor.println("Button Function Registry {any}\n", .{err});
-//             return;
-//         };
-//         if (Vapor.isWasi) {
-//             fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
-//         }
-//         return;
-//     }
-// };
-
-pub fn fetch(url: []const u8, cb: fn (Response) void, http_req: HttpReq) void {
-    var writer = String.new();
-    writer.append_str("{\n\"method\": ");
-    writer.append_str("\"");
-    writer.append_str(@tagName(http_req.method));
-    writer.append_str("\"");
-    if (http_req.headers) |headers| {
-        writer.append_str(",\n\"headers\": {\n");
-        constructHeaders(headers, http_req.extra_headers, &writer);
-        writer.append_str("\n}");
-    } else if (http_req.extra_headers.len > 0) {
-        writer.append_str(",\n\"headers\": {\n");
-        var count: usize = 1;
-        for (http_req.extra_headers) |header| {
-            writer.append_str("\"");
-            writer.append_str(header.name);
-            writer.append_str("\"");
-            writer.append_str(": ");
-            writer.append_str("\"");
-            writer.append_str(header.value);
-            writer.append_str("\"");
-            if (count < http_req.extra_headers.len) {
-                writer.append_str(",\n");
-            }
-            count += 1;
-        }
-        writer.append_str("\n}");
-    }
-
-    if (http_req.credentials) |credentials| {
-        writer.append_str(",\n\"credentials\": ");
-        writer.append_str("\"");
-        writer.append_str(credentials);
-        writer.append_str("\"");
-    }
-
-    if (http_req.body) |body| {
-        writer.append_str(",\n\"body\": ");
-        switch (http_req.body_type) {
-            .string => {
-                var io_writer = std.Io.Writer.Allocating.init(Vapor.allocator_global);
-                std.json.Stringify.encodeJsonString(body, .{}, &io_writer.writer) catch unreachable;
-                defer io_writer.deinit();
-                writer.append_str(io_writer.written());
-            },
-            .json => {
-                writer.append_str(body);
-            },
-        }
-    }
-    writer.append_str("\n}");
-
-    const final = writer.contents[0..writer.len];
-    const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
-
-    const Closure = struct {
-        fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-        fn runFn(_: *FetchAction, resp: Response) void {
-            @call(.auto, cb, .{resp});
-        }
-        fn deinitFn(node: *FetchNode) void {
-            const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
-            Vapor.allocator_global.destroy(closure);
-        }
-    };
-
-    const closure = Vapor.allocator_global.create(Closure) catch |err| {
-        Vapor.println("Error could not create closure {any}\n ", .{err});
-        unreachable;
-    };
-    closure.* = .{};
-
-    const id = Vapor.fetch_registry.count() + 1;
-    Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
-        Vapor.println("Button Function Registry {any}\n", .{err});
-        return;
-    };
-    if (Vapor.isWasi) {
-        fetchWasm(url.ptr, url.len, id, json.ptr, json.len);
-    }
-    // return id;
+fn writeStaticHeaders(headers: Headers, first: *bool, w: *std.Io.Writer) !void {
+    try writeHeaderPair("Content-Type", headers.content_type, first, w);
+    if (headers.user_agent) |v| try writeHeaderPair("User-Agent", v, first, w);
+    if (headers.authorization) |v| try writeHeaderPair("Authorization", v, first, w);
+    if (headers.accept) |v| try writeHeaderPair("Accept", v, first, w);
 }
 
 var last_time: i64 = 0;
 pub fn throttle(delay: i64) bool {
-    const current_time = std.time.milliTimestamp();
+    const current_time = milliTimestamp();
     if (current_time - last_time < delay) {
         return true;
     }
     last_time = current_time;
     return false;
 }
-
-extern fn fetchWasm(
-    url_ptr: [*]const u8,
-    url_len: usize,
-    callback_id: usize,
-    http_req_offset_ptr: [*]u8,
-    size: usize,
-) void;
-
-extern fn fetchParamsWasm(
-    url_ptr: [*]const u8,
-    url_len: usize,
-    callback_id: usize,
-    http_req_offset_ptr: [*]u8,
-    size: usize,
-) void;
 
 extern fn setWindowLocationWasm(
     url_ptr: [*]const u8,
@@ -732,7 +337,13 @@ pub fn getWindowPath() ?[]const u8 {
     if (isWasi) {
         return std.mem.span(getWindowInformationWasm());
     } else {
-        return null;
+        const prefix = "/root";
+        if (std.mem.startsWith(u8, Vapor.current_route, prefix)) {
+            const rest = Vapor.current_route[prefix.len..];
+            return if (rest.len == 0) "/" else rest;
+        } else {
+            return Vapor.current_route;
+        }
     }
 }
 
@@ -751,29 +362,6 @@ pub fn getWindowParams() ?[]const u8 {
         Vapor.printlnSrc("Attempted to get params, but not wasi", .{}, @src());
         return null;
     }
-}
-
-pub fn findIndex(haystack: []const u8, needle: u8) ?usize {
-    const vec_len = 16;
-    const Vec16 = @Vector(16, u8);
-    const splt_16: Vec16 = @splat(@as(u8, needle));
-    if (haystack.len >= vec_len) {
-        var i: usize = 0;
-        while (i + vec_len <= haystack.len) : (i += vec_len) {
-            const v = haystack[i..][0..vec_len].*;
-            const vec: Vec16 = @bitCast(v);
-            const mask = vec == splt_16;
-            const bits: u16 = @bitCast(mask);
-            if (bits != 0) {
-                return i + @ctz(bits);
-            }
-        }
-    }
-    var i: usize = 0;
-    while (i < haystack.len) : (i += 1) {
-        if (haystack[i] == needle) return i;
-    }
-    return null;
 }
 
 fn decoder(encoded: []const u8, decoded: *std.array_list.Managed(u8)) !void {
@@ -799,7 +387,7 @@ fn decoder(encoded: []const u8, decoded: *std.array_list.Managed(u8)) !void {
 }
 
 pub fn parseParams(url: []const u8, allocator: std.mem.Allocator) !?std.StringHashMap([]const u8) {
-    const params_start = findIndex(url, '?') orelse return null;
+    const params_start = std.mem.find(u8, url, "?") orelse return null;
 
     var params = std.StringHashMap([]const u8).init(allocator);
     errdefer {
@@ -816,7 +404,7 @@ pub fn parseParams(url: []const u8, allocator: std.mem.Allocator) !?std.StringHa
     while (pos < url.len) {
         // Find end of this pair
         const remaining = url[pos..];
-        const param_pair_end = findIndex(remaining, '&') orelse remaining.len;
+        const param_pair_end = std.mem.find(u8, remaining, "&") orelse remaining.len;
         const pair = remaining[0..param_pair_end];
 
         if (pair.len == 0) {
@@ -825,7 +413,7 @@ pub fn parseParams(url: []const u8, allocator: std.mem.Allocator) !?std.StringHa
         }
 
         // Find the separator
-        const seperator = findIndex(pair, '=') orelse return error.SeperatorNotFound;
+        const seperator = std.mem.find(u8, pair, "=") orelse return error.SeperatorNotFound;
 
         const key_encoded = pair[0..seperator];
         const value_encoded = pair[seperator + 1 ..];
@@ -850,218 +438,6 @@ pub fn parseParams(url: []const u8, allocator: std.mem.Allocator) !?std.StringHa
 
     return params;
 }
-
-pub const HeadersHM = std.json.ArrayHashMap([]const u8);
-
-pub const OkResponse = struct {
-    code: u32,
-    message: []const u8,
-    type: []const u8,
-    ok: bool,
-    url: []const u8,
-    redirected: bool,
-    body: []const u8,
-    headers: HeadersHM,
-    content_type: []const u8,
-    content_length: u32,
-    elapsed_ms: u32,
-
-    /// Try to parse body as JSON
-    pub fn json(self: OkResponse, comptime T: type, allocator: std.mem.Allocator) !std.json.Parsed(T) {
-        return std.json.parseFromSlice(T, allocator, self.body, .{});
-    }
-
-    pub fn isJson(self: OkResponse) bool {
-        return std.mem.startsWith(u8, self.content_type, "application/json");
-    }
-
-    pub fn isRedirect(self: OkResponse) bool {
-        return self.code >= 300 and self.code < 400;
-    }
-
-    pub fn isClientError(self: OkResponse) bool {
-        return self.code >= 400 and self.code < 500;
-    }
-
-    pub fn isServerError(self: OkResponse) bool {
-        return self.code >= 500;
-    }
-
-    pub fn header(self: OkResponse, key: []const u8) ?[]const u8 {
-        return self.headers.map.get(key);
-    }
-
-    pub fn bind(self: *const OkResponse, comptime T: type, allocator: std.mem.Allocator) !T {
-        const parsed = std.json.parseFromSlice(
-            T,
-            allocator,
-            self.body,
-            .{},
-        ) catch return error.MalformedJson;
-
-        return parsed.value;
-    }
-};
-
-pub const ErrorKind = enum {
-    network,
-    timeout,
-    aborted,
-    cors,
-    dns,
-    tls,
-    http,
-    unknown,
-};
-
-pub const ErrResponse = struct {
-    code: u32,
-    type: []const u8,
-    message: []const u8,
-    ok: bool,
-    url: []const u8,
-    redirected: bool,
-    body: []const u8,
-    headers: ?HeadersHM,
-    content_type: []const u8,
-    content_length: u32,
-    elapsed_ms: u32,
-    error_kind: []const u8,
-    error_name: []const u8,
-
-    pub fn kind(self: ErrResponse) ErrorKind {
-        const map = std.StaticStringMap(ErrorKind).initComptime(.{
-            .{ "network", .network },
-            .{ "timeout", .timeout },
-            .{ "aborted", .aborted },
-            .{ "cors", .cors },
-            .{ "dns", .dns },
-            .{ "tls", .tls },
-            .{ "http", .http },
-        });
-        return map.get(self.error_kind) orelse .unknown;
-    }
-
-    pub fn isTimeout(self: ErrResponse) bool {
-        return self.kind() == .timeout;
-    }
-
-    pub fn isNetworkError(self: ErrResponse) bool {
-        return self.kind() == .network;
-    }
-
-    pub fn clone(self: ErrResponse, arena_type: Vapor.ArenaType) ErrResponse {
-        var allocated_headers: ?std.json.ArrayHashMap([]const u8) = null;
-        const allocator = Vapor.arena(arena_type);
-        if (self.headers) |headers| {
-            allocated_headers = undefined;
-            allocated_headers.?.map = headers.map.clone(allocator) catch unreachable;
-        }
-
-        return ErrResponse{
-            .code = self.code,
-            .type = Vapor.dupe(self.type, arena_type),
-            .message = Vapor.dupe(self.message, arena_type),
-            .ok = self.ok,
-            .url = Vapor.dupe(self.url, arena_type),
-            .redirected = self.redirected,
-            .body = Vapor.dupe(self.body, arena_type),
-            .headers = allocated_headers,
-            .content_type = Vapor.dupe(self.content_type, arena_type),
-            .content_length = self.content_length,
-            .elapsed_ms = self.elapsed_ms,
-            .error_kind = Vapor.dupe(self.error_kind, arena_type),
-            .error_name = Vapor.dupe(self.error_name, arena_type),
-        };
-    }
-
-    pub fn deinit(self: *ErrResponse, arena_type: Vapor.ArenaType) void {
-        const allocator = Vapor.arena(arena_type);
-        allocator.free(self.type);
-        allocator.free(self.message);
-        allocator.free(self.url);
-        allocator.free(self.content_type);
-        allocator.free(self.error_kind);
-        allocator.free(self.error_name);
-        if (self.headers) |*headers| {
-            headers.deinit(allocator);
-        }
-    }
-};
-
-pub const Response = union(enum) {
-    Ok: OkResponse,
-    Err: ErrResponse,
-
-    pub fn isOk(self: Response) bool {
-        return self == .Ok;
-    }
-
-    pub fn isErr(self: Response) bool {
-        return self == .Err;
-    }
-
-    /// Returns the status code (0 for network errors)
-    pub fn statusCode(self: Response) u32 {
-        return switch (self) {
-            .Ok => |r| r.code,
-            .Err => |r| r.code,
-        };
-    }
-
-    /// Returns the URL (final URL after redirects for ok)
-    pub fn url(self: Response) []const u8 {
-        return switch (self) {
-            .Ok => |r| r.url,
-            .Err => |r| r.url,
-        };
-    }
-
-    /// Returns elapsed time in ms
-    pub fn elapsedMs(self: Response) u32 {
-        return switch (self) {
-            .Ok => |r| r.elapsed_ms,
-            .Err => |r| r.elapsed_ms,
-        };
-    }
-
-    /// Unwrap the ok response or return null
-    pub fn ok(self: Response) ?OkResponse {
-        return switch (self) {
-            .Ok => |r| r,
-            .Err => null,
-        };
-    }
-
-    /// Unwrap the err response or return null
-    pub fn err(self: Response) ?ErrResponse {
-        return switch (self) {
-            .Err => |r| r,
-            .Ok => null,
-        };
-    }
-};
-
-// pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
-//     const resp = std.mem.span(resp_ptr);
-//     const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.persist), resp, .{}) catch |err| {
-//         Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
-//         return;
-//     };
-//
-//     const json_resp: Response = parsed_value.value;
-//
-//     if (json_resp.isErr()) {
-//         const e = json_resp.err().?;
-//         Vapor.printlnErr(
-//             "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
-//             .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
-//         );
-//     }
-//
-//     const node = Vapor.fetch_registry.get(id) orelse return;
-//     @call(.auto, node.data.runFn, .{ &node.data, json_resp });
-// }
 
 pub const HttpReqOffset = struct {
     method_ptr: [*]const u8 = undefined,
@@ -1094,7 +470,7 @@ pub const HttpHeader = struct {
     value: []const u8,
 };
 
-const Headers = struct {
+pub const Headers = struct {
     content_type: []const u8 = "text/html",
     authorization: ?[]const u8 = null,
     accept: ?[]const u8 = null,
@@ -1127,191 +503,8 @@ pub const HttpReq = struct {
     use_credentials: bool = false,
     credentials: ?[]const u8 = null,
     extra_headers: []const HttpHeader = &.{},
+    key: ?[]const u8 = null,
 };
-
-var http_req_view: HttpReqOffset = HttpReqOffset{};
-fn generateHttpLayout(http_req: HttpReq) *u8 {
-    http_req_view.method_ptr = @tagName(http_req.method).ptr;
-    http_req_view.method_len = @tagName(http_req.method).len;
-
-    if (http_req.headers) |h| {
-        if (h.content_type) |ct| {
-            http_req_view.content_type_ptr = ct.ptr;
-            http_req_view.content_type_len = ct.len;
-        }
-        if (h.authorization) |au| {
-            http_req_view.authorization_ptr = au.ptr;
-            http_req_view.authorization_len = au.len;
-        }
-        if (h.accept) |ac| {
-            http_req_view.accept_ptr = ac.ptr;
-            http_req_view.accept_len = ac.len;
-        }
-        if (h.user_agent) |us| {
-            http_req_view.user_agent_ptr = us.ptr;
-            http_req_view.user_agent_len = us.len;
-        }
-
-        if (http_req.extra_headers.len > 0) {
-            http_req_view.extra_headers_ptr = http_req.extra_headers.ptr;
-            http_req_view.extra_headers_len = http_req.extra_headers.len;
-        }
-    }
-    if (http_req.body) |b| {
-        http_req_view.body_ptr = b.ptr;
-        http_req_view.body_len = b.len;
-    }
-    if (http_req.mode) |m| {
-        http_req_view.mode_ptr = m.ptr;
-        http_req_view.mode_len = m.len;
-    }
-    if (http_req.redirect) |r| {
-        http_req_view.redirect_ptr = r.ptr;
-        http_req_view.redirect_len = r.len;
-    }
-    if (http_req.referrer_policy) |rp| {
-        http_req_view.referrer_policy_ptr = rp.ptr;
-        http_req_view.referrer_policy_len = rp.len;
-    }
-    if (http_req.integrity) |i| {
-        http_req_view.integrity_ptr = i.ptr;
-        http_req_view.integrity_len = i.len;
-    }
-    http_req_view.use_credentials = http_req.use_credentials;
-
-    const ptr: *u8 = @ptrCast(&http_req_view);
-    return ptr;
-}
-
-var http_buf: [4096]u8 = undefined;
-fn constructHeaders(headers: Headers, extra_headers: []const HttpHeader, writer: *String) void {
-    writer.append_str("\"Content-Type\": ");
-    writer.append_str("\"");
-    writer.append_str(headers.content_type);
-    writer.append_str("\"");
-    if (headers.user_agent) |user_agent| {
-        writer.append_str(",\n");
-        writer.append_str("\"User-Agent\": ");
-        writer.append_str("\"");
-        writer.append_str(user_agent);
-        writer.append_str("\"");
-    }
-    if (headers.authorization) |authorization| {
-        writer.append_str(",\n");
-        writer.append_str("\"Authorization\": ");
-        writer.append_str("\"");
-        writer.append_str(authorization);
-        writer.append_str("\"");
-    }
-    if (headers.accept) |accept| {
-        writer.append_str(",\n");
-        writer.append_str("\"Accept\": ");
-        writer.append_str("\"");
-        writer.append_str(accept);
-        writer.append_str("\"");
-    }
-
-    for (extra_headers) |header| {
-        writer.append_str(",\n");
-        writer.append_str("\"");
-        writer.append_str(header.name);
-        writer.append_str("\"");
-        writer.append_str(": ");
-        writer.append_str("\"");
-        writer.append_str(header.value);
-        writer.append_str("\"");
-    }
-}
-
-pub fn fetchWithParams(url: []const u8, self: anytype, cb: anytype, http_req: HttpReq) void {
-    var writer = String.new();
-    writer.append_str("{\n\"method\": ");
-    writer.append_str("\"");
-    writer.append_str(@tagName(http_req.method));
-    writer.append_str("\"");
-    if (http_req.headers) |headers| {
-        writer.append_str(",\n\"headers\": {\n");
-        constructHeaders(headers, http_req.extra_headers, &writer);
-        writer.append_str("\n}");
-    } else if (http_req.extra_headers.len > 0) {
-        writer.append_str(",\n\"headers\": {\n");
-        var count: usize = 1;
-        for (http_req.extra_headers) |header| {
-            writer.append_str("\"");
-            writer.append_str(header.name);
-            writer.append_str("\"");
-            writer.append_str(": ");
-            writer.append_str("\"");
-            writer.append_str(header.value);
-            writer.append_str("\"");
-            if (count < http_req.extra_headers.len) {
-                writer.append_str(",\n");
-            }
-            count += 1;
-        }
-        writer.append_str("\n}");
-    }
-
-    if (http_req.credentials) |credentials| {
-        writer.append_str(",\n\"credentials\": ");
-        writer.append_str("\"");
-        writer.append_str(credentials);
-        writer.append_str("\"");
-    }
-
-    if (http_req.body) |body| {
-        writer.append_str(",\n\"body\": ");
-        switch (http_req.body_type) {
-            .string => {
-                writer.append_str("\"");
-                writer.append_str(body);
-                writer.append_str("\"");
-            },
-            .json => {
-                writer.append_str(body);
-            },
-        }
-    }
-    writer.append_str("\n}");
-
-    const final = writer.contents[0..writer.len];
-    const json = std.json.fmt(final, .{ .whitespace = .indent_1 }).value;
-    // const http_req_offset_ptr = generateHttpLayout(http_req);
-
-    const Args = @TypeOf(self);
-    const Closure = struct {
-        self: Args,
-        fetch_node: FetchNode = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
-        //
-        fn runFn(action: *FetchAction, resp: Response) void {
-            const fetch_node: *FetchNode = @fieldParentPtr("data", action);
-            const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", fetch_node));
-            @call(.auto, cb, .{ closure.self, resp });
-        }
-        //
-        fn deinitFn(node: *FetchNode) void {
-            const closure: *@This() = @alignCast(@fieldParentPtr("fetch_node", node));
-            Vapor.allocator_global.destroy(closure);
-        }
-    };
-
-    const closure = Vapor.allocator_global.create(Closure) catch |err| {
-        Vapor.println("Error could not create closure {any}\n ", .{err});
-        unreachable;
-    };
-    closure.* = .{
-        .self = self,
-    };
-
-    const id = Vapor.fetch_registry.count() + 1;
-    Vapor.fetch_registry.put(id, &closure.fetch_node) catch |err| {
-        Vapor.println("Button Function Registry {any}\n", .{err});
-        return;
-    };
-    fetchParamsWasm(url.ptr, url.len, id, json.ptr, json.len);
-}
-
-const http = std.http;
 
 const Param = struct {
     key: []const u8,
@@ -1392,7 +585,7 @@ pub const QueryBuilder = struct {
         // utils.assert_cm(query_builder.query_param_list.capacity > 0, "QueryBuilder not initilized");
         for (query_builder.params.items, 0..) |query_param, i| {
             if (std.mem.eql(u8, query_param.key, key)) {
-                _ = query_builder.query_param_list.orderedRemove(i);
+                _ = query_builder.params.orderedRemove(i);
                 break;
             }
         }
@@ -1408,20 +601,18 @@ pub const QueryBuilder = struct {
     /// # Returns:
     /// []const u8
     pub fn urlEncoder(query_builder: *QueryBuilder, url: []const u8) ![]const u8 {
-        var encoded = std.array_list.Managed(u8).init(query_builder.allocator);
-        defer encoded.deinit();
+        var allocating: std.Io.Writer.Allocating = .init(query_builder.allocator);
+        defer allocating.deinit();
+        const w = &allocating.writer;
 
         for (url) |c| {
             switch (c) {
-                'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.', '~' => try encoded.append(c),
-                ' ' => try encoded.appendSlice("%20"),
-                else => {
-                    try encoded.writer().print("%{X:0>2}", .{c});
-                },
+                'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.', '~' => try w.writeByte(c),
+                ' ' => try w.writeAll("%20"),
+                else => try w.print("%{X:02}", .{c}),
             }
         }
-
-        return encoded.toOwnedSlice();
+        return allocating.toOwnedSlice();
     }
 
     /// This function encodes the query and set query_builder.str.
@@ -1698,7 +889,7 @@ pub const API = struct {
         };
         var params = std.StringHashMap([]const u8).init(Vapor.arena(.frame));
         if (params_str.len != 0) {
-            params = Kit.parseParams(params_str, Vapor.allocator_global) catch return orelse return;
+            params = Kit.parseParams(params_str, Vapor.arena(.frame)) catch return orelse return;
         }
         const context = Vapor.HookContext{
             .from_path = "",
@@ -1706,103 +897,8 @@ pub const API = struct {
             .params = params,
             .query = params,
         };
-        Vapor.println("Hook {any}\n", .{context});
         @call(.auto, hook_cb, .{context});
     }
-
-    pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
-        const resp = std.mem.span(resp_ptr);
-
-        // Look up the fetch node to find the associated entry
-        const node = Vapor.fetch_registry.get(id) orelse return;
-
-        // Walk from node back to the Closure to get the entry
-        // const closure: *Fetch.Closure = @alignCast(@fieldParentPtr("fetch_node", node));
-        // const entry = closure.entry_ptr;
-
-        const allocator = @call(.auto, node.data.allocator, .{node});
-
-        // Parse into the entry's arena — data lives until next fetch to same endpoint
-        const parsed_value = std.json.parseFromSlice(
-            Response,
-            allocator,
-            resp,
-            .{ .ignore_unknown_fields = true },
-        ) catch |err| {
-            Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
-            @call(.auto, node.data.runFn, .{ &node.data, Response{ .Err = .{
-                .code = 0,
-                .message = "",
-                .type = "",
-                .ok = false,
-                .url = "",
-                .redirected = false,
-                .body = resp,
-                .headers = null,
-                .content_type = "",
-                .content_length = 0,
-                .elapsed_ms = 0,
-                .error_kind = "",
-                .error_name = "",
-            } } });
-            Vapor.cycle();
-            return;
-        };
-
-        const json_resp: Response = parsed_value.value;
-
-        if (json_resp.isErr()) {
-            const e = json_resp.err().?;
-            std.log.err(
-                "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
-                .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
-            );
-        }
-
-        @call(.auto, node.data.runFn, .{ &node.data, json_resp });
-        Vapor.cycle();
-    }
-
-    // pub fn resumeCallback(id: u32, resp_ptr: [*:0]u8) callconv(.c) void {
-    //     const resp = std.mem.span(resp_ptr);
-    //     const parsed_value = std.json.parseFromSlice(Response, Vapor.arena(.frame), resp, .{
-    //         .ignore_unknown_fields = true,
-    //     }) catch |err| {
-    //         Vapor.printlnSrcErr("Error could not parse response {any} {s}\n", .{ err, resp }, @src());
-    //         const node = Vapor.fetch_registry.get(id) orelse return;
-    //         @call(.auto, node.data.runFn, .{ &node.data, Response{ .Err = .{
-    //             .code = 0,
-    //             .message = "",
-    //             .type = "",
-    //             .ok = false,
-    //             .url = "",
-    //             .redirected = false,
-    //             .body = resp,
-    //             .headers = null,
-    //             .content_type = "",
-    //             .content_length = 0,
-    //             .elapsed_ms = 0,
-    //             .error_kind = "",
-    //             .error_name = "",
-    //         } } });
-    //         Vapor.cycle();
-    //         return;
-    //     };
-    //
-    //     const json_resp: Response = parsed_value.value;
-    //
-    //     if (json_resp.isErr()) {
-    //         const e = json_resp.err().?;
-    //         std.log.err(
-    //             "\nFETCH ERROR [{s}] {s}\n  URL: {s}\n  Code: {d} - {s}\n  Time: {d}ms\n",
-    //             .{ e.error_kind, e.error_name, e.url, e.code, e.message, e.elapsed_ms },
-    //         );
-    //     }
-    //
-    //     const node = Vapor.fetch_registry.get(id) orelse return;
-    //     @call(.auto, node.data.runFn, .{ &node.data, json_resp });
-    //     Vapor.cycle();
-    // }
 
     pub fn getObserverOptions(options: *ObserverOptions) callconv(.c) [*]const u8 {
         ObserverExport.init();
@@ -1836,6 +932,185 @@ pub const API = struct {
         const nodes = Vapor.observer_nodes.get(name) orelse return 0;
         const node = nodes.items[index];
         return node.uuid.len;
+    }
+
+    pub fn getResizeOptions(options: *ResizeOptions) callconv(.c) [*]const u8 {
+        ResizeOptionsExport.init();
+        ResizeOptionsExport.instance = options.*;
+        return ResizeOptionsExport.getInstancePtr();
+    }
+
+    pub fn getResizeOptionsFieldCount() callconv(.c) u32 {
+        return ResizeOptionsExport.getFieldCount();
+    }
+
+    pub fn getResizeOptionsFieldDescriptor(index: u32) callconv(.c) ?*const DynamicObject.FieldDescriptor() {
+        return ResizeOptionsExport.getFieldDescriptor(index);
+    }
+};
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// RESIZE
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub const ResizeBox = enum(u8) {
+    content_box = 0,
+    border_box = 1,
+    device_pixel_content_box = 2,
+};
+
+pub const ResizeOptions = struct {
+    box: ResizeBox = .content_box,
+};
+
+pub const ResizeEntry = struct {
+    /// Width of the border box (CSS pixels)
+    width: f32,
+    /// Height of the border box
+    height: f32,
+    /// Width of the content box (excludes padding/border)
+    content_width: f32,
+    /// Content box height
+    content_height: f32,
+    /// Optional index (for users observing many elements via the primitive)
+    index: usize,
+};
+
+pub var global_resizer: ?ResizeObserver = undefined;
+
+fn globalResizeCallback(_: ResizeEntry) void {
+    std.log.info("Resized code container", .{});
+}
+
+pub fn defaultResizeObserver() *ResizeObserver {
+    if (global_resizer) |*resizer| return resizer;
+    const resizer = ResizeObserver.new("vapor_global_resizer", globalResizeCallback, .{});
+    global_resizer = resizer;
+    return &global_resizer.?;
+}
+
+const ResizeOptionsExport = DynamicObject.exportStruct(ResizeOptions);
+
+pub const ResizeCallback = struct {
+    ctx: *anyopaque,
+    callFn: *const fn (*anyopaque, *DynamicObject.DynamicObject) void,
+    dynamic_object: ?*DynamicObject = null,
+
+    pub fn call(self: *const ResizeCallback, entry: *DynamicObject.DynamicObject) void {
+        self.callFn(self.ctx, entry);
+    }
+
+    pub fn make(allocator: std.mem.Allocator, cb: anytype, args: anytype) !ResizeCallback {
+        const Args = @TypeOf(args);
+
+        const Closure = struct {
+            arguments: Args,
+
+            fn run(ptr: *anyopaque, dyn_obj: *DynamicObject.DynamicObject) void {
+                const self: *@This() = @ptrCast(@alignCast(ptr));
+                // cb is comptime-captured, append entry to the args
+                const entry: ResizeEntry = DynamicObject.convertFromDynamicToType(ResizeEntry, dyn_obj);
+                @call(.auto, cb, self.arguments ++ .{entry});
+            }
+        };
+
+        const closure = try allocator.create(Closure);
+        closure.* = .{ .arguments = args };
+
+        return .{
+            .ctx = @ptrCast(closure),
+            .callFn = Closure.run,
+        };
+    }
+};
+
+pub const ResizeObserver = struct {
+    pub const Entry = ResizeEntry;
+
+    name: []const u8,
+    callback: *const fn (Entry) void,
+    observer_nodes: std.array_list.Managed(Vapor.ObserverNode),
+
+    pub fn new(name: []const u8, callback: fn (Entry) void, options: ResizeOptions) ResizeObserver {
+        const Closure = struct {
+            run_node: Vapor.Node = .{ .data = .{ .runFn = runFn, .deinitFn = deinitFn } },
+            fn runFn(action: *Vapor.Action) void {
+                const run_node: *Vapor.Node = @fieldParentPtr("data", action);
+                const object = run_node.data.dynamic_object orelse {
+                    Vapor.printlnSrcErr("ResizeObserver callback called without object", .{}, @src());
+                    return;
+                };
+                const entry: Entry = DynamicObject.convertFromDynamicToType(Entry, object);
+                @call(.auto, callback, .{entry});
+            }
+            fn deinitFn(_: *Vapor.Node) void {}
+        };
+
+        const closure = Vapor.arena(.persist).create(Closure) catch unreachable;
+        closure.* = .{};
+
+        const hash = hashKey(name);
+        Vapor.ctx_callback_registry.put(hash, &closure.run_node) catch |err| {
+            Vapor.println("ResizeObserver registry error {any}\n", .{err});
+        };
+
+        if (isWasi) {
+            Wasm.createResizeObserverWasm(hash, &options);
+        }
+
+        return ResizeObserver{
+            .name = name,
+            .callback = callback,
+            .observer_nodes = std.array_list.Managed(Vapor.ObserverNode).init(Vapor.arena(.persist)),
+        };
+    }
+
+    pub fn observeWithCallback(self: *ResizeObserver, item: Vapor.ObserverNode, callback_hash: ?u32) void {
+        if (!isWasi) return;
+        self.observer_nodes.append(item) catch unreachable;
+        const hash = hashKey(self.name);
+        switch (item) {
+            .uuid => |uuid| {
+                Wasm.observeResizeWasm(hash, uuid.ptr, uuid.len, callback_hash orelse 0);
+            },
+            .type => |element_type| {
+                const tag = @tagName(element_type);
+                Wasm.observeResizeWasm(hash, tag.ptr, tag.len, callback_hash orelse 0);
+            },
+        }
+    }
+
+    pub fn observe(self: *ResizeObserver, item: Vapor.ObserverNode, index: ?usize) void {
+        if (!isWasi) return;
+        self.observer_nodes.append(item) catch unreachable;
+        const hash = hashKey(self.name);
+        switch (item) {
+            .uuid => |uuid| {
+                Wasm.observeResizeWasm(hash, uuid.ptr, uuid.len, index orelse 0);
+            },
+            .type => |element_type| {
+                const tag = @tagName(element_type);
+                Wasm.observeResizeWasm(hash, tag.ptr, tag.len, index orelse 0);
+            },
+        }
+    }
+
+    pub fn unobserve(self: *ResizeObserver, uuid: []const u8) void {
+        if (!isWasi) return;
+        const hash = hashKey(self.name);
+        Wasm.unobserveResizeWasm(hash, uuid.ptr, uuid.len);
+    }
+
+    pub fn disconnect(self: *ResizeObserver) void {
+        if (!isWasi) return;
+        const hash = hashKey(self.name);
+        Wasm.disconnectResizeObserverWasm(hash);
+    }
+
+    pub fn destroy(name: []const u8) void {
+        if (!isWasi) return;
+        // The JS side keys observers by name hash, same as `disconnect`.
+        Wasm.destroyResizeObserverWasm(hashKey(name));
     }
 };
 
@@ -1877,16 +1152,6 @@ const export_names = blk: {
     break :blk names;
 };
 
-// 2. Runtime logging function
-pub fn log() void {
-    Vapor.println("Exported functions: {d}\n", .{export_names.len});
-    // We simply iterate over the const slice we created above
-    for (export_names) |name| {
-        Vapor.print("Exported: {s}\n", .{name});
-        // Or: Vapor.print("{s}\n", .{name});
-    }
-}
-
 const WssOptions = struct {
     key: []const u8,
     query: []const u8,
@@ -1914,11 +1179,13 @@ var wss_callbacks: ?std.AutoHashMap(u32, WssOptions) = null;
 pub const Wss = struct {
     id: u32,
     pub fn send(wss: *const Wss, msg: []const u8) void {
+        if (!isWasi) return;
         sendWss(wss.id, msg.ptr, msg.len);
     }
 };
 
 pub fn useWss(wss_options: WssOptions) !Wss {
+    if (!isWasi) return error.WasiOnly;
     if (wss_callbacks == null) {
         wss_callbacks = std.AutoHashMap(u32, WssOptions).init(Vapor.arena(.persist));
         const key = utils.hash(wss_options.key);

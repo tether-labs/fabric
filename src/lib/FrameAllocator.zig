@@ -4,6 +4,7 @@ const Allocator = mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
 const UINode = @import("UITree.zig").UINode;
 const Item = @import("UITree.zig").Item;
+const Vapor = @import("Vapor.zig");
 
 // The FrameAllocator is a simple allocator that allocates memory per render cycle.
 // It is used to allocate memory for the render commands and the UI tree, text, and styles, etc.
@@ -111,8 +112,6 @@ pub const Stats = struct {
 
 const FrameAllocator = @This();
 persistent_arena: Arena,
-// frames: [NUMBER_OF_FRAMES]FrameData,
-// current_frame: usize = 0,
 view: [NUMBER_OF_FRAMES]FrameData,
 current_route: usize = 0,
 request_arena: Arena,
@@ -160,9 +159,9 @@ pub fn frameAllocator(self: *FrameAllocator) Allocator {
     if (self.current_route_arena) |route| {
         return route.allocator();
     }
-    std.log.err("Cannot access the frame allocator, first create the Route via Page() then proceed with initliazation", .{});
-    return self.persistentAllocator();
-    // @panic("No route set - call setCurrentRoute first");
+    // Vapor.printErr("Cannot access the frame allocator, first create the Route via Page() then proceed with initliazation", .{});
+    // return self.persistentAllocator();
+    @panic("No route set - call setCurrentRoute first");
 }
 
 // Begin frame on the current route
@@ -176,14 +175,6 @@ pub fn beginView(self: *FrameAllocator) void {
     if (self.current_route_arena) |route| {
         route.beginView();
     }
-    // // Move to next frame
-    // const next_route = (self.current_route + 1) % NUMBER_OF_FRAMES;
-    //
-    // // Clear the route we're about to use
-    // _ = self.view[next_route].arena.reset(.retain_capacity);
-    // self.view[next_route].stats = .{};
-    //
-    // self.current_route = next_route;
 }
 
 pub fn persistentAllocator(self: *FrameAllocator) Allocator {
@@ -201,24 +192,6 @@ pub fn resetScratchArena(self: *FrameAllocator) void {
 pub fn viewAllocator(self: *FrameAllocator) Allocator {
     return self.view[self.current_route].arena.allocator();
 }
-
-// pub fn deinit(self: *FrameAllocator) void {
-//     self.frames[0].arena.deinit();
-//     self.frames[1].arena.deinit();
-//     self.persistent_arena.deinit();
-// }
-//
-// pub fn frameAllocator(self: *FrameAllocator) std.mem.Allocator {
-//     return self.frames[self.current_frame].arena.allocator();
-// }
-//
-// pub fn requestAllocator(self: *FrameAllocator) std.mem.Allocator {
-//     return self.request_arena.allocator();
-// }
-
-// pub fn viewAllocator(self: *FrameAllocator) std.mem.Allocator {
-//     return self.view[self.current_route].arena.allocator();
-// }
 
 pub fn incrementNodeCount(self: *FrameAllocator) void {
     if (self.current_route_arena) |route| {
@@ -242,12 +215,14 @@ pub fn queryBytesUsed(self: *FrameAllocator) usize {
     if (self.current_route_arena) |route| {
         return route.queryBytesUsed();
     }
+    return 0;
 }
 
 pub fn queryNodes(self: *FrameAllocator) usize {
-    const total = self.frames[self.current_frame].stats.nodes_allocated;
-    // Vapor.println("-------------Nodes Allocated {d}", .{self.frames[self.current_frame].stats.nodes_allocated});
-    return total;
+    if (self.current_route_arena) |route| {
+        return route.getStats().nodes_allocated;
+    }
+    return 0;
 }
 
 /// This is now just a simple, fast create() from the arena

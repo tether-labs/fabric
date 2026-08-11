@@ -5,6 +5,10 @@ const Writer = @import("Writer.zig");
 
 pub const Edges = @This();
 
+pub fn new() void {
+    Vapor.edges_table = std.StringHashMap(Edges).init(Vapor.arena(.persist));
+}
+
 // ============================================
 // TYPES
 // ============================================
@@ -597,7 +601,8 @@ fn writeFloat(self: Edges, writer: *Writer, val: f32) void {
 // ============================================
 
 pub fn build(self: Edges) void {
-    Vapor.edges_table.put(self.class, self) catch |err| {
+    if (Vapor.edges_table == null) return;
+    Vapor.edges_table.?.put(self.class, self) catch |err| {
         Vapor.println("Could not create edges {any}\n", .{err});
     };
 }

@@ -278,7 +278,7 @@ pub fn writeU32(self: *Writer, value: u32) !void {
 
 pub fn print(self: *Writer) !void {
     const len: usize = self.pos;
-    Vapor.println("{s}", .{self.buffer[0..len]});
+    std.log.info("{s}", .{self.buffer[0..len]});
 }
 
 /// Print only the current segment (from start to pos)

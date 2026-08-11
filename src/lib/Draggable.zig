@@ -3,7 +3,7 @@ const Vapor = @import("Vapor.zig");
 
 // Draggable behavior that can be attached to any element
 pub const Draggable = struct {
-    element: Vapor.Binded = .{},
+    element: *Vapor.Binded,
 
     // State
     initial_x: f32 = 0,
@@ -68,7 +68,7 @@ pub const Draggable = struct {
 
     // Initialize a draggable with fluent API
     pub fn init(element: *Vapor.Binded) *Draggable {
-        const self = Vapor.getPersistentAllocator().create(Draggable) catch unreachable;
+        const self = Vapor.arena(.persist).create(Draggable) catch unreachable;
         self.* = .{ .element = element };
 
         // Setup listeners on the element or handle
@@ -86,7 +86,7 @@ pub const Draggable = struct {
     }
 
     pub fn deinit(self: *Draggable) void {
-        Vapor.getPersistentAllocator().destroy(self);
+        Vapor.arena(.persist).destroy(self);
     }
 
     // Fluent configuration API
@@ -265,14 +265,14 @@ pub const Draggable = struct {
     pub fn destroy(self: *Draggable) void {
         // Clean up listeners
         if (self.move_listener_id) |id| {
-            _ = Vapor.document.removeListener(.pointermove, id);
+            _ = Vapor.removeGlobalListener(.pointermove, id);
         }
         if (self.up_listener_id) |id| {
-            _ = Vapor.document.removeListener(.pointerup, id);
+            _ = Vapor.removeGlobalListener(.pointerup, id);
         }
         // TODO: Remove pointerdown listener from element/handle
 
-        Vapor.allocator.destroy(self);
+        Vapor.arena(.persist).destroy(self);
     }
 };
 

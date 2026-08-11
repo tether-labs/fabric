@@ -68,4 +68,3 @@ pub const StorageTable = struct {
         return self.entries.items[handle].data;
     }
 };
-

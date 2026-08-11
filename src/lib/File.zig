@@ -182,4 +182,5 @@ pub fn fileInfo(file_reader: *FileReader, file_index: usize) !FileInfo {
         }
         return cloned_form;
     }
+    return error.NonWasi;
 }

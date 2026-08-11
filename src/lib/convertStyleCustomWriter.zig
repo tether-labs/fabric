@@ -30,6 +30,7 @@ const Writer = @import("Writer.zig");
 const Theme = @import("theme");
 const StringTable = @import("StringTable.zig").StringTable;
 const Edges = @import("Edges.zig").Edges;
+const KeyGenerator = @import("Key.zig").KeyGenerator;
 
 const writer_t = *Writer;
 // Global buffer to store the CSS string for returning to JavaScript
@@ -55,12 +56,12 @@ const PropValue = struct {
         white_space,
         flex_wrap,
         alignment,
+        text_alignment,
         layer,
         dots,
         color,
         list_style,
         outline,
-        // animation_specs,
         transition,
         shadow,
         border,
@@ -75,6 +76,7 @@ const PropValue = struct {
         background_layers,
         caret,
         resize,
+        animation_play_state,
     };
 
     // Union to hold the actual data
@@ -93,12 +95,12 @@ const PropValue = struct {
         white_space: Types.WhiteSpace,
         flex_wrap: Types.FlexWrap,
         alignment: Types.Alignment,
+        text_alignment: Types.Alignment,
         layer: Types.PackedGrid,
         dots: Types.PackedDots,
         color: Types.PackedColor,
         list_style: Types.ListStyle,
         outline: Types.Outline,
-        // animation_specs: Animation.Specs,
         transition: Types.PackedTransition,
         shadow: Types.PackedShadow,
         border: Types.Border,
@@ -113,6 +115,7 @@ const PropValue = struct {
         background_layers: Types.PackedLayers,
         caret: Types.PackedCaret,
         resize: Types.Resize,
+        animation_play_state: Types.AnimationPlayState,
     };
 };
 
@@ -123,7 +126,6 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
     writer.writeByte(':') catch return;
 
     switch (value.tag) {
-        // else => {},
         .position_type => positionTypeToCSS(value.data.position_type, writer) catch {},
         .direction => directionToCSS(value.data.direction, writer) catch {},
         .sizing => sizingTypeToCSS(value.data.sizing, writer) catch {},
@@ -225,6 +227,7 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
         .white_space => whiteSpaceToCSS(value.data.white_space, writer) catch {},
         .flex_wrap => flexWrapToCSS(value.data.flex_wrap, writer) catch {},
         .alignment => alignmentToCSS(value.data.alignment, writer) catch {},
+        .text_alignment => textAlignmentToCSS(value.data.text_alignment, writer) catch {},
         .layer => gridToCSS(value.data.layer, writer) catch {},
         .dots => dotsToCSS(value.data.dots, writer) catch {},
         .gradient => gradientToCSS(value.data.gradient, writer) catch {},
@@ -281,6 +284,9 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
         .aspect_ratio => aspectRatioToCSS(value.data.aspect_ratio, writer) catch {},
         // This new case handles simple string values efficiently.
         .string_literal => writer.write(value.data.string_literal) catch {},
+        .animation_play_state => {
+            writer.write(@tagName(value.data.animation_play_state)) catch {};
+        },
     }
     writer.write(";\n") catch {};
 }
@@ -288,10 +294,13 @@ pub fn writePropValue(prop: []const u8, value: PropValue, writer: writer_t) void
 // Maps for simple enum-to-string conversions
 const direction_map = [_][]const u8{ "column", "row" };
 const alignment_map = [_][]const u8{ "none", "center", "flex-start", "flex-end", "flex-start", "flex-end", "space-between", "space-evenly", "flex-start", "anchor-start", "anchor-end", "anchor-center" };
+const text_alignment_map = [_][]const u8{ "none", "center", "", "", "left", "right", "", "", "", "", "", "" };
 const position_type_map = [_][]const u8{ "none", "relative", "absolute", "fixed", "sticky" };
 const float_type_map = [_][]const u8{ "top", "bottom", "left", "right" };
 const transform_origin_map = [_][]const u8{ "default", "top", "bottom", "right", "left", "top center", "bottom center", "right center", "left center" };
-const text_decoration_type_map = [_][]const u8{ "default", "none", "overline", "underline", "inherit", "initial", "revert", "unset", "line-through" };
+// Indexed by @intFromEnum(Types.TextDecorationType) in writeMappedString, which
+// does not bounds-check. Keep in lockstep with that enum.
+const text_decoration_type_map = [_][]const u8{ "default", "none", "overline", "underline", "inherit", "initial", "revert", "unset", "line-through", "blink" };
 const text_decoration_style_map = [_][]const u8{ "default", "solid", "double", "dotted", "dashed", "wavy", "inherit", "initial", "revert", "unset" };
 const appearance_map = [_][]const u8{ "none", "auto", "button", "textfield", "menulist", "searchfield", "textarea", "checkbox", "radio", "inherit", "initial", "revert", "unset" };
 const outline_map = [_][]const u8{ "default", "none", "auto", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset", "inherit", "initial", "revert", "unset" };
@@ -332,6 +341,10 @@ fn directionToCSS(dir: Direction, writer: writer_t) !void {
 
 fn alignmentToCSS(_align: Alignment, writer: writer_t) !void {
     try writeMappedString(Alignment, _align, &alignment_map, writer);
+}
+
+fn textAlignmentToCSS(_align: Alignment, writer: writer_t) !void {
+    try writeMappedString(Alignment, _align, &text_alignment_map, writer);
 }
 
 fn positionTypeToCSS(pos_type: PositionType, writer: writer_t) !void {
@@ -435,12 +448,24 @@ pub fn colorToCSS(color: Types.PackedColor, writer: writer_t) !void {
 
 fn writeThematic(writer: anytype, thematic: Types.Thematic) !void {
     if (thematic.alpha > -1) {
-        try writer.write("rgba(");
-        try writer.write("var(--");
-        try writer.write(@tagName(thematic.token));
-        try writer.write("), ");
-        try writer.writeF32(thematic.alpha);
-        try writer.writeByte(')');
+        if (thematic.darken) {
+            writer.write("color-mix(in srgb, ") catch {};
+
+            try writer.write("rgb(var(--");
+            try writer.write(@tagName(thematic.token));
+            try writer.write("))");
+
+            writer.write(", black ") catch {};
+            writer.writeF32(thematic.alpha * 100) catch {};
+            writer.write("%);\n") catch {};
+        } else {
+            try writer.write("rgba(");
+            try writer.write("var(--");
+            try writer.write(@tagName(thematic.token));
+            try writer.write("), ");
+            try writer.writeF32(thematic.alpha);
+            try writer.writeByte(')');
+        }
     } else {
         try writer.write("rgb(var(--");
         try writer.write(@tagName(thematic.token));
@@ -523,7 +548,6 @@ fn dotsToCSS(dots: Types.PackedDots, writer: anytype) !void {
 }
 
 fn gradientToCSS(gradient: Types.PackedGradient, writer: writer_t) !void {
-    // std.debug.print("Gradient Type Integer: {}\n", .{@intFromEnum(gradient.type)});
     switch (gradient.type) {
         .linear => {
             writer.write("linear-gradient(") catch {};
@@ -699,7 +723,7 @@ fn layersToCSS(packed_layers: Types.PackedLayers, writer: writer_t) !void {
                 writer.writeU16(grid.size) catch {};
                 writer.write("px") catch {};
             },
-            .Lines => |_| {
+            .Lines => {
                 break;
             },
             .Dot => |dots| {
@@ -911,6 +935,11 @@ pub fn writeStyleField(field: Types.StyleFields, visual: *const Types.PackedVisu
                 writePropValue("background", .{ .tag = .color, .data = .{ .color = color } }, writer);
             }
         },
+        .animation_play_state => {
+            if (visual.animation_play_state != .none) {
+                writePropValue("animation-play-state", .{ .tag = .animation_play_state, .data = .{ .animation_play_state = visual.animation_play_state } }, writer);
+            }
+        },
         else => {
             Vapor.printlnErr("StyleField not implemented {any}", .{field});
             unreachable;
@@ -969,17 +998,6 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         }
     }
 
-    // if (visual.letter_spacing > 0) {
-    //     writer.write("letter-spacing:") catch {};
-    //     writer.writeI32(visual.letter_spacing) catch {};
-    //     writer.write("px;\n") catch {};
-    // }
-    // if (visual.line_height) |lh| {
-    //     writer.write("line-height:") catch {};
-    //     writer.writeI32(lh) catch {};
-    //     writer.write("px;\n") catch {};
-    // }
-
     if (visual.font_family_handle != StringTable.null_handle) {
         const font_family = Vapor.string_table.get(visual.font_family_handle);
         if (font_family) |name| {
@@ -1010,12 +1028,8 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
     if (visual.has_border_thickeness) {
         const border_thickness = visual.border_thickness;
         writePropValue("border-width", .{ .tag = .border, .data = .{ .border = border_thickness } }, writer);
-        // writer.write("border-style: solid;\n") catch {};
     }
 
-    // else if (ptr.type == .Button or ptr.type == .CtxButton) {
-    //     _ = writer.write("border:none;\n") catch {};
-    // }
     if (visual.has_border_color) {
         const border_color = visual.border_color;
         writePropValue("border-color", .{ .tag = .color, .data = .{ .color = border_color } }, writer);
@@ -1072,8 +1086,11 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         writer.write(";\n") catch {};
     }
 
-    if (visual.new_shadow > 0) {
-        const shadow = Vapor.shadows.get(visual.new_shadow) orelse unreachable;
+    if (visual.new_shadow > 0) blk: {
+        const shadow = Vapor.shadows.get(visual.new_shadow) orelse {
+            std.log.err("Could not aqurie shadow", .{});
+            break :blk;
+        };
         writer.write("box-shadow:") catch {};
         shadow.writeCss(writer) catch {};
         writer.write(";") catch {};
@@ -1115,16 +1132,24 @@ pub fn generateVisual(visual: *const Types.PackedVisual, writer: writer_t) void 
         }
     }
 
-    if (visual.animation != StringTable.null_handle) {
+    if (visual.animation != StringTable.null_handle) blk: {
         if (Vapor.string_table.get(visual.animation)) |name| {
-            const animation = Vapor.animations.get(name) orelse {
-                Vapor.printlnSrcErr("Animations stringtable not found, please remember to run .build() on the animation within init", .{}, @src());
+            if (Vapor.animations == null) {
+                Vapor.printlnErr("animations map not found, please remember to run Animations.new()", .{});
+                break :blk;
+            }
+            const animation = Vapor.animations.?.get(name) orelse {
+                Vapor.printlnSrcErr("Animations stringtable not found, please remember to run .build() on the animation within init, ensure Animations.new() is called before build", .{}, @src());
                 return;
             };
             writer.write("animation:") catch {};
             generateAnimation(&animation, writer);
             writer.write(";\n") catch {};
         }
+    }
+
+    if (visual.animation_play_state != .none) {
+        writePropValue("animation-play-state", .{ .tag = .animation_play_state, .data = .{ .animation_play_state = visual.animation_play_state } }, writer);
     }
 
     if (visual.color_mix.color_prop != .default) {
@@ -1160,7 +1185,10 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
     const placement = layout_ptr.placement;
     const direction = layout_ptr.direction;
 
-    if (layout_ptr.flex != .default) {
+    if (layout_ptr.flex == .hidden) {
+        writePropValue("display", .{ .tag = .flex_type, .data = .{ .flex_type = layout_ptr.flex } }, writer);
+        writePropValue("flex-direction", .{ .tag = .direction, .data = .{ .direction = direction } }, writer);
+    } else if (layout_ptr.flex != .default) {
         writePropValue("display", .{ .tag = .flex_type, .data = .{ .flex_type = layout_ptr.flex } }, writer);
         writePropValue("flex-direction", .{ .tag = .direction, .data = .{ .direction = direction } }, writer);
     }
@@ -1173,7 +1201,7 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writePropValue("justify-content", .{ .tag = .alignment, .data = .{ .alignment = layout.y } }, writer);
         }
     } else if (layout_ptr.text_align.x != .none) {
-        writePropValue("text-align", .{ .tag = .alignment, .data = .{ .alignment = layout_ptr.text_align.x } }, writer);
+        writePropValue("text-align", .{ .tag = .text_alignment, .data = .{ .text_alignment = layout_ptr.text_align.x } }, writer);
     }
 
     if (placement != .none) {
@@ -1201,9 +1229,6 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("px;\n") catch {};
 
             writer.write("width: fit-content;\n") catch {};
-            // writer.write("flex-grow: 1; flex-basis: ") catch {};
-            // writer.writeF32(size.width.size.preferred) catch {};
-            // writer.write("px;\n") catch {};
         } else if (size.width.type == .min_max_vp) {
             writer.write("max-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
@@ -1219,10 +1244,14 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("min-width:") catch {};
             writer.writeF32(size.width.size.min) catch {};
             writer.write("%;\n") catch {};
-        } else if (size.width.type == .min_px) {} else if (size.width.type == .min_px) {
+        } else if (size.width.type == .min_px) {
             writer.write("min-width:") catch {};
             writer.writeF32(size.width.size.min) catch {};
             writer.write("px;\n") catch {};
+        } else if (size.width.type == .vp) {
+            writer.write("width:") catch {};
+            writer.writeF32(size.width.size.min) catch {};
+            writer.write("vw;\n") catch {};
         } else if (size.width.type == .elastic_percent) {
             writer.write("max-width:") catch {};
             writer.writeF32(size.width.size.max) catch {};
@@ -1283,6 +1312,10 @@ pub fn generateLayout(layout_ptr: *const Types.PackedLayout, writer: *Writer) vo
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};
             writer.write("px;\n") catch {};
+        } else if (size.height.type == .vp) {
+            writer.write("height:") catch {};
+            writer.writeF32(size.height.size.min) catch {};
+            writer.write("vh;\n") catch {};
         } else if (size.height.type == .min_max_vp) {
             writer.write("min-height:") catch {};
             writer.writeF32(size.height.size.min) catch {};
@@ -1377,64 +1410,12 @@ pub fn generatePositions(position: *const Types.PackedPosition, writer: *Writer)
 pub fn generateMarginsPadding(margin_paddings_ptr: *const Types.PackedMarginsPaddings, writer: *Writer) void {
     writePropValue("padding", .{ .tag = .padding, .data = .{ .padding = margin_paddings_ptr.padding } }, writer);
     writePropValue("margin", .{ .tag = .margin, .data = .{ .margin = margin_paddings_ptr.margin } }, writer);
-
-    // if (style.font_family) |ff| {
-    //     writer.write("font-family:") catch {};
-    //     writer.write(ff) catch {};
-    //     writer.write(";\n") catch {};
-    // }
-    //
-    // if (style.transition) |tr| {
-    //     writePropValue("transition", .{ .tag = .transition, .data = .{ .transition = tr } }, writer);
-    // }
-    //
-    // if (!style.show_scrollbar) {
-    //     writer.write("scrollbar-width:none;\n") catch {};
-    //     show_scrollbar = false;
-    // }
-    //
-    // if (style.cursor) |c| {
-    //     writePropValue("cursor", .{ .tag = .cursor, .data = .{ .cursor = c } }, writer);
-    // } else if (ptr.type == .Button or ptr.type == .CtxButton or ptr.type == .ButtonCycle) {
-    //     writePropValue("cursor", .{ .tag = .cursor, .data = .{ .cursor = .pointer } }, writer);
-    // }
-    //
-    // if (style.appearance) |ap| {
-    //     writePropValue("appearance", .{ .tag = .appearance, .data = .{ .appearance = ap } }, writer);
-    // }
-    //
-    // if (style.will_change) |wc| {
-    //     switch (wc) {
-    //         .transform => {
-    //             writer.write("will-change:") catch {};
-    //             writer.write("transform") catch {};
-    //             writer.write(";\n") catch {};
-    //         },
-    //         else => {},
-    //     }
-    // }
-    //
-    // if (style.transform_origin) |to| {
-    //     writePropValue("transform-origin", .{ .tag = .transform_origin, .data = .{ .transform_origin = to } }, writer);
-    // }
-
-    // writer.write("box-sizing: border-box;\n") catch {};
-
-    // Null-terminate the string
-    // const len: usize = writer.pos;
-    // css_buffer[len] = 0;
-    // style_style = css_buffer[0..len];
 }
 
 pub fn generateAnimations(animations: *const Types.PackedAnimations, writer: anytype) void {
-    // if (animations.has_transitions) {
-    //     writePropValue("transition", .{ .tag = .transition, .data = .{ .transition = animations.transitions } }, writer);
-    // }
-    // Transform
-
     if (animations.has_animation_enter) {
         if (Vapor.string_table.get(animations.animation_enter)) |name| {
-            const animation = Vapor.animations.get(name) orelse unreachable;
+            const animation = Vapor.animations.?.get(name) orelse unreachable;
             writer.write("animation:") catch {};
             generateAnimation(&animation, writer);
             writer.write(";\n") catch {};
@@ -1503,16 +1484,6 @@ pub fn generateStylePass(ptr: ?*UINode, writer: *Writer) void {
     if (packed_field_ptrs.visual_ptr) |visual_ptr| {
         generateVisual(visual_ptr, writer);
     }
-
-    // if (packed_field_ptrs.animations_ptr) |animations_ptr| {
-    //     Vapor.println("Animations ptr {any}", .{animations_ptr});
-    //     generateAnimations(animations_ptr, writer);
-    // }
-
-    // if (node_ptr.animation_enter) |animation_enter| {
-    //     Vapor.println("Animation_enter ptr {any}", .{animation_enter});
-    //     generateAnimation(animation_enter, writer);
-    // }
 }
 
 pub fn generateAnimation(animation: *const Animation, writer: *Writer) void {
@@ -1536,6 +1507,79 @@ pub fn generateAnimation(animation: *const Animation, writer: *Writer) void {
         writer.writeU32(animation.delay_ms) catch {};
         writer.write("ms ") catch {};
     }
+}
+
+pub export fn getResponsiveStyle(ptr: ?*UINode) ?[*]const u8 {
+    const node_ptr = ptr orelse return null;
+    const packed_field_ptrs = node_ptr.packed_field_ptrs orelse return null;
+    // Use a fixed buffer with a fbs to build the CSS string
+    var writer: Writer = undefined;
+    writer.init(&css_buffer);
+    const value_ptr = packed_field_ptrs.responsive_ptr orelse return null;
+
+    var buf: [128]u8 = undefined;
+    const common_key = KeyGenerator.generateHashKey(&buf, node_ptr.style_hashes[8], "resp");
+
+    if (value_ptr.flags_layout[0]) {
+        writer.write("@media (max-width: 767px) {") catch {};
+        writer.writeByte('.') catch {};
+        writer.write(common_key) catch {};
+        writer.writeByte('{') catch {};
+        writer.writeByte('\n') catch {};
+        generateLayout(&value_ptr.mobile_layout, &writer);
+
+        if (value_ptr.flags_visual[0]) {
+            writer.write("\n") catch {};
+            generateVisual(&value_ptr.mobile_visual, &writer);
+        }
+
+        writer.write("}\n") catch {};
+        writer.write("}\n") catch {};
+    }
+
+    // flag 2 is tablet (applies at tablet and above)
+    if (value_ptr.flags_layout[2]) {
+        writer.write("@media (min-width: 768px) {") catch {};
+
+        writer.writeByte('.') catch {};
+        writer.write(common_key) catch {};
+        writer.writeByte('{') catch {};
+        writer.writeByte('\n') catch {};
+
+        generateLayout(&value_ptr.tablet_layout, &writer);
+
+        if (value_ptr.flags_visual[2]) {
+            writer.write("\n") catch {};
+            generateVisual(&value_ptr.tablet_visual, &writer);
+        }
+
+        writer.write("}\n") catch {};
+        writer.write("}\n") catch {};
+    }
+    // flag 1 is desktop (applies at desktop and above)
+    if (value_ptr.flags_layout[1]) {
+        writer.write("@media (min-width: 1024px) {") catch {};
+
+        writer.writeByte('.') catch {};
+        writer.write(common_key) catch {};
+        writer.writeByte('{') catch {};
+        writer.writeByte('\n') catch {};
+
+        generateLayout(&value_ptr.desktop_layout, &writer);
+
+        if (value_ptr.flags_visual[1]) {
+            writer.write("\n") catch {};
+            generateVisual(&value_ptr.desktop_visual, &writer);
+        }
+
+        writer.write("}\n") catch {};
+        writer.write("}\n") catch {};
+    }
+    // Return a pointer to the CSS string
+    const len: usize = writer.pos;
+    css_buffer[len] = 0;
+    style_style = css_buffer[0..len];
+    return style_style.ptr;
 }
 
 pub export fn getStyle(ptr: ?*UINode) ?[*]const u8 {
@@ -1569,7 +1613,7 @@ pub export fn getStyle(ptr: ?*UINode) ?[*]const u8 {
     if (packed_field_ptrs.animations_ptr) |animations_ptr| {
         if (animations_ptr.has_animation_enter) {
             if (Vapor.string_table.get(animations_ptr.animation_enter)) |name| {
-                const animation = Vapor.animations.get(name) orelse unreachable;
+                const animation = Vapor.animations.?.get(name) orelse unreachable;
                 writer.write("animation:") catch {};
                 generateAnimation(&animation, &writer);
                 writer.write(";\n") catch {};
@@ -1593,9 +1637,6 @@ pub export fn getStyle(ptr: ?*UINode) ?[*]const u8 {
 }
 
 pub export fn getGlobalStyle() ?[*]const u8 {
-    // const user_defaults = Vapor.Style.getDefault();
-    // generateStyle(null, &user_defaults);
-    // Return a pointer to the CSS string
     return style_style.ptr;
 }
 pub const Catalog = struct {
@@ -1651,10 +1692,7 @@ pub fn setGlobalStyleVariables(catalog: Catalog) void {
                     writer.writeU8Num(field_value.Literal.g) catch {};
                     writer.writeByte(',') catch {};
                     writer.writeU8Num(field_value.Literal.b) catch {};
-                    // writer.writeByte(',') catch {};
-                    // writer.writeF32(field_value.Literal.a) catch {};
                     writer.writeByte(';') catch {};
-                    // colorToCSS(field_value, &writer) catch {};
                     writer.write(";\n") catch {};
                 },
                 else => {},
@@ -1703,9 +1741,7 @@ pub export fn getVisualStyle(ptr: ?*UINode, visual_type: u8) ?[*]const u8 {
     }
 
     const interactive = packed_fields.interactive_ptr orelse return null;
-    // const node_style = node_ptr.?.compact_style orelse return null;
     if (visual_type == 0) {
-        // const visual = interactive.hover.?;
         const hover = interactive.hover;
         generateVisual(&hover, &writer);
         const hover_position = interactive.hover_position;
@@ -1716,11 +1752,9 @@ pub export fn getVisualStyle(ptr: ?*UINode, visual_type: u8) ?[*]const u8 {
             writePropValue("transform", .{ .tag = .transform_type, .data = .{ .transform_type = interactive.hover_transform } }, &writer);
         }
     } else if (visual_type == 1) {
-        // const visual = interactive.focus.?;
         const focus = interactive.focus;
         generateVisual(&focus, &writer);
     } else if (visual_type == 2) {
-        // const visual = interactive.focus_within.?;
         const focus_within = interactive.focus_within;
         generateVisual(&focus_within, &writer);
     }
@@ -1879,7 +1913,7 @@ export fn getAnimationStyle(ptr: ?*UINode) ?[*]const u8 {
     writer.init(&css_buffer);
     if (packed_animations.has_animation_enter) {
         if (Vapor.string_table.get(packed_animations.animation_enter)) |name| {
-            const animation = Vapor.animations.get(name) orelse {
+            const animation = Vapor.animations.?.get(name) orelse {
                 Vapor.printErr("Animation not found in animations.zig; Please make sure to Run .build() on the animation", .{});
                 return null;
             };
@@ -1905,7 +1939,7 @@ pub export fn getExitAnimationStyle(ptr: ?*UINode) ?[*]const u8 {
     writer.init(&css_buffer);
     if (packed_animations.has_animation_exit) {
         if (Vapor.string_table.get(packed_animations.animation_exit)) |name| {
-            const animation = Vapor.animations.get(name) orelse {
+            const animation = Vapor.animations.?.get(name) orelse {
                 Vapor.printErr("Exit Animation not found in animations.zig; Please make sure to Run .build() on the animation", .{});
                 return null;
             };
@@ -1925,41 +1959,19 @@ pub export fn getAnimationLen() usize {
     return animations_style.len;
 }
 
-var tooltip_style: []const u8 = "";
-pub export fn getTooltipStyle(
-    _: ?*UINode,
-) ?[*]const u8 {
-    return null;
-    // if (node_ptr == null) return style_style.ptr;
-    // const tooltip = node_ptr.?.tooltip orelse return null;
-    // const style = tooltip.style orelse return null;
-    // var writer: Writer = undefined;
-    // writer.init(&css_buffer);
-    // writer.write("content: attr(data-tooltip);\n") catch {};
-    // generateStylePass(node_ptr, &style, &writer);
-    // // Null-terminate the string
-    // const len: usize = writer.pos;
-    // css_buffer[len] = 0;
-    // tooltip_style = css_buffer[0..len];
-    //
-    // // Return a pointer to the CSS string
-    // return tooltip_style.ptr;
-}
-
-export fn getTooltipStyleLen() usize {
-    return tooltip_style.len;
-}
-
 fn generateEdges(writer: *Writer) void {
-    var it = Vapor.edges_table.iterator();
-    while (it.next()) |entry| {
-        const edges = entry.value_ptr.*;
-        edges.writeCss(writer);
+    if (Vapor.edges_table) |table| {
+        var it = table.iterator();
+        while (it.next()) |entry| {
+            const edges = entry.value_ptr.*;
+            edges.writeCss(writer);
+        }
     }
 }
 
 var edges_str: []const u8 = "";
 export fn getEdgesPtr() ?[*]const u8 {
+    if (Vapor.edges_table == null) return null;
     // Reset writer cursor
     var writer: Writer = undefined;
     var buffer: [8192]u8 = undefined;
@@ -1979,15 +1991,18 @@ export fn getEdgesLen() usize {
 }
 
 fn generatePolygons(writer: *Writer) void {
-    var it = Vapor.polygons_table.iterator();
-    while (it.next()) |entry| {
-        const polygons = entry.value_ptr.*;
-        polygons.writeCss(writer);
+    if (Vapor.polygons_table) |table| {
+        var it = table.iterator();
+        while (it.next()) |entry| {
+            const polygons = entry.value_ptr.*;
+            polygons.writeCss(writer);
+        }
     }
 }
 
 var polygons_str: []const u8 = "";
 export fn getPolygonsPtr() ?[*]const u8 {
+    if (Vapor.polygons_table == null) return null;
     // Reset writer cursor
     var writer: Writer = undefined;
     var buffer: [8192]u8 = undefined;
@@ -2007,6 +2022,7 @@ export fn getPolygonsLen() usize {
 
 pub var animations_str: []const u8 = "";
 pub export fn getAnimationsPtr() ?[*]const u8 {
+    if (Vapor.animations == null) return null;
     // Reset writer cursor
     var writer: Writer = undefined;
     var buffer: [8192 * 4]u8 = undefined;
@@ -2027,10 +2043,12 @@ pub export fn getAnimationsPtr() ?[*]const u8 {
 
 /// Writes all registered animations to the CSS buffer
 pub fn generateAnimationsFrames(writer: writer_t) void {
-    var it = Vapor.animations.iterator();
-    while (it.next()) |entry| {
-        const anim = entry.value_ptr.*;
-        writeKeyframesBlock(anim, writer);
+    if (Vapor.animations) |table| {
+        var it = table.iterator();
+        while (it.next()) |entry| {
+            const anim = entry.value_ptr.*;
+            writeKeyframesBlock(anim, writer);
+        }
     }
 }
 
@@ -2193,78 +2211,7 @@ fn writeAnimStandardValue(p: Animation.PropValue, writer: writer_t) void {
     }
 }
 
-//---------------------------------------------------------
-
-// // Helper to write a single keyframe block (e.g., "25% { ... }")
-// fn writeKeyframe(writer: writer_t, frame: Animation.Keyframe) !void {
-//     writer.print("  {d}% {{\n", .{frame.percent});
-//
-//     // We need to group properties to generate valid CSS:
-//     // transform: translateX(...) rotate(...);
-//     // filter: blur(...) brightness(...);
-//     // opacity: 1;
-//
-//     var has_transform = false;
-//     var has_filter = false;
-//
-//     // 1. Write Transforms
-//     for (frame.props) |p_opt| {
-//         if (p_opt) |p| {
-//             if (p.type.isTransform()) {
-//                 if (!has_transform) {
-//                     try writer.write("    transform:");
-//                     has_transform = true;
-//                 }
-//                 try writePropValue(writer, p);
-//             }
-//         }
-//     }
-//     if (has_transform) try writer.write(";\n");
-//
-//     // 2. Write Filters
-//     for (frame.props) |p_opt| {
-//         if (p_opt) |p| {
-//             if (p.type.isFilter()) {
-//                 if (!has_filter) {
-//                     try writer.write("    filter:");
-//                     has_filter = true;
-//                 }
-//                 try writePropValue(writer, p);
-//             }
-//         }
-//     }
-//     if (has_filter) try writer.write(";\n");
-//
-//     // 3. Write Standard Properties (Opacity, etc.)
-//     for (frame.props) |p_opt| {
-//         if (p_opt) |p| {
-//             if (!p.type.isTransform() and !p.type.isFilter()) {
-//                 try writer.print("    {s}: ", .{p.type.toCss()});
-//                 try writePropValueInner(writer, p);
-//                 try writer.write(";\n");
-//             }
-//         }
-//     }
-//
-//     try writer.write("  }\n");
-// }
-//
-// // Writes just the number + unit: "10px", "0.5", "90deg"
-// fn writePropValueInner(writer: anytype, p: Animation.PropValue) !void {
-//     // Format float: if it's integer-like, print as int, else float
-//     const is_int = @floor(p.value) == p.value;
-//
-//     if (is_int) {
-//         try writer.print("{d}", .{@as(i32, @intFromFloat(p.value))});
-//     } else {
-//         try writer.print("{d}", .{p.value});
-//     }
-//
-//     try writer.print("{s}", .{p.unit.toCss()});
-// }
-
 const ValueType = enum { from, to };
-
 fn writePropertiesAtValue(writer: *Writer, animation: Animation, value_type: ValueType) void {
     var has_transform = false;
     var has_filter = false;
@@ -2376,14 +2323,7 @@ export fn getInheritedStyles(node: *UINode) ?[*]const u8 {
     if (node.packed_field_ptrs) |packed_field_ptrs| {
         if (packed_field_ptrs.interactive_ptr) |interactive_ptr| {
             if (interactive_ptr.has_hover) {
-                // writer.writeByte('.') catch {};
-                // writer.write(node.class.?) catch {};
-                // writer.write(":hover") catch {};
-                // writer.write("{\n") catch {};
                 const hover = interactive_ptr.hover;
-                // generateVisual(&hover, &writer);
-                // writer.writeByte('}') catch {};
-                // writer.writeByte('\n') catch {};
 
                 // We write the inherited styles for the children
                 if (node.children_count > 0) {
@@ -2415,10 +2355,6 @@ export fn getInheritedStyles(node: *UINode) ?[*]const u8 {
     hover_style = writer.buffer[0..writer.pos];
     return hover_style.ptr;
 }
-
-// export fn getInheritedStyleLen() usize {
-//     return hover_style.len;
-// }
 
 export fn getInlineStyle(node_ptr: ?*UINode) ?[*]const u8 {
     const node = node_ptr orelse return null;

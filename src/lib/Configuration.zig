@@ -7,15 +7,18 @@ const Vapor = @import("Vapor.zig");
 const utils = @import("utils.zig");
 const Shadow = @import("Shadow.zig");
 const hashKey = utils.hashKey;
+const Reconciler = @import("Reconciler.zig");
 pub var packed_layout: types.PackedLayout = .{};
 pub var packed_position: types.PackedPosition = .{};
 pub var packed_margins_paddings: types.PackedMarginsPaddings = .{};
 pub var packed_visual: types.PackedVisual = .{};
+pub var target_packed_visual: types.PackedVisual = .{};
 pub var packed_animations: types.PackedAnimations = .{};
 pub var packed_interactive: types.PackedInteractive = .{};
 pub var packed_transition: types.PackedTransition = .{};
 pub var packed_layer: types.PackedLayer = .{ .Grid = .{} };
 pub var packed_transforms: types.PackedTransforms = .{};
+pub var packed_responsive: types.PackedResponsive = .{};
 const hashStyle = @import("HashStyle.zig").hashStyle;
 const StringTable = @import("StringTable.zig").StringTable;
 
@@ -117,16 +120,14 @@ fn configureLayouts(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     if (style.placement) |placement| packed_layout.placement = placement;
-
     if (style.size) |size| packed_layout.size = size;
     if (style.child_gap) |child_gap| packed_layout.spacing = child_gap;
     if (style.spacing) |spacing| packed_layout.spacing = spacing;
-    packed_layout.direction = style.direction;
+    if (style.direction) |direction| packed_layout.direction = direction;
     if (style.flex_wrap) |flex_wrap| packed_layout.flex_wrap = flex_wrap;
     if (style.scroll) |scroll| packed_layout.scroll = scroll;
     if (style.aspect_ratio) |aspect_ratio| packed_layout.aspect_ratio = aspect_ratio;
 
-    // hash_l = hashPacked(types.PackedLayout, &packed_layout);
     hash_l = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layout));
 
     if (hash_id) {
@@ -145,6 +146,139 @@ fn configureLayouts(ui_node: *UINode, style: *const Vapor.Style) u32 {
     return hash_l;
 }
 
+fn configureResponsive(ui_node: *UINode, style: *const Vapor.Style) u32 {
+    var hash_r: u32 = 0;
+
+    const responsive = style.responsive orelse return hash_r;
+    if (responsive.mobile) |s| {
+        if (ui_node.parent) |parent| {
+            if (parent.direction == .column) {
+                packed_responsive.mobile_layout.parent_direction = .column;
+            }
+            if (parent.column_count) |count| {
+                if (parent.spacing) |spacing| {
+                    packed_responsive.mobile_layout.column_count = count;
+                    if (spacing > count) {
+                        packed_responsive.mobile_layout.column_spacing = @as(f32, @floatFromInt(spacing)) / @as(f32, @floatFromInt(count));
+                    } else {}
+                }
+            }
+        }
+
+        if (s.flex_type == .hidden) {
+            packed_responsive.mobile_layout.flex = .hidden;
+        } else if (s.layout) |layout| {
+            if (layout.x == .in_line and layout.y == .in_line) {
+                packed_responsive.mobile_layout.flex = .flow;
+                packed_responsive.mobile_layout.layout = layout;
+            } else if (ui_node.text != null) {
+                packed_responsive.mobile_layout.text_align = layout;
+            } else {
+                packed_responsive.mobile_layout.flex = .flex;
+                packed_responsive.mobile_layout.layout = layout;
+            }
+        } else if (ui_node.type == .FlexBox) {
+            packed_responsive.mobile_layout.flex = .flex;
+        }
+
+        if (s.placement) |placement| packed_responsive.mobile_layout.placement = placement;
+        if (s.size) |size| packed_responsive.mobile_layout.size = size;
+        if (s.child_gap) |child_gap| packed_responsive.mobile_layout.spacing = child_gap;
+        if (s.spacing) |spacing| packed_responsive.mobile_layout.spacing = spacing;
+        if (s.direction) |direction| packed_responsive.mobile_layout.direction = direction;
+        if (s.flex_wrap) |flex_wrap| packed_responsive.mobile_layout.flex_wrap = flex_wrap;
+        if (s.scroll) |scroll| packed_responsive.mobile_layout.scroll = scroll;
+        if (s.aspect_ratio) |aspect_ratio| packed_responsive.mobile_layout.aspect_ratio = aspect_ratio;
+        packed_responsive.flags_layout[0] = true;
+
+        if (s.visual) |visual| {
+            if (ui_node.type == .Button or ui_node.type == .ButtonCycle or ui_node.type == .CtxButton) {
+                if (!packed_responsive.mobile_visual.has_border_thickeness) {
+                    packed_responsive.mobile_visual.has_border_thickeness = true;
+                    packed_responsive.mobile_visual.border_thickness = .all(0);
+                    packed_responsive.mobile_visual.background = .{ .color = .{ .a = 0, .r = 0, .g = 0, .b = 0 }, .has_color = true };
+                }
+            }
+            checkVisual(&visual, &packed_responsive.mobile_visual);
+            packed_responsive.flags_visual[0] = true;
+        }
+    }
+
+    if (responsive.desktop) |s| {
+        if (ui_node.parent) |parent| {
+            if (parent.direction == .column) {
+                packed_responsive.desktop_layout.parent_direction = .column;
+            }
+            if (parent.column_count) |count| {
+                if (parent.spacing) |spacing| {
+                    packed_responsive.desktop_layout.column_count = count;
+                    if (spacing > count) {
+                        packed_responsive.desktop_layout.column_spacing = @as(f32, @floatFromInt(spacing)) / @as(f32, @floatFromInt(count));
+                    } else {}
+                }
+            }
+        }
+
+        if (s.flex_type == .hidden) {
+            packed_responsive.desktop_layout.flex = .hidden;
+        } else if (s.layout) |layout| {
+            if (layout.x == .in_line and layout.y == .in_line) {
+                packed_responsive.desktop_layout.flex = .flow;
+                packed_responsive.desktop_layout.layout = layout;
+            } else if (ui_node.text != null) {
+                packed_responsive.desktop_layout.text_align = layout;
+            } else {
+                packed_responsive.desktop_layout.flex = .flex;
+                packed_responsive.desktop_layout.layout = layout;
+            }
+        } else if (ui_node.type == .FlexBox) {
+            packed_responsive.desktop_layout.flex = .flex;
+        }
+
+        if (s.placement) |placement| packed_responsive.desktop_layout.placement = placement;
+        if (s.size) |size| packed_responsive.desktop_layout.size = size;
+        if (s.child_gap) |child_gap| packed_responsive.desktop_layout.spacing = child_gap;
+        if (s.spacing) |spacing| packed_responsive.desktop_layout.spacing = spacing;
+        if (s.direction) |direction| packed_responsive.desktop_layout.direction = direction;
+        if (s.flex_wrap) |flex_wrap| packed_responsive.desktop_layout.flex_wrap = flex_wrap;
+        if (s.scroll) |scroll| packed_responsive.desktop_layout.scroll = scroll;
+        if (s.aspect_ratio) |aspect_ratio| packed_responsive.desktop_layout.aspect_ratio = aspect_ratio;
+        packed_responsive.flags_layout[1] = true;
+
+        if (s.visual) |visual| {
+            if (ui_node.type == .Button or ui_node.type == .ButtonCycle or ui_node.type == .CtxButton) {
+                if (!packed_responsive.desktop_visual.has_border_thickeness) {
+                    packed_responsive.desktop_visual.has_border_thickeness = true;
+                    packed_responsive.desktop_visual.border_thickness = .all(0);
+                    packed_responsive.desktop_visual.background = .{ .color = .{ .a = 0, .r = 0, .g = 0, .b = 0 }, .has_color = true };
+                }
+            }
+
+            checkVisual(&visual, &packed_responsive.desktop_visual);
+            packed_responsive.flags_visual[1] = true;
+        }
+    }
+
+    hash_r = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_responsive));
+
+    if (hash_id) {
+        const packed_responsive_ptr = Packer.responsive_pool.create() catch unreachable;
+        packed_responsive_ptr.* = packed_responsive;
+        ui_node.packed_field_ptrs.?.responsive_ptr = packed_responsive_ptr;
+        return hash_r;
+    }
+
+    ui_node.packed_field_ptrs.?.responsive_ptr = getOrPutAndUpdateHash(
+        hash_r,
+        types.PackedResponsive,
+        packed_responsive,
+        &Packer.responsives,
+        &Packer.responsive_pool,
+    ) catch unreachable;
+
+    return hash_r;
+}
+
 fn configureTransforms(ui_node: *UINode, style: *const Vapor.Style) u32 {
     var hash_t: u32 = 0;
     if (style.transform_origin) |transform_origin| {
@@ -159,8 +293,7 @@ fn configureTransforms(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     hash_t +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_transforms));
-    // hash_t +%= hashPacked(types.PackedTransforms, &packed_transforms);
-    //
+
     if (style.visual) |visual| {
         if (visual.transform) |transform| {
             var packed_transform: types.PackedTransform = undefined;
@@ -201,7 +334,6 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packColor(grid.color, &grid_color);
             packed_layer.Grid.packed_color = grid_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
-            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         .Lines => |lines| {
             packed_layer = .{ .Lines = .{} };
@@ -212,7 +344,6 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packColor(lines.color, &lines_color);
             packed_layer.Lines.color = lines_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
-            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         // .Image => {},
         .Dot => |dots| {
@@ -223,7 +354,6 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packColor(dots.color, &dots_color);
             packed_layer.Dot.packed_color = dots_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
-            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         .Gradient => |gradient| {
             packed_layer = .{ .Gradient = .{} };
@@ -239,11 +369,9 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packed_layer.Gradient.colors_len = @intCast(gradient_colors.len);
             packed_layer.Gradient.clip = gradient.clip;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
-            // hash_v +%= hashPacked(types.PackedLayer, &packed_layer);
         },
         else => {
             Vapor.printlnSrcErr("Not implemented yet {any}", .{layer}, @src());
-            // @compileError("Not implemented yet");
         },
     }
     current_hash_v.* = hash_v;
@@ -281,21 +409,23 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
             packed_visual.background = .{ .color = .{ .a = 0, .r = 0, .g = 0, .b = 0 }, .has_color = true };
         }
     }
+    if (ui_node.type == .Link or ui_node.type == .RedirectLink) {
+        if (packed_visual.text_decoration.type == .default) {
+            packed_visual.text_decoration.type = .none;
+        }
+    }
 
     if (style.visual) |visual| {
-        checkVisual(&visual, &packed_visual, ui_node.type, &hash_v);
+        checkVisual(&visual, &packed_visual);
         // Inherited color must run after checkVisual as top not use it in the checkVisual for the actual node, it is meant for only the hover effect
         if (visual.background) |background| {
-            // if (background.color) |color| {
             inherited_color = background;
-            // }
         }
     }
 
     if (style.list_style) |list_style| packed_visual.list_style = list_style;
 
     hash_v = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_visual));
-    // hash_v = hashPacked(types.PackedVisual, &packed_visual);
 
     if (style.font_family) |font_family| {
         packed_visual.font_family_handle = Vapor.string_table.intern(font_family) catch StringTable.null_handle;
@@ -383,7 +513,6 @@ fn configurePositions(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     hash_p = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_position));
-    // hash_p = hashPacked(types.PackedPosition, &packed_position);
 
     if (hash_id) {
         const packed_position_ptr = Packer.positions_pool.create() catch unreachable;
@@ -408,7 +537,6 @@ fn configureMarginsPaddings(ui_node: *UINode, style: *const Vapor.Style) u32 {
     if (style.margin) |margin| packed_margins_paddings.margin = margin;
 
     // This is an expensive operation, since the the visual hash is quite large
-    // hash_mp = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_margins_paddings));
     hash_mp = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_margins_paddings));
     if (hash_id) {
         const packed_margin_paddings_ptr = Packer.margins_paddings_pool.create() catch unreachable;
@@ -467,7 +595,6 @@ fn configureAnimations(ui_node: *UINode, elem_decl: ElemDecl) u32 {
     if (!packed_animations.has_animation_enter and !packed_animations.has_animation_exit) return 0;
 
     hash_a = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_animations));
-    // hash_a = hashPacked(types.PackedAnimations, &packed_animations);
 
     if (hash_id) {
         const packed_animations_ptr = Packer.animations_pool.create() catch unreachable;
@@ -491,7 +618,7 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
     const interactive = style.interactive orelse return hash_i;
     if (interactive.hover) |hover| {
         var packed_hover: types.PackedVisual = .{};
-        checkVisual(&hover, &packed_hover, ui_node.type, &hash_i);
+        checkVisual(&hover, &packed_hover);
 
         packed_interactive.has_hover = true;
         packed_interactive.hover = packed_hover;
@@ -515,13 +642,12 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
 
     if (interactive.focus) |focus| {
         var packed_focus: types.PackedVisual = .{};
-        checkVisual(&focus, &packed_focus, ui_node.type, &hash_i);
+        checkVisual(&focus, &packed_focus);
         packed_interactive.has_focus = true;
         packed_interactive.focus = packed_focus;
     }
 
     hash_i = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_interactive));
-    // hash_i = hashPacked(types.PackedInteractive, &packed_interactive);
 
     if (interactive.hover) |hover| {
         if (hover.animation) |animation| {
@@ -596,6 +722,11 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         current_open.hover_style_fields = hover_style_fields;
     }
 
+    if (elem_decl.target) |target| {
+        current_open.target = target;
+        current_open.finger_print +%= hashKey(target);
+    }
+
     if (elem_decl.text_field_params) |params| {
         const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch unreachable;
         text_field_params.* = params;
@@ -630,14 +761,17 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     current_open.href = elem_decl.href;
     current_open.type = elem_decl.elem_type;
     current_open.name = elem_decl.name;
+    current_open.morph = elem_decl.morph;
 
     if (current_open.href) |href| {
         current_open.finger_print +%= hashKey(href);
     }
 
     if (elem_decl.inlineStyle) |inlineStyle| {
-        current_open.inlineStyle = inlineStyle;
-        current_open.style_hash +%= hashKey(inlineStyle);
+        if (inlineStyle.len > 0) {
+            current_open.inlineStyle = inlineStyle;
+            current_open.style_hash +%= hashKey(inlineStyle);
+        }
     }
 
     if (elem_decl.video) |video| {
@@ -662,37 +796,6 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
 
     // this adds 60ms
     if (style) |s| outer_style: {
-
-        // const ptr_key = @intFromPtr(s);
-        // Vapor.print("Cache Miss {d}", .{ptr_key});
-        // const new_hash = hashStyle(s);
-        // current_open.prev_style_hash_computed = new_hash;
-        //
-        // // Try to reuse cached style info
-        // // Case 1: Style unchanged from previous frame (prev_style_hash matches new_hash)
-        // // Case 2: This exact style was computed before (exists in style_info_map)
-        // if (UIContext.style_info_map.get(new_hash)) |style_info| {
-        //     // We have cached data for this style configuration
-        //     current_open.packed_field_ptrs = style_info.packed_field_ptrs;
-        //     current_open.style_hashes = style_info.style_hashes;
-        //     current_open.style_hash = style_info.style_hash;
-        //     current_open.class = style_info.class;
-        //
-        //     // Still need to set class if present
-        //     if (s.style_id) |class| {
-        //         current_open.class = class;
-        //     }
-        //
-        //     // Don't forget to update finger_print!
-        //     current_open.finger_print +%= current_open.style_hash;
-        //
-        //     current_open.state_type = elem_decl.state_type;
-        //     current_open.aria_label = elem_decl.aria_label;
-        //     current_open.alt = elem_decl.alt;
-        //     UIContext.cache_count += 1;
-        //     return current_open;
-        // }
-
         var hash_l: u32 = 0;
         var hash_v: u32 = 0;
         var hash_p: u32 = 0;
@@ -700,6 +803,8 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         var hash_i: u32 = 0;
         var hash_a: u32 = 0;
         var hash_t: u32 = 0;
+        var hash_r: u32 = 0;
+        var hash_tv: u32 = 0;
 
         packed_position = .{};
         packed_layout = .{};
@@ -710,12 +815,13 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         packed_transition = .{};
         packed_layer = .{ .Grid = .{} };
         packed_transforms = .{};
+        packed_responsive = .{};
+        target_packed_visual = .{};
 
         current_open.packed_field_ptrs = PackedFieldPtrs{};
         if (s.style_id != null) {
             hash_id = true;
             current_open.class = s.style_id.?;
-            // current_open.style_hash +%= hashKey(s.style_id.?);
         }
 
         var additonal_classes: ?[]const u8 = null;
@@ -728,11 +834,18 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
 
         hash_l = configureLayouts(current_open, s);
         hash_v = configureVisual(current_open, s);
+
+        if (s.target_visual) |visual| {
+            checkVisual(&visual, &target_packed_visual);
+            hash_tv = std.hash.XxHash32.hash(0, std.mem.asBytes(&target_packed_visual));
+        }
+
         hash_p = configurePositions(current_open, s);
         hash_mp = configureMarginsPaddings(current_open, s);
         hash_i = configureInteractive(current_open, s);
         hash_a = configureAnimations(current_open, elem_decl);
         hash_t = configureTransforms(current_open, s);
+        hash_r = configureResponsive(current_open, s);
 
         // ** Packed Animations and Interactive **
 
@@ -743,13 +856,19 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         current_open.style_hash +%= hash_a;
         current_open.style_hash +%= hash_i;
         current_open.style_hash +%= hash_t;
-
-        // if (2316552965 == current_open.style_hash) {
-        //     std.log.debug("{?s} {any}", .{ current_open.class, current_open.finger_print });
-        //     break :outer_style;
-        // }
+        current_open.style_hash +%= hash_r;
+        current_open.style_hash +%= hash_tv;
 
         // This adds 40ms for 10000 rows
+        if (current_open.target) |target| {
+            const class = Vapor.frame.fmt("t_vis-{s}", .{target});
+            const new_class_hash = hashKey(class);
+            _ = Vapor.class_cache.get(new_class_hash) orelse {
+                Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+                Vapor.generator.writeTargetStyle(current_open, hash_tv, &target_packed_visual);
+            };
+        }
+
         if (s.style_id != null) {
             const class = current_open.class.?;
             const new_class_hash = hashKey(class);
@@ -774,6 +893,8 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
                 hash_a,
                 hash_i,
                 hash_t,
+                hash_r,
+                hash_tv,
                 additonal_classes,
             ) catch |err| {
                 Vapor.printlnErr("Could not build class string {any}\n", .{err});
@@ -785,7 +906,14 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     current_open.aria_label = elem_decl.aria_label;
     current_open.alt = elem_decl.alt;
 
+    current_open.hooks_hash +%= current_open.on_callbacks[0];
+
     current_open.finger_print +%= current_open.style_hash;
+    current_open.finger_print +%= current_open.hooks_hash;
+
+    current_open.identity_hash +%= current_open.props_hash;
+    current_open.identity_hash +%= current_open.style_hash;
+    current_open.identity_hash +%= @intFromEnum(current_open.type);
 
     return current_open;
 }
@@ -794,19 +922,18 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
     hash_id = false;
     const current_open = ui_node orelse unreachable;
     const parent = current_open.parent orelse unreachable;
-    const style = elem_decl.style;
+    const style = elem_decl.style orelse unreachable;
     inherited_color = null;
 
     // Early exit if style hasn't changed
-
     if (elem_decl.elem_type == .ListItem) {
         if (parent.type != .List) {
             Vapor.printlnErr("ListItem must be a child of a List, Otherwise reconciliation will fail\n", .{});
         }
     }
 
-    if (style != null and style.?.id != null) {
-        current_open.uuid = style.?.id.?;
+    if (style.id != null) {
+        current_open.uuid = style.id.?;
     }
     current_open.finger_print +%= parent.finger_print;
     current_open.finger_print +%= @intFromEnum(current_open.type);
@@ -823,6 +950,20 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
         text_field_params.* = params;
         current_open.text_field_params = text_field_params;
         switch (params) {
+            .radio => |radio| {
+                var value: []const u8 = "";
+                if (radio.value_ptr) |ptr| {
+                    value = ptr[0..radio.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (radio.default_ptr) |ptr| {
+                    default_value = ptr[0..radio.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(radio.type);
+            },
+
             .string => |string| {
                 var value: []const u8 = "";
                 if (string.value_ptr) |ptr| {
@@ -938,8 +1079,10 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
     }
 
     if (elem_decl.inlineStyle) |inlineStyle| {
-        current_open.inlineStyle = inlineStyle;
-        current_open.style_hash +%= hashKey(inlineStyle);
+        if (inlineStyle.len > 0) {
+            current_open.inlineStyle = inlineStyle;
+            current_open.style_hash +%= hashKey(inlineStyle);
+        }
     }
 
     if (elem_decl.video) |video| {
@@ -954,139 +1097,134 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
     }
 
     current_open.props_hash = current_open.finger_print;
-    // current_open.finger_print +%= hashKey(current_open.uuid);
 
     // this adds 60ms
-    if (style) |s| outer_style: {
+    var hash_l: u32 = 0;
+    var hash_v: u32 = 0;
+    var hash_p: u32 = 0;
+    var hash_mp: u32 = 0;
+    var hash_i: u32 = 0;
+    var hash_a: u32 = 0;
+    var hash_t: u32 = 0;
+    var hash_r: u32 = 0;
+    var hash_tv: u32 = 0;
 
-        // const ptr_key = @intFromPtr(s);
-        // Vapor.print("Cache Miss {d}", .{ptr_key});
-        // const new_hash = hashStyle(s);
-        // current_open.prev_style_hash_computed = new_hash;
-        //
-        // // Try to reuse cached style info
-        // // Case 1: Style unchanged from previous frame (prev_style_hash matches new_hash)
-        // // Case 2: This exact style was computed before (exists in style_info_map)
-        // if (UIContext.style_info_map.get(new_hash)) |style_info| {
-        //     // We have cached data for this style configuration
-        //     current_open.packed_field_ptrs = style_info.packed_field_ptrs;
-        //     current_open.style_hashes = style_info.style_hashes;
-        //     current_open.style_hash = style_info.style_hash;
-        //     current_open.class = style_info.class;
-        //
-        //     // Still need to set class if present
-        //     if (s.style_id) |class| {
-        //         current_open.class = class;
-        //     }
-        //
-        //     // Don't forget to update finger_print!
-        //     current_open.finger_print +%= current_open.style_hash;
-        //
-        //     current_open.state_type = elem_decl.state_type;
-        //     current_open.aria_label = elem_decl.aria_label;
-        //     current_open.alt = elem_decl.alt;
-        //     UIContext.cache_count += 1;
-        //     return current_open;
-        // }
+    hash_l = 0;
+    hash_v = 0;
+    hash_p = 0;
+    hash_mp = 0;
+    hash_i = 0;
+    hash_a = 0;
+    hash_t = 0;
+    hash_r = 0;
+    hash_tv = 0;
 
-        var hash_l: u32 = 0;
-        var hash_v: u32 = 0;
-        var hash_p: u32 = 0;
-        var hash_mp: u32 = 0;
-        var hash_i: u32 = 0;
-        var hash_a: u32 = 0;
-        var hash_t: u32 = 0;
+    packed_position = .{};
+    packed_layout = .{};
+    packed_margins_paddings = .{};
+    packed_visual = .{};
+    packed_animations = .{};
+    packed_interactive = .{};
+    packed_transition = .{};
+    packed_layer = .{ .Grid = .{} };
+    packed_transforms = .{};
+    packed_responsive = .{};
+    target_packed_visual = .{};
 
-        packed_position = .{};
-        packed_layout = .{};
-        packed_margins_paddings = .{};
-        packed_visual = .{};
-        packed_animations = .{};
-        packed_interactive = .{};
-        packed_transition = .{};
-        packed_layer = .{ .Grid = .{} };
-        packed_transforms = .{};
+    current_open.packed_field_ptrs = PackedFieldPtrs{};
+    if (style.style_id != null) {
+        hash_id = true;
+        current_open.class = style.style_id.?;
+    }
 
-        current_open.packed_field_ptrs = PackedFieldPtrs{};
-        if (s.style_id != null) {
-            hash_id = true;
-            current_open.class = s.style_id.?;
-            // current_open.style_hash +%= hashKey(s.style_id.?);
+    var additonal_classes: ?[]const u8 = null;
+
+    if (style.visual) |visual| {
+        if (visual.edges) |e| {
+            additonal_classes = e;
         }
+    }
 
-        var additonal_classes: ?[]const u8 = null;
+    hash_l = configureLayouts(current_open, style);
+    hash_v = configureVisual(current_open, style);
 
-        if (s.visual) |visual| {
-            if (visual.edges) |e| {
-                additonal_classes = e;
-            }
-        }
+    if (style.target_visual) |visual| {
+        checkVisual(&visual, &target_packed_visual);
+        hash_tv = std.hash.XxHash32.hash(0, std.mem.asBytes(&target_packed_visual));
+    }
 
-        hash_l = configureLayouts(current_open, s);
-        hash_v = configureVisual(current_open, s);
-        hash_p = configurePositions(current_open, s);
-        hash_mp = configureMarginsPaddings(current_open, s);
-        hash_i = configureInteractive(current_open, s);
-        hash_a = configureAnimations(current_open, elem_decl);
-        hash_t = configureTransforms(current_open, s);
+    hash_p = configurePositions(current_open, style);
+    hash_mp = configureMarginsPaddings(current_open, style);
+    hash_i = configureInteractive(current_open, style);
+    hash_a = configureAnimations(current_open, elem_decl);
+    hash_t = configureTransforms(current_open, style);
+    hash_r = configureResponsive(current_open, style);
 
-        // ** Packed Animations and Interactive **
+    // ** Packed Animations and Interactive **
 
-        current_open.style_hash +%= hash_l;
-        current_open.style_hash +%= hash_p;
-        current_open.style_hash +%= hash_mp;
-        current_open.style_hash +%= hash_v;
-        current_open.style_hash +%= hash_a;
-        current_open.style_hash +%= hash_i;
-        current_open.style_hash +%= hash_t;
+    current_open.style_hash +%= hash_l;
+    current_open.style_hash +%= hash_p;
+    current_open.style_hash +%= hash_mp;
+    current_open.style_hash +%= hash_v;
+    current_open.style_hash +%= hash_a;
+    current_open.style_hash +%= hash_i;
+    current_open.style_hash +%= hash_t;
+    current_open.style_hash +%= hash_r;
+    current_open.style_hash +%= hash_tv;
 
-        // if (2316552965 == current_open.style_hash) {
-        //     std.log.debug("{?s} {any}", .{ current_open.class, current_open.finger_print });
-        //     break :outer_style;
-        // }
+    // This adds 40ms for 10000 rows
+    if (current_open.target) |target| {
+        const class = Vapor.frame.fmt("t_vis-{s}", .{target});
+        const new_class_hash = hashKey(class);
+        _ = Vapor.class_cache.get(new_class_hash) orelse {
+            Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+            Vapor.generator.writeTargetStyle(current_open, hash_tv, &target_packed_visual);
+        };
+    }
 
-        // This adds 40ms for 10000 rows
-        if (s.style_id != null) {
-            const class = current_open.class.?;
-            const new_class_hash = hashKey(class);
-            _ = Vapor.class_cache.get(new_class_hash) orelse {
-                Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
-                Vapor.generator.writeNodeStyle(current_open);
-            };
-        } else {
-            if (2316552965 == current_open.style_hash) {
-                current_open.class = "";
-                current_open.style_hash = 0;
-                break :outer_style;
-            }
-            // This adds 2ms for 10000 nodes
-            buildClassString(
-                &current_open.packed_field_ptrs.?,
-                current_open,
-                hash_l,
-                hash_p,
-                hash_mp,
-                hash_v,
-                hash_a,
-                hash_i,
-                hash_t,
-                additonal_classes,
-            ) catch |err| {
-                Vapor.printlnErr("Could not build class string {any}\n", .{err});
-            };
-        }
+    if (style.style_id != null) {
+        const class = current_open.class.?;
+        const new_class_hash = hashKey(class);
+        _ = Vapor.class_cache.get(new_class_hash) orelse {
+            Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+            Vapor.generator.writeNodeStyle(current_open);
+        };
+    } else {
+        // This adds 2ms for 10000 nodes
+        buildClassString(
+            &current_open.packed_field_ptrs.?,
+            current_open,
+            hash_l,
+            hash_p,
+            hash_mp,
+            hash_v,
+            hash_a,
+            hash_i,
+            hash_t,
+            hash_r,
+            hash_tv,
+            additonal_classes,
+        ) catch |err| {
+            Vapor.printlnErr("Could not build class string {any}\n", .{err});
+        };
     }
 
     current_open.state_type = elem_decl.state_type;
     current_open.aria_label = elem_decl.aria_label;
     current_open.alt = elem_decl.alt;
 
+    current_open.hooks_hash +%= current_open.on_callbacks[0];
     current_open.finger_print +%= current_open.style_hash;
+    current_open.finger_print +%= current_open.hooks_hash;
+
+    current_open.identity_hash +%= current_open.props_hash;
+    current_open.identity_hash +%= current_open.style_hash;
+    current_open.identity_hash +%= @intFromEnum(current_open.type);
 
     return current_open;
 }
 
-pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisual, _: types.ElementType, _: *u32) void {
+pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisual) void {
     // Refactored to use the packColor helper
     if (visual.background) |background| {
         var background_color = packet_visual.background;
@@ -1170,16 +1308,8 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
         packet_visual.ellipsis = ellipsis;
     }
 
-    if (visual.shadow) |shadow| {
-        packet_visual.shadow = .{
-            .blur = shadow.blur,
-            .spread = shadow.spread,
-            .top = shadow.top,
-            .left = shadow.left,
-        };
-        var shadow_color = packet_visual.text_color;
-        packColor(shadow.color, &shadow_color);
-        packet_visual.shadow.color = shadow_color;
+    if (visual.animation_play_state) |animation_play_state| {
+        packet_visual.animation_play_state = animation_play_state;
     }
 
     if (visual.cursor) |cursor| {
@@ -1208,7 +1338,7 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
             .type = caret.type,
         };
         if (caret.color == null) return;
-        var caret_color = packed_visual.caret.color;
+        var caret_color = packet_visual.caret.color;
         packColor(caret.color.?, &caret_color);
         packet_visual.caret.color = caret_color;
     }
@@ -1222,22 +1352,190 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
         packet_visual.resize = resize;
     }
 
-    if (visual.text_shadow) |text_shadow| {
-        packet_visual.text_shadow = .{
-            .blur = text_shadow.blur,
-            .spread = text_shadow.spread,
-            .top = text_shadow.top,
-            .left = text_shadow.left,
-        };
-        var text_shadow_color = packet_visual.text_color;
-        packColor(text_shadow.color, &text_shadow_color);
-        packet_visual.text_shadow.color = text_shadow_color;
-    }
-
     if (visual.new_shadow) |new_shadow| {
         var count = Vapor.shadows.count();
         count += 1;
         packet_visual.new_shadow = count;
         Vapor.shadows.put(count, new_shadow) catch unreachable;
     }
+}
+
+pub fn configurePlainByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
+    hash_id = false;
+    const current_open = ui_node orelse unreachable;
+    const parent = current_open.parent orelse unreachable;
+    inherited_color = null;
+
+    // Early exit if style hasn't changed
+
+    if (elem_decl.elem_type == .ListItem) {
+        if (parent.type != .List) {
+            Vapor.printlnErr("ListItem must be a child of a List, Otherwise reconciliation will fail\n", .{});
+        }
+    }
+
+    current_open.finger_print +%= parent.finger_print;
+    current_open.finger_print +%= @intFromEnum(current_open.type);
+    if (elem_decl.elem_type == .Svg) {
+        current_open.text = elem_decl.svg;
+        current_open.finger_print +%= hashKey(elem_decl.svg);
+    } else if (elem_decl.text) |text| {
+        current_open.text = text;
+        current_open.finger_print +%= hashKey(text);
+    }
+
+    if (elem_decl.text_field_params) |params| {
+        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch unreachable;
+        text_field_params.* = params;
+        current_open.text_field_params = text_field_params;
+        switch (params) {
+            .string => |string| {
+                var value: []const u8 = "";
+                if (string.value_ptr) |ptr| {
+                    value = ptr[0..string.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (string.default_ptr) |ptr| {
+                    default_value = ptr[0..string.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(string.type);
+            },
+            .radio => |radio| {
+                var value: []const u8 = "";
+                if (radio.value_ptr) |ptr| {
+                    value = ptr[0..radio.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (radio.default_ptr) |ptr| {
+                    default_value = ptr[0..radio.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(radio.type);
+            },
+            .email => |email| {
+                var value: []const u8 = "";
+                if (email.value_ptr) |ptr| {
+                    value = ptr[0..email.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (email.default_ptr) |ptr| {
+                    default_value = ptr[0..email.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(email.type);
+            },
+            .telephone => |telephone| {
+                var value: []const u8 = "";
+                if (telephone.value_ptr) |ptr| {
+                    value = ptr[0..telephone.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (telephone.default_ptr) |ptr| {
+                    default_value = ptr[0..telephone.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(telephone.type);
+            },
+            .file => |file| {
+                var value: []const u8 = "";
+                if (file.value_ptr) |ptr| {
+                    value = ptr[0..file.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (file.default_ptr) |ptr| {
+                    default_value = ptr[0..file.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(file.type);
+            },
+            .date => |date| {
+                var value: []const u8 = "";
+                if (date.value_ptr) |ptr| {
+                    value = ptr[0..date.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (date.default_ptr) |ptr| {
+                    default_value = ptr[0..date.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(date.type);
+            },
+            .password => |password| {
+                var value: []const u8 = "";
+                if (password.value_ptr) |ptr| {
+                    value = ptr[0..password.value_len];
+                }
+                var default_value: []const u8 = "";
+                if (password.default_ptr) |ptr| {
+                    default_value = ptr[0..password.default_len];
+                }
+                current_open.finger_print +%= hashKey(value);
+                current_open.finger_print +%= hashKey(default_value);
+                current_open.finger_print +%= @intFromEnum(password.type);
+            },
+            .int => |number| {
+                current_open.finger_print +%= @as(u32, @intCast(number.value orelse 0));
+                current_open.finger_print +%= @as(u32, @intCast(number.default orelse 0));
+                current_open.finger_print +%= @intFromEnum(number.type);
+            },
+            .float => |number| {
+                current_open.finger_print +%= @as(u32, @intFromFloat(number.value orelse 0));
+                current_open.finger_print +%= @as(u32, @intFromFloat(number.default orelse 0));
+                current_open.finger_print +%= @intFromEnum(number.type);
+            },
+        }
+    }
+
+    if (elem_decl.accessibility) |accessibility| {
+        Accessibility.a11y_map.put(hashKey(current_open.uuid), accessibility) catch |err| {
+            std.log.err("Error adding accessibility {any}\n", .{err});
+        };
+        current_open.accessibility = true;
+        current_open.finger_print +%= hashKey(Accessibility.toAttributeString(accessibility));
+    }
+
+    current_open.href = elem_decl.href;
+    current_open.src = elem_decl.src;
+    current_open.type = elem_decl.elem_type;
+    current_open.name = elem_decl.name;
+
+    if (current_open.href) |href| {
+        current_open.finger_print +%= hashKey(href);
+    }
+
+    if (elem_decl.inlineStyle) |inlineStyle| {
+        if (inlineStyle.len > 0) {
+            current_open.inlineStyle = inlineStyle;
+            current_open.style_hash +%= hashKey(inlineStyle);
+        }
+    }
+
+    if (elem_decl.video) |video| {
+        current_open.video = video;
+        if (video.src) |src| {
+            current_open.finger_print +%= hashKey(src);
+        }
+        current_open.finger_print +%= @intFromBool(video.autoplay);
+        current_open.finger_print +%= @intFromBool(video.muted);
+        current_open.finger_print +%= @intFromBool(video.loop);
+        current_open.finger_print +%= @intFromBool(video.controls);
+    }
+
+    current_open.props_hash = current_open.finger_print;
+
+    // this adds 60ms
+    current_open.state_type = elem_decl.state_type;
+    current_open.aria_label = elem_decl.aria_label;
+    current_open.alt = elem_decl.alt;
+
+    current_open.finger_print +%= current_open.style_hash;
+
+    return current_open;
 }

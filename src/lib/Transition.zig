@@ -37,7 +37,9 @@ pub const TransitionState = packed union {
     height_offset: u32,
     rotation: u32,
     scale: u32,
-    none: void,
+    // A packed union requires every field to share a bit width, so `none`
+    // carries the same u32 as the rest and is simply left at 0.
+    none: u32,
 };
 
 pub const PackedTransition = packed struct {

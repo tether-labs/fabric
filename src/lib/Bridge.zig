@@ -17,32 +17,11 @@ const Kit = @import("kit/Kit.zig");
 const Packer = @import("Packer.zig");
 
 const API = struct {
-    pub fn hookInstCallback(id: u32) callconv(.c) void {
-        const hook_cb = Vapor.hooks_inst_callbacks.get(id).?;
-        const params_str = Vapor.Kit.getWindowParams() orelse "";
-        const path = Kit.getWindowPath() orelse {
-            Vapor.printlnSrcErr("Hooks ERROR: Could not get window path", .{}, @src());
-            return;
-        };
-        var params = std.StringHashMap([]const u8).init(Vapor.arena(.frame));
-        if (params_str.len != 0) {
-            params = Kit.parseParams(params_str, Vapor.allocator_global) catch return orelse return;
-        }
-        const context = Vapor.HookContext{
-            .from_path = "",
-            .to_path = path,
-            .params = params,
-            .query = params,
-        };
-        @call(.auto, hook_cb, .{context});
-    }
-
     pub fn getCtxNodeChild(tree: *CommandsTree, index: usize) callconv(.c) ?*CommandsTree {
-        if (tree.node.node_ptr.children == null) return null;
-        const ui_node = tree.node.node_ptr.children.?.items[index];
-        for (tree.children.items, 0..) |item, i| {
+        const ui_node = tree.node.node_ptr.childAt(index) orelse return null;
+        for (tree.children.items) |item| {
             if (std.mem.eql(u8, ui_node.uuid, item.node.id)) {
-                return tree.children.items[i];
+                return item;
             }
         }
         return null;
@@ -56,7 +35,9 @@ const API = struct {
         node.dirty = false;
     }
 
-    pub fn getDirtyNode() callconv(.c) [*]const RenderCommand {
+    // dirty_nodes/added_nodes hold *UINode since the tree stopped being a flat
+    // RenderCommand list.
+    pub fn getDirtyNode() callconv(.c) [*]const *UINode {
         const node = Vapor.dirty_nodes.items.ptr;
         return node;
     }
@@ -65,24 +46,19 @@ const API = struct {
         return Vapor.added_nodes.items.len;
     }
 
-    pub fn getAddedNode() callconv(.c) [*]const RenderCommand {
+    pub fn getAddedNode() callconv(.c) [*]const *UINode {
         const node = Vapor.added_nodes.items.ptr;
         return node;
     }
 
+    // Children are an intrusive linked list, so the next sibling is direct.
     pub fn getNextSiblingPtr(ui_node: *UINode) callconv(.c) ?[*]const u8 {
-        const parent = ui_node.parent orelse return null;
-        const children = parent.children orelse return null;
-        if (ui_node.index + 1 >= children.items.len) return null;
-        const sibling = children.items[ui_node.index + 1];
+        const sibling = ui_node.next_sibling orelse return null;
         return sibling.uuid.ptr;
     }
 
     pub fn getNextSiblingLen(ui_node: *UINode) callconv(.c) usize {
-        const parent = ui_node.parent orelse return 0;
-        const children = parent.children orelse return 0;
-        if (ui_node.index + 1 >= children.items.len) return 0;
-        const sibling = children.items[ui_node.index + 1];
+        const sibling = ui_node.next_sibling orelse return 0;
         return sibling.uuid.len;
     }
 
@@ -101,16 +77,16 @@ const API = struct {
         return parent.uuid.len;
     }
     // The first node needs to be marked as false always
-    pub fn markCurrentTreeDirty() void {
+    pub fn markCurrentTreeDirty() callconv(.c) void {
         if (!Vapor.has_context) return;
         const root = Vapor.current_ctx.root orelse return;
         Vapor.markChildrenDirty(root);
     }
 
-    pub fn markUINodeTreeDirty(node: *UINode) void {
+    pub fn markUINodeTreeDirty(node: *UINode) callconv(.c) void {
         Vapor.markChildrenDirty(node);
     }
-    pub fn inputCallback(id_ptr: [*:0]u8) void {
+    pub fn inputCallback(id_ptr: [*:0]u8) callconv(.c) void {
         const id = std.mem.span(id_ptr);
         defer Vapor.allocator_global.free(id);
         const element = Vapor.element_registry.get(hashKey(id)) orelse return;
@@ -118,43 +94,43 @@ const API = struct {
         element.text = text;
     }
 
-    pub fn getElementPtr(id_ptr: [*:0]u8) ?*Vapor.Element {
+    pub fn getElementPtr(id_ptr: [*:0]u8) callconv(.c) ?*Vapor.Element {
         const id = std.mem.span(id_ptr);
         defer Vapor.allocator_global.free(id);
         const element = Vapor.element_registry.get(hashKey(id)) orelse return null;
         return element;
     }
 
-    pub fn callback(callbackId: u32) void {
-        const continuation = Vapor.continuations[callbackId];
-        if (continuation) |cb| {
-            @call(.auto, cb, .{});
-        }
+    pub fn callback(callbackId: u32) callconv(.c) void {
+        const cb = Vapor.callback_registry.get(callbackId) orelse return;
+        @call(.auto, cb, .{});
     }
 
-    pub fn cleanUp() void {
+    pub fn cleanUp() callconv(.c) void {
         Vapor.clean_up_ctx = undefined;
     }
 
-    pub fn timeOutCtxCallback(id_ptr: [*:0]u8) void {
+    pub fn timeOutCtxCallback(id_ptr: [*:0]u8) callconv(.c) void {
         const id = std.mem.span(id_ptr);
         defer Vapor.allocator_global.free(id);
-        const node = Vapor.callback_registry.get(hashKey(id)) orelse return;
+        const node = Vapor.ctx_callback_registry.get(hashKey(id)) orelse return;
         @call(.auto, node.data.runFn, .{&node.data});
     }
 
-    pub fn timeoutCtxCallBackId(id: usize) void {
-        const node = Vapor.time_out_ctx_registry.get(id) orelse return;
-        defer _ = Vapor.time_out_ctx_registry.remove(id);
+    pub fn timeoutCtxCallBackId(id: usize) callconv(.c) void {
+        const key: u32 = @intCast(id);
+        const node = Vapor.ctx_callback_registry.get(key) orelse return;
+        defer _ = Vapor.ctx_callback_registry.remove(key);
         @call(.auto, node.data.runFn, .{&node.data});
         if (Vapor.mode == .atomic) {
             Vapor.cycle();
         }
     }
 
-    pub fn timeoutCallBackId(id: usize) void {
-        const func = Vapor.time_out_registry.get(id) orelse return;
-        defer _ = Vapor.time_out_registry.remove(id);
+    pub fn timeoutCallBackId(id: usize) callconv(.c) void {
+        const key: u32 = @intCast(id);
+        const func = Vapor.callback_registry.get(key) orelse return;
+        defer _ = Vapor.callback_registry.remove(key);
         @call(.auto, func, .{});
         if (Vapor.mode == .atomic) {
             Vapor.cycle();

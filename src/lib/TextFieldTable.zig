@@ -1,5 +1,7 @@
 const std = @import("std");
 const Vapor = @import("Vapor.zig");
+
+/// We need to handle Reallocs
 pub const StringTable = struct {
     const Self = @This();
 
@@ -62,47 +64,6 @@ pub const StringTable = struct {
         const index: u32 = @intCast(self.entries.items.len);
         try self.entries.append(.{ .data = data });
         try self.index_map.put(key, index);
-
-        return index;
-    }
-
-    /// Replaces the string at an existing handle's pointer key, or adds a new entry.
-    /// Frees the old string data if replacing.
-    /// Returns the handle (existing or new).
-    pub fn replaceOrAddStr(self: *Self, str: []const u8) ![]const u8 {
-        const s = str orelse return null_handle;
-        if (s.len == 0) return null_handle;
-
-        const key: u32 = @intCast(@intFromPtr(s.ptr));
-
-        // Check if this pointer is already tracked
-        if (self.index_map.get(key)) |existing_index| {
-            const entry = &self.entries.items[existing_index];
-
-            // If content is the same, nothing to do
-            if (entry.data.ptr == s.ptr) {
-                return existing_index;
-            }
-
-            // Free old string
-            if (entry.data.len > 0) {
-                self.allocator.free(entry.data);
-            }
-
-            // Allocate new string
-            entry.data = try self.allocator.dupe(u8, s.*);
-            s = entry.data;
-
-            return existing_index;
-        }
-
-        // New pointer - add fresh entry
-        const data = try self.allocator.dupe(u8, s.*);
-
-        const index: u32 = @intCast(self.entries.items.len);
-        try self.entries.append(.{ .data = data });
-        try self.index_map.put(key, index);
-        s.* = data;
 
         return index;
     }
@@ -179,5 +140,30 @@ pub const StringTable = struct {
         }
         self.index_map.clearRetainingCapacity();
         self.entries.clearRetainingCapacity();
+    }
+
+    pub fn remapPointerRange(
+        self: *Self,
+        old_base: usize,
+        new_base: usize,
+        size: usize,
+    ) !void {
+        // Collect first, mutate after — can't modify a HashMap mid-iteration.
+        var to_remap = std.array_list.Managed(struct { old_key: u32, new_key: u32, idx: u32 }).init(self.allocator);
+        defer to_remap.deinit();
+
+        var it = self.index_map.iterator();
+        while (it.next()) |kv| {
+            const k = kv.key_ptr.*;
+            if (k >= old_base and k < old_base + size) {
+                const new_key: u32 = @intCast(k - old_base + new_base);
+                try to_remap.append(.{ .old_key = k, .new_key = new_key, .idx = kv.value_ptr.* });
+            }
+        }
+
+        for (to_remap.items) |r| {
+            _ = self.index_map.remove(r.old_key);
+            try self.index_map.put(r.new_key, r.idx);
+        }
     }
 };

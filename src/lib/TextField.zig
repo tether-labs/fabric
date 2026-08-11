@@ -62,6 +62,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         _direction: types.Direction = .row,
         _scroll: ?types.Scroll = null,
         _inlineStyle: ?[]const u8 = null,
+        _class: ?[]const u8 = null,
         _accessibility: ?Accessibility = null,
 
         // Extract to helper:
@@ -109,17 +110,12 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 unreachable;
             };
 
-            var self = Self{
+            const self = Self{
                 ._elem_type = .TextArea,
                 ._ui_node = ui_node,
                 ._text_field_type = .string,
                 ._text_field_params = .{ .string = .{} },
             };
-
-            var visual = types.Visual{};
-            visual.outline = .none;
-            visual = visual;
-            self._visual = visual;
 
             return self;
         }
@@ -198,6 +194,14 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                         ._ui_node = ui_node,
                         ._text_field_type = .date,
                         ._text_field_params = .{ .date = .{} },
+                    };
+                },
+                .radio => {
+                    return Self{
+                        ._elem_type = .TextField,
+                        ._ui_node = ui_node,
+                        ._text_field_type = .radio,
+                        ._text_field_params = .{ .radio = .{} },
                     };
                 },
                 else => {
@@ -300,6 +304,25 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        pub fn required(self: *const Self, value: bool) Self {
+            var new_self: Self = self.*;
+            if (self._elem_type != .TextField and self._elem_type != .TextArea) {
+                Vapor.printlnErr("bindValue only works on TextField and TextArea", .{});
+                return self.*;
+            }
+
+            switch (self._text_field_type) {
+                .radio => {
+                    new_self._text_field_params.?.radio.required = value;
+                },
+                else => {
+                    Vapor.printlnErr("NOT IMPLEMENTED", .{});
+                    return self.*;
+                },
+            }
+            return new_self;
+        }
+
         pub fn valStr(self: *const Self, value: []const u8) Self {
             var new_self: Self = self.*;
             if (self._elem_type != .TextField and self._elem_type != .TextArea) {
@@ -338,7 +361,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                     return self.*;
                 },
             }
-            // new_self._value = @ptrCast(@alignCast(value));
 
             return new_self;
         }
@@ -435,6 +457,14 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                     }
                     new_self._text_field_params.?.date.value_ptr = value.ptr;
                     new_self._text_field_params.?.date.value_len = value.len;
+                },
+                .radio => {
+                    if (@TypeOf(value.*) != []const u8) {
+                        Vapor.printlnErr("val and TextField type mismatch", .{});
+                        return self.*;
+                    }
+                    new_self._text_field_params.?.radio.value_ptr = value.ptr;
+                    new_self._text_field_params.?.radio.value_len = value.len;
                 },
                 else => {
                     Vapor.printlnErr("NOT IMPLEMENTED", .{});
@@ -586,7 +616,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                 uuid = _id;
             }
 
-            Vapor.onEndCtx(Vapor.focus, .{uuid});
+            Vapor.onLayout(Vapor.focus, .{uuid});
             return self.*;
         }
 
@@ -638,17 +668,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
         }
 
         pub fn onScroll(self: *const Self, callback: anytype, args: anytype) Self {
-            // const ui_node = self._ui_node orelse {
-            //     Vapor.printlnSrcErr("Node is null", .{}, @src());
-            //     unreachable;
-            // };
-            //
-            // Vapor.attachEventCtxCallback(ui_node, .input, func, args) catch |err| {
-            //     Vapor.println("ONCHANGE: Could not attach event callback {any}\n", .{err});
-            //     unreachable;
-            // };
-            // return self;
-
             var new_self = self.*;
             new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .scroll, callback, args) catch unreachable;
             return new_self;
@@ -678,18 +697,30 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return self;
         }
 
-        pub fn onChange(self: *const Self, func: anytype, args: anytype) Self {
-            // const ui_node = self._ui_node orelse {
-            //     Vapor.printlnSrcErr("Node is null", .{}, @src());
-            //     unreachable;
-            // };
-            //
-            // Vapor.attachEventCtxCallback(ui_node, .input, func, args) catch |err| {
-            //     Vapor.println("ONCHANGE: Could not attach event callback {any}\n", .{err});
-            //     unreachable;
-            // };
-            // return self;
+        pub fn onMount(self: *const Self, callback: anytype, args: anytype) *const Self {
+            const ui_node = self._ui_node orelse {
+                Vapor.printlnSrcErr("Node is null", .{}, @src());
+                unreachable;
+            };
 
+            const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
+                Vapor.println("Error could not create closure {any}\n", .{err});
+                return self;
+            };
+
+            var mount_node_key = hashKey(ui_node.uuid);
+            mount_node_key +%= hashKey(Vapor.on_mount_hash);
+
+            Vapor.erased_hooks_registry.put(mount_node_key, erased) catch |err| {
+                Vapor.printlnErr("Could Not add mount callback {any}", .{err});
+                return self;
+            };
+            ui_node.on_callbacks[0] = mount_node_key;
+
+            return self;
+        }
+
+        pub fn onChange(self: *const Self, func: anytype, args: anytype) Self {
             var new_self = self.*;
             new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .input, func, args) catch unreachable;
             return new_self;
@@ -710,53 +741,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             n._visual = v;
             return n;
         }
-
-        // pub fn onChange(self: *const Self, cb: fn (*Vapor.Event) void) Self {
-        //     var new_self: Self = self.*;
-        //
-        //     const ui_node = self._ui_node orelse blk: {
-        //         const ui_node = LifeCycle.open(ElementDecl{
-        //             .state_type = _state_type,
-        //             .elem_type = self._elem_type,
-        //         }) orelse {
-        //             Vapor.printlnSrcErr("Node is null", .{}, @src());
-        //             unreachable;
-        //         };
-        //         new_self._ui_node = ui_node;
-        //
-        //         break :blk ui_node;
-        //     };
-        //
-        //     // If we have a binded value we instead create a wrapper ctx around the cb passed in
-        //     // this way we can update the binded values from the callback and call the developer's
-        //     // cb with the updated value
-        //     if (self._value) |value| {
-        //         switch (self._text_field_type) {
-        //             .string => {
-        //                 Vapor.attachEventCtxCallback(ui_node, .input, struct {
-        //                     pub fn updateText(value_opaque: *anyopaque, evt: *Vapor.Event) void {
-        //                         const value_type: *[]const u8 = @ptrCast(@alignCast(value_opaque));
-        //                         value_type.* = evt.text();
-        //                         Vapor.print("updateText: {s}\n", .{value_type.*});
-        //                         @call(.auto, cb, .{evt});
-        //                     }
-        //                 }.updateText, value) catch |err| {
-        //                     Vapor.println("bindValue: Could not attach event callback {any}\n", .{err});
-        //                     unreachable;
-        //                 };
-        //             },
-        //             else => return self.*,
-        //         }
-        //     } else {
-        //         Vapor.attachEventCallback(ui_node, .input, cb) catch |err| {
-        //             Vapor.printErr("ONCHANGE: Could not attach event callback {any}\n", .{err});
-        //             Vapor.printErr("ONCHANGE: Handler Already in use from bind\n", .{});
-        //             return self.*;
-        //         };
-        //     }
-        //
-        //     return new_self;
-        // }
 
         pub fn onKeyDown(self: *const Self, cb: fn (*Vapor.Event) void) Self {
             var new_self: Self = self.*;
@@ -984,8 +968,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        // Add these methods:
-
         /// Set full accessibility config
         pub fn a11y(self: *const Self, accessibility: Accessibility) Self {
             var new_self: Self = self.*;
@@ -1080,34 +1062,6 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             var new_self: Self = self.*;
             new_self._style = style_ptr;
             return new_self;
-
-            // var new_self: Self = self.*;
-            // new_self._used_style = true;
-            // var elem_decl = Vapor.ElementDecl{
-            //     .state_type = _state_type,
-            //     .elem_type = self._elem_type,
-            //     .text = self._text,
-            //     .style = style_ptr,
-            //     .alt = self._alt,
-            //     .aria_label = self._aria_label,
-            //     .animation_enter = self._animation_enter,
-            //     .animation_exit = self._animation_exit,
-            //     .name = self._name,
-            // };
-            //
-            // if (self._text_field_params) |params| {
-            //     elem_decl.text_field_params = params;
-            // }
-            //
-            // if (self._id) |_id| {
-            //     var mutable_style = style_ptr.*;
-            //     mutable_style.id = _id;
-            //     elem_decl.style = &mutable_style;
-            // }
-            //
-            // _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);
-            // // Vapor.LifeCycle.configure(elem_decl);
-            // return new_self;
         }
 
         pub fn font(self: *const Self, font_size: u8, weight: ?u16, color: ?Color) Self {
@@ -1241,7 +1195,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
-        pub fn hoverBackground(self: *const Self, color: types.Background) Self {
+        pub fn hoverBackground(self: *const Self, color: types.Color) Self {
             var new_self: Self = self.*;
             var _interactive = new_self._interactive orelse types.Interactive{};
             var hover = _interactive.hover orelse types.Visual{};
@@ -1299,7 +1253,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             if (new_self._padding == null) {
                 new_self._padding = .{};
             }
-            new_self._padding.?.left = value;
+            new_self._padding.?._left = value;
             return new_self;
         }
 
@@ -1308,7 +1262,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             if (new_self._padding == null) {
                 new_self._padding = .{};
             }
-            new_self._padding.?.right = value;
+            new_self._padding.?._right = value;
             return new_self;
         }
 
@@ -1317,7 +1271,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             if (new_self._padding == null) {
                 new_self._padding = .{};
             }
-            new_self._padding.?.top = value;
+            new_self._padding.?._top = value;
             return new_self;
         }
 
@@ -1326,7 +1280,7 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             if (new_self._padding == null) {
                 new_self._padding = .{};
             }
-            new_self._padding.?.bottom = value;
+            new_self._padding.?._bottom = value;
             return new_self;
         }
 
@@ -1409,6 +1363,12 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        pub fn class(self: *const Self, class_name: []const u8) Self {
+            var n = self.*;
+            n._class = class_name;
+            return n;
+        }
+
         pub fn inlineStyle(self: *const Self, comptime fmt: []const u8, args: anytype) Self {
             var new_self: Self = self.*;
             const allocator = Vapor.arena(.frame);
@@ -1448,6 +1408,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
             if (self._id) |_id| {
                 mutable_style.id = _id;
+            }
+
+            if (self._class) |_class| {
+                mutable_style.style_id = _class;
             }
 
             var elem_decl = Vapor.ElementDecl{
@@ -1519,6 +1483,7 @@ const FieldExportTelephone = DynamicObject.exportStruct(types.InputParamsTelepho
 const FieldExportFile = DynamicObject.exportStruct(types.InputParamsFile);
 const FieldExportFloat = DynamicObject.exportStruct(types.InputParamsFloat);
 const FieldExportDate = DynamicObject.exportStruct(types.InputParamsDate);
+const FieldExportRadio = DynamicObject.exportStruct(types.InputParamsRadio);
 
 const API = struct {
     pub fn getFieldName(node_ptr: *UINode) callconv(.c) ?[*]const u8 {
@@ -1576,6 +1541,11 @@ const API = struct {
                 FieldExportDate.instance = date;
                 return FieldExportDate.getInstancePtr();
             },
+            .radio => |radio| {
+                FieldExportRadio.init();
+                FieldExportRadio.instance = radio;
+                return FieldExportRadio.getInstancePtr();
+            },
         }
         return null;
     }
@@ -1610,6 +1580,9 @@ const API = struct {
             .date => {
                 return FieldExportDate.getFieldCount();
             },
+            .radio => {
+                return FieldExportRadio.getFieldCount();
+            },
         }
         return 0;
     }
@@ -1640,6 +1613,9 @@ const API = struct {
             },
             .date => {
                 return FieldExportDate.getFieldDescriptor(index);
+            },
+            .radio => {
+                return FieldExportRadio.getFieldDescriptor(index);
             },
         }
         return null;

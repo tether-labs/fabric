@@ -8,25 +8,10 @@ const utils = @import("utils.zig");
 const hashKey = utils.hashKey;
 const Self = @This();
 
-var layout_path: []const u8 = "";
-var reconcile_debug: bool = false;
-
-pub const Fingerprint = u32;
-pub const FingerprintCount = usize;
-pub const FingerprintMap = std.AutoHashMap(Fingerprint, FingerprintCount);
-var fingerprints: [2]FingerprintMap = undefined;
-var current_count: usize = 0;
-
-pub fn switchFingerprintMaps() void {
-    if (current_count == 0) {
-        fingerprints[0] = fingerprints[1];
-        fingerprints[1] = fingerprints[0];
-    } else {}
-}
-
 pub fn reconcile(old_ctx: *UIContext, new_ctx: *UIContext) void {
-    reconcile_debug = false;
-    if (old_ctx.root == null or new_ctx.root == null) return;
+    if (old_ctx.root == null or new_ctx.root == null) {
+        return;
+    }
 
     traverseNodes(old_ctx.root.?, new_ctx.root.?);
 }
@@ -67,6 +52,9 @@ fn removeAllChildren(old_node: *UINode) void {
         Vapor.Animation.removal_queue.enqueue(old_child, j) catch {};
         j += 1;
         child = old_child.next_sibling;
+    }
+    if (j > 0) {
+        Vapor.has_dirty = true;
     }
 }
 
@@ -179,6 +167,7 @@ fn reconcileDeletions(old_node: *UINode, new_node: *UINode, len_old: usize, len_
         const old_child = old_items[j];
         // Vapor.removed_nodes.append(.{ .uuid = uuid, .index = j }) catch {};
         Vapor.Animation.removal_queue.enqueue(old_child, j) catch {};
+        Vapor.has_dirty = true;
     }
 }
 
@@ -217,6 +206,7 @@ fn reconcileSame(old_node: *UINode, new_node: *UINode, len: usize) void {
     // 3. Process the middle "un-synced" section
     const start = i;
     const end = back_i;
+    var structural_change = false;
 
     // Add all *new* nodes from the middle section to the map
     for (new_items[start..end], start..) |new_child, j| {
@@ -230,10 +220,11 @@ fn reconcileSame(old_node: *UINode, new_node: *UINode, len: usize) void {
         if (node_map.fetchRemove(old_child.uuid)) |new_child_entry| {
             const new_child = new_items[new_child_entry.value];
             traverseNodes(old_child, new_child);
-            Vapor.has_dirty = true;
+            structural_change = true;
         } else {
             // Vapor.removed_nodes.append(.{ .uuid = old_child.uuid, .index = offset }) catch {};
             Vapor.Animation.removal_queue.enqueue(old_child, offset) catch {};
+            structural_change = true;
         }
     }
 
@@ -244,8 +235,11 @@ fn reconcileSame(old_node: *UINode, new_node: *UINode, len: usize) void {
         const new_child = new_items[new_child_index];
         new_child.state_type = .added;
         Vapor.markChildrenDirty(new_child);
+        structural_change = true;
     }
-    Vapor.has_dirty = true;
+    if (structural_change) {
+        Vapor.has_dirty = true;
+    }
 }
 
 /// Case: Keyed-diffing when new_items.len > old_items.len (Additions)
@@ -318,119 +312,13 @@ fn reconcileAdditions(old_node: *UINode, new_node: *UINode, len_old: usize, len_
     Vapor.has_dirty = true;
 }
 
-// Single unified reconciliation function
-fn reconcileChildren(old_node: *UINode, new_node: *UINode) void {
-    const old_count = old_node.children_count;
-    const new_count = new_node.children_count;
-
-    if (new_count == 0) {
-        if (old_count > 0) removeAllChildren(old_node);
-        return;
-    }
-    if (old_count == 0) {
-        addAllChildren(new_node);
-        return;
-    }
-
-    const old_items = buildChildArray(old_node, old_count) orelse return;
-    const new_items = buildChildArray(new_node, new_count) orelse return;
-
-    // 1. Sync from start
-    var start: usize = 0;
-    while (start < old_count and start < new_count) {
-        if (std.mem.eql(u8, old_items[start].uuid, new_items[start].uuid)) {
-            traverseNodes(old_items[start], new_items[start]);
-            start += 1;
-        } else break;
-    }
-
-    // 2. Sync from end
-    var end_old = old_count;
-    var end_new = new_count;
-    while (end_old > start and end_new > start) {
-        if (std.mem.eql(u8, old_items[end_old - 1].uuid, new_items[end_new - 1].uuid)) {
-            traverseNodes(old_items[end_old - 1], new_items[end_new - 1]);
-            end_old -= 1;
-            end_new -= 1;
-        } else break;
-    }
-
-    // 3. Middle section - build maps for both UUID and fingerprint
-    var old_by_uuid = std.StringHashMap(*UINode).init(Vapor.arena(.frame));
-    var old_by_fingerprint = std.AutoHashMap(u64, std.array_list.Managed(*UINode)).init(Vapor.arena(.frame));
-    defer old_by_uuid.deinit();
-    defer old_by_fingerprint.deinit();
-
-    // Index old nodes by UUID and fingerprint
-    for (old_items[start..end_old]) |old_child| {
-        old_by_uuid.put(old_child.uuid, old_child) catch {};
-
-        // Group by fingerprint for move detection
-        const entry = old_by_fingerprint.getOrPut(old_child.finger_print) catch continue;
-        if (!entry.found_existing) {
-            entry.value_ptr.* = std.array_list.Managed(*UINode).init(Vapor.arena(.frame));
-        }
-        entry.value_ptr.append(old_child) catch {};
-    }
-
-    // 4. Process new nodes in middle section
-    for (new_items[start..end_new]) |new_child| {
-        // First: exact UUID match (same position identity)
-        if (old_by_uuid.fetchRemove(new_child.uuid)) |kv| {
-            const old_child = kv.value;
-            traverseNodes(old_child, new_child);
-            removeFromFingerprintMap(&old_by_fingerprint, old_child);
-            continue;
-        }
-
-        // Second: fingerprint match (node moved)
-        if (old_by_fingerprint.getPtr(new_child.finger_print)) |list| {
-            if (list.items.len > 0) {
-                const old_child = list.pop() orelse continue;
-                _ = old_by_uuid.remove(old_child.uuid);
-
-                new_child.state_type = .moved;
-                new_child.dirty = true;
-                traverseNodes(old_child, new_child);
-                Vapor.has_dirty = true;
-                continue;
-            }
-        }
-
-        // No match: truly new node
-        new_child.state_type = .added;
-        new_child.dirty = true;
-        Vapor.markChildrenDirty(new_child);
-        Vapor.has_dirty = true;
-    }
-
-    // 5. Remaining old nodes are deletions
-    var iter = old_by_uuid.iterator();
-    while (iter.next()) |entry| {
-        const old_child = entry.value_ptr.*;
-        Vapor.Animation.removal_queue.enqueue(old_child, 0) catch {};
-    }
-}
-
-fn removeFromFingerprintMap(map: *std.AutoHashMap(u64, std.array_list.Managed(*UINode)), node: *UINode) void {
-    if (map.getPtr(node.finger_print)) |list| {
-        for (list.items, 0..) |item, i| {
-            if (item == node) {
-                _ = list.swapRemove(i);
-                break;
-            }
-        }
-    }
-}
-
 // --- Main Reconciler Function ---
 pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
-
     // --- 1. Reconcile current node properties ---
     const changed = (new_node.finger_print != old_node.finger_print);
     new_node.style_changed = (new_node.style_hash != old_node.style_hash);
     new_node.props_changed = (new_node.props_hash != old_node.props_hash);
-
+    new_node.hooks_changed = (new_node.hooks_hash != old_node.hooks_hash);
     if (new_node.props_changed) {
         const old_handlers = old_node.event_handlers;
         const new_handlers = new_node.event_handlers;
@@ -455,8 +343,7 @@ pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
     }
 
     var is_dirty = changed or
-        Vapor.rerender_everything or
-        old_node.dirty;
+        Vapor.rerender_everything or new_node.index != old_node.index;
 
     if (!std.mem.eql(u8, old_node.uuid, new_node.uuid)) {
         is_dirty = true;
@@ -483,7 +370,6 @@ pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
     } else if (old_count == new_count) {
         // Case: Same length -> Try simple 1:1 traversal first, fall back to keyed
         reconcileSame(old_node, new_node, old_count); // TODO: This is working but the one below is not, for the form it duplicates the button on switch toggle
-        // reconcileChildren(old_node, new_node);
     } else {
         // Case: Different lengths -> Keyed diff
         if (old_count > new_count) {

@@ -34,6 +34,12 @@ pub fn Array(comptime T: type) type {
             self.items[self.items.len - 1] = item;
         }
 
+        pub fn appendAssumeCapacity(self: *Self, item: T) void {
+            assert(self.items.len < self.capacity);
+            self.items.len += 1; // expand first
+            self.items[self.items.len - 1] = item; // then write
+        }
+
         pub fn appendSlice(self: *Self, items: []const T) void {
             self.ensureCapacity(self.items.len + items.len);
             const start = self.items.len;
@@ -89,7 +95,7 @@ pub fn Array(comptime T: type) type {
 
         pub fn orderedRemove(self: *Self, i: usize) T {
             const val = self.items[i];
-            std.mem.copyBackwards(T, self.items[i .. self.items.len - 1], self.items[i + 1 .. self.items.len]);
+            std.mem.copyForwards(T, self.items[i .. self.items.len - 1], self.items[i + 1 .. self.items.len]);
             self.items.len -= 1;
             return val;
         }
@@ -206,15 +212,29 @@ pub fn Array(comptime T: type) type {
 
         // --- internals ---
 
-        fn ensureCapacity(self: *Self, min: usize) void {
+        pub fn ensureCapacity(self: *Self, min: usize) void {
             if (min <= self.capacity) return;
+
             const new_cap = @max(min, self.capacity * 2, 8);
             const new_mem = self.allocator().alloc(T, new_cap) catch @panic("Array: out of memory");
+
+            const old_base = @intFromPtr(self.items.ptr);
+            const new_base = @intFromPtr(new_mem.ptr);
+            const old_byte_size = self.capacity * @sizeOf(T);
+
             if (self.items.len > 0) {
                 @memcpy(new_mem[0..self.items.len], self.items);
             }
-            self.items.ptr = new_mem.ptr;
+
+            const old_len = self.items.len;
+            self.items = new_mem[0..old_len];
             self.capacity = new_cap;
+
+            // Remap *after* the move is complete. Order doesn't actually matter
+            // for correctness here (the table only reads its own state), but
+            // doing it last keeps the array in a consistent state if remap ever
+            // grows side effects.
+            Vapor.text_field_table.remapPointerRange(old_base, new_base, old_byte_size) catch @panic("Array: remap failed");
         }
     };
 }
@@ -311,9 +331,9 @@ pub fn BoundedArray(comptime T: type, comptime buffer_capacity: usize) type {
         }
 
         pub fn orderedRemove(self: *Self, i: usize) T {
-            const val = self.buffer[i];
-            std.mem.copyBackwards(T, self.buffer[i .. self.len - 1], self.buffer[i + 1 .. self.len]);
-            self.len -= 1;
+            const val = self.items[i];
+            std.mem.copyForwards(T, self.items[i .. self.items.len - 1], self.items[i + 1 .. self.items.len]);
+            self.items.len -= 1;
             return val;
         }
 

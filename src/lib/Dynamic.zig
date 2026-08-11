@@ -49,36 +49,38 @@ pub fn convertFromDynamicToType(comptime T: type, dyn_object: *DynamicObject) T 
                 if (ptr.size == .slice) {
                     @field(new_object, field.name) = dyn_field_value.string;
                 } else {
-                    Vapor.printErr("Not implemented yet, TYPE: {any}", .{field.type});
+                    std.log.err("Not implemented yet, TYPE: {any}", .{field.type});
                 }
             },
             .int => {
                 if (dyn_field_type == .int) {
                     @field(new_object, field.name) = @as(field.type, @intCast(dyn_field_value.int));
                 } else {
-                    Vapor.printErr("Not implemented yet, TYPE: {any}", .{field.type});
+                    std.log.err("Not implemented yet, TYPE: {any}", .{field.type});
                 }
             },
             .float => {
-                Vapor.print("Flooating", .{});
                 if (dyn_field_type == .float) {
-                    @field(new_object, field.name) = @as(field.type, @intCast(dyn_field_value.float));
+                    @field(new_object, field.name) = @as(field.type, @floatCast(dyn_field_value.float));
+                } else if (dyn_field_type == .int) {
+                    @field(new_object, field.name) = @as(field.type, @floatFromInt(dyn_field_value.int));
                 } else {
-                    Vapor.printErr("Not implemented yet, TYPE: {any}", .{field.type});
+                    std.log.err("Not implemented yet, TYPE: {any} {any}", .{ field.type, dyn_field_value });
+                    std.log.err("Not implemented yet, TYPE: {any} {any}", .{ field.type, dyn_field_value });
                 }
             },
             .bool => {
                 if (dyn_field_type == .bool) {
                     @field(new_object, field.name) = dyn_field_value.bool;
                 } else {
-                    Vapor.printErr("Not implemented yet, TYPE: {any}", .{field.type});
+                    std.log.err("Not implemented yet, TYPE: {any}", .{field.type});
                 }
             },
             .@"struct" => {
                 if (dyn_field_type == .object) {
                     @field(new_object, field.name) = convertFromDynamicToType(field.type, dyn_field_value.object);
                 } else {
-                    Vapor.printErr("Not implemented yet, TYPE: {any}", .{field.type});
+                    std.log.err("Not implemented yet, TYPE: {any}", .{field.type});
                 }
             },
             else => {},

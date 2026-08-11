@@ -12,6 +12,7 @@ pub const ClassType = enum {
     animation,
     defined,
     transform,
+    responsive,
 };
 
 pub const ClassCache = struct {
@@ -52,6 +53,7 @@ pub const ClassCache = struct {
             .animation => "anim",
             .defined => "def",
             .transform => "tran",
+            .responsive => "resp",
         };
     }
 

@@ -10,6 +10,11 @@ const Shadow = @import("Shadow.zig");
 
 pub const Animation = @This();
 
+pub fn new() void {
+    Vapor.animations = std.StringHashMap(Animation).init(Vapor.arena(.persist));
+    RemovalQueue.init(Vapor.arena(.persist));
+}
+
 // Helper struct for setAll - allows named field syntax
 pub const PropSet = struct {
     none: ?f32 = null,
@@ -1277,7 +1282,8 @@ pub fn zoomOutRotate(name: []const u8) Animation {
 }
 
 pub fn build(self: Animation) void {
-    Vapor.animations.put(self._name, self) catch |err| {
+    if (Vapor.animations == null) return;
+    Vapor.animations.?.put(self._name, self) catch |err| {
         Vapor.println("Could not create animation {any}\n", .{err});
     };
 }
@@ -1444,8 +1450,8 @@ pub const RemovalQueue = struct {
         if (handle >= self.items.items.len) return;
         const item = self.items.items[handle];
 
-        // Free the id string
-        self.allocator.free(item.id_ptr[0..item.id_len]);
+        // `uuid` is borrowed from the UINode, not owned by this queue, so there
+        // is nothing to free here.
 
         // Decrement animation ref count
         if (item.animation_id != std.math.maxInt(AnimationId)) {
@@ -1453,7 +1459,7 @@ pub const RemovalQueue = struct {
         }
 
         // Mark slot as free (or swap-remove if order doesn't matter)
-        self.items.items[handle].id_len = 0; // tombstone
+        self.items.items[handle].uuid = ""; // tombstone
     }
 
     pub fn nextGeneration(self: *RemovalQueue) void {

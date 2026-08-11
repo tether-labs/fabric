@@ -1,6 +1,6 @@
 const std = @import("std");
 const Vapor = @import("../Vapor.zig");
-const print = Vapor.print;
+const print = Vapor.println;
 
 const secret_jwt = "your-jwt-secret";
 
@@ -113,16 +113,19 @@ pub const DecodingKey = union(enum) {
         return .{ .secret = secret };
     }
 
-    fn fromEdsaBytes(bytes: [std.crypto.sign.Ed25519.PublicKey]u8) !@This() {
+    fn fromEdsaBytes(bytes: [std.crypto.sign.Ed25519.PublicKey.encoded_length]u8) !@This() {
         return .{ .edsa = try std.crypto.sign.Ed25519.PublicKey.fromBytes(bytes) };
     }
 
-    pub fn fromEs256Bytes(bytes: [std.crypto.ecdsa.EcdsaP256Sha256.PublicKey.encoded_length]u8) !@This() {
-        return .{ .es256 = try std.crypto.sign.ecdsa.EcdsaP256Sha256.PublicKey.fromBytes(bytes) };
+    // ECDSA public keys are SEC1-encoded and accept either the compressed (33/49
+    // byte) or uncompressed (65/97 byte) form, so these take a slice rather than
+    // a fixed-size array.
+    pub fn fromEs256Sec1(sec1: []const u8) !@This() {
+        return .{ .es256 = try std.crypto.sign.ecdsa.EcdsaP256Sha256.PublicKey.fromSec1(sec1) };
     }
 
-    pub fn fromEs384Bytes(bytes: [std.crypto.ecdsa.EcdsaP384Sha384.PublicKey.encoded_length]u8) !@This() {
-        return .{ .es384 = try std.crypto.sign.ecdsa.EcdsaP384Sha384.PublicKey.fromBytes(bytes) };
+    pub fn fromEs384Sec1(sec1: []const u8) !@This() {
+        return .{ .es384 = try std.crypto.sign.ecdsa.EcdsaP384Sha384.PublicKey.fromSec1(sec1) };
     }
 };
 
@@ -299,11 +302,11 @@ pub const EncodingKey = union(enum) {
         return .{ .edsa = try std.crypto.sign.Ed25519.SecretKey.fromBytes(bytes) };
     }
 
-    pub fn fromEs256Bytes(bytes: [std.crypto.ecdsa.EcdsaP256Sha256.SecretKey.encoded_length]u8) !@This() {
+    pub fn fromEs256Bytes(bytes: [std.crypto.sign.ecdsa.EcdsaP256Sha256.SecretKey.encoded_length]u8) !@This() {
         return .{ .es256 = try std.crypto.sign.ecdsa.EcdsaP256Sha256.SecretKey.fromBytes(bytes) };
     }
 
-    pub fn fromEs384Bytes(bytes: [std.crypto.ecdsa.EcdsaP384Sha384.SecretKey.encoded_length]u8) !@This() {
+    pub fn fromEs384Bytes(bytes: [std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.encoded_length]u8) !@This() {
         return .{ .es384 = try std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes(bytes) };
     }
 };
@@ -460,7 +463,7 @@ pub const SessionClaims = struct {
 };
 
 pub fn createSessionToken(allocator: std.mem.Allocator, user_id: []const u8, email: []const u8, name: []const u8) ![]const u8 {
-    const now = std.time.timestamp();
+    const now = Vapor.Kit.timestamp();
 
     const header = HeaderRoot{
         .alg = .HS256,
@@ -492,7 +495,7 @@ pub fn isExpired(token: []const u8) bool {
     const claims = parsed.value;
 
     // const now: i64 = @intFromFloat(Vapor.lib.nowMs());
-    const now = std.time.timestamp();
+    const now = Vapor.Kit.timestamp();
     return claims.exp < now; // <-- flip this
 }
 

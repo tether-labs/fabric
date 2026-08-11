@@ -7,7 +7,7 @@ pub const PackedTransition = @import("Transition.zig").PackedTransition;
 const ColorTheme = @import("constants/Color.zig");
 const Animation = @import("Animation.zig");
 pub const ThemeTokens = @import("theme").ThemeTokens;
-pub const color_theme: ColorTheme = ColorTheme{};
+pub var color_theme: ColorTheme = ColorTheme{};
 const isMobile = @import("utils.zig").isMobile;
 const Event = @import("Event.zig");
 const Theme = @import("theme");
@@ -15,6 +15,12 @@ pub const NewShadow = @import("Shadow.zig");
 const StringTable = @import("StringTable.zig").StringTable;
 const Accessibility = @import("Accessibility.zig").Accessibility;
 const Edges = @import("Edges.zig").Edges;
+
+pub const Layers = enum(u8) {
+    none = 0,
+    tooltip = 1,
+    modal = 2,
+};
 
 pub const ElementType = enum(u8) {
     Rectangle,
@@ -77,6 +83,7 @@ pub const ElementType = enum(u8) {
     Anchor,
     Spacer,
     Iframe,
+    FieldSet,
 };
 
 pub const AnchorPlacement = enum(u8) {
@@ -143,6 +150,7 @@ pub const SizingType = enum(u8) {
     min_percent,
     max_px,
     max_percent,
+    vp,
 };
 
 const MinMax = packed struct {
@@ -175,28 +183,6 @@ pub const SizingConstraint = packed struct {
     max: f32 = 0,
     preferred: f32 = 0,
 };
-
-// const SizingConstraint = packed struct {
-//     tag: Tag,
-//     data: SizingUnion,
-//     // minmax: MinMax,
-//     // percent: MinMax,
-//     // clamp_percent: Clamp,
-//     // clamp_px: Clamp,
-//     // min_max_vp: MinMax,
-//
-//     // pub fn eql(self: SizingConstraint, other: SizingConstraint) bool {
-//     //     if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
-//     //
-//     //     return switch (self) {
-//     //         .min_max_vp => |mm| mm.eql(other.min_max_vp),
-//     //         .minmax => |mm| mm.eql(other.minmax),
-//     //         .percent => |mm| mm.eql(other.percent),
-//     //         .clamp_px => |mm| mm.eql(other.clamp_px),
-//     //         .clamp_percent => |mm| mm.eql(other.clamp_percent),
-//     //     };
-//     // }
-// };
 
 pub const Size = packed struct {
     width: Sizing = .{},
@@ -265,6 +251,29 @@ pub const Size = packed struct {
     }
 };
 
+pub const Platform = enum(u8) {
+    mobile,
+    desktop,
+    tablet,
+};
+
+pub const Responsive = struct {
+    mobile: ?ResponsiveStyle = null,
+    desktop: ?ResponsiveStyle = null,
+    tablet: ?ResponsiveStyle = null,
+};
+
+pub const PackedResponsive = struct {
+    flags_layout: [3]bool = .{ false, false, false },
+    flags_visual: [3]bool = .{ false, false, false },
+    mobile_layout: PackedLayout = .{},
+    desktop_layout: PackedLayout = .{},
+    tablet_layout: PackedLayout = .{},
+    mobile_visual: PackedVisual = .{},
+    desktop_visual: PackedVisual = .{},
+    tablet_visual: PackedVisual = .{},
+};
+
 pub const Sizing = packed struct {
     size: SizingConstraint = .{},
     type: SizingType = .none,
@@ -277,6 +286,13 @@ pub const Sizing = packed struct {
 
     pub fn px(size: f32) Sizing {
         return .{ .type = .fixed, .size = .{
+            .min = size,
+            .max = size,
+        } };
+    }
+
+    pub fn vp(size: f32) Sizing {
+        return .{ .type = .vp, .size = .{
             .min = size,
             .max = size,
         } };
@@ -300,6 +316,19 @@ pub const Sizing = packed struct {
         return .{ .type = .min_max_vp, .size = .{
             .min = min,
             .max = max,
+        } };
+    }
+
+    pub fn at(mobile: f32, desktop: f32) Sizing {
+        if (isMobile()) {
+            return .{ .type = .percent, .size = .{
+                .min = mobile,
+                .max = mobile,
+            } };
+        }
+        return .{ .type = .percent, .size = .{
+            .min = desktop,
+            .max = desktop,
         } };
     }
 
@@ -330,20 +359,6 @@ pub const Sizing = packed struct {
             .percent => return .{ .type = .clamp_percent, .size = .{ .min = min, .max = max, .preferred = preferred } },
         }
     }
-
-    //
-    // pub fn clamp_percent(min: f32, preferred: f32, max: f32) Sizing {
-    //     return .{ .type = .clamp_percent, .size = .{ .clamp_percent = .{
-    //         .min = min,
-    //         .preferred = preferred,
-    //         .max = max,
-    //     } } };
-    // }
-    //
-    // // Add custom equality function for Sizing
-    // pub fn eql(self: Sizing, other: Sizing) bool {
-    //     return self.type == other.type and self.size.eql(other.size);
-    // }
 };
 
 const SizingUnit = enum(u8) {
@@ -438,12 +453,6 @@ pub const GradientType = enum(u8) {
     radial,
 };
 
-// pub const Gradient = struct {
-//     type: GradientType = .none,
-//     colors: []const Color,
-//     direction: GradientDirection,
-// };
-
 pub const Lines = struct {
     direction: LinesDirection,
     color: Color,
@@ -533,294 +542,10 @@ pub const Gradient = struct {
     clip: BackgroundClip = .borderBox, // NEW: default to border-box
 };
 
-pub const Background = struct {
-    color: ?Color = null,
-    layers: [MAX_LAYERS]?BackgroundLayer = [_]?BackgroundLayer{null} ** MAX_LAYERS,
-    layer_count: u8 = 0,
-
-    const MAX_LAYERS = 8;
-
-    // Existing presets
-    pub const transparent = Background{ .color = Color.transparent };
-    pub const white = Background{ .color = .{ .Literal = .{ .r = 255, .g = 255, .b = 255, .a = 1 } } };
-    pub const black = Background{ .color = .{ .Literal = .{ .r = 0, .g = 0, .b = 0, .a = 1 } } };
-    pub const grey = Background{ .color = .{ .Literal = .{ .r = 128, .g = 128, .b = 128, .a = 1 } } };
-    pub const red = Background{ .color = .{ .Literal = .{ .r = 255, .g = 0, .b = 0, .a = 1 } } };
-    pub const green = Background{ .color = .{ .Literal = .{ .r = 0, .g = 255, .b = 0, .a = 1 } } };
-    pub const blue = Background{ .color = .{ .Literal = .{ .r = 0, .g = 0, .b = 255, .a = 1 } } };
-    pub const yellow = Background{ .color = .{ .Literal = .{ .r = 255, .g = 255, .b = 0, .a = 1 } } };
-    pub const cyan = Background{ .color = .{ .Literal = .{ .r = 0, .g = 255, .b = 255, .a = 1 } } };
-    pub const magenta = Background{ .color = .{ .Literal = .{ .r = 255, .g = 0, .b = 255, .a = 1 } } };
-    pub const light_blue = Background{ .color = .{ .Literal = .{ .r = 0, .g = 255, .b = 255, .a = 1 } } };
-    pub const vapor_blue = Background{ .color = .vapor_blue };
-
-    // ============================================
-    // Builder API
-    // ============================================
-
-    /// Start with a base color
-    pub fn solid(color: Color) Background {
-        return .{ .color = color };
-    }
-
-    /// Start with transparent background
-    pub fn init() Background {
-        return .{};
-    }
-
-    /// Add a layer to the background
-    pub fn layer(self: Background, bg_layer: BackgroundLayer) Background {
-        var b = self;
-        if (b.layer_count < MAX_LAYERS) {
-            b.layers[b.layer_count] = bg_layer;
-            b.layer_count += 1;
-        }
-        return b;
-    }
-
-    /// Set the base color
-    pub fn base(self: Background, color: Color) Background {
-        var b = self;
-        b.color = color;
-        return b;
-    }
-
-    // ============================================
-    // Gradient Helpers (chainable)
-    // ============================================
-
-    /// Add a linear gradient layer
-    pub fn linearGradient(self: Background, dir: GradientDirection, colors: []const Color) Background {
-        return self.layer(.{
-            .Gradient = .{
-                .type = .linear,
-                .direction = dir,
-                .colors = colors,
-            },
-        });
-    }
-
-    pub fn linearGradientClip(self: Background, dir: GradientDirection, colors: []const Color, clip: BackgroundClip) Background {
-        return self.layer(.{
-            .Gradient = .{
-                .type = .linear,
-                .direction = dir,
-                .colors = colors,
-                .clip = clip,
-            },
-        });
-    }
-
-    /// Add a radial gradient layer
-    pub fn radialGradient(self: Background, colors: []const Color) Background {
-        return self.layer(.{
-            .Gradient = .{
-                .type = .radial,
-                .direction = .toBottom, // ignored for radial
-                .colors = colors,
-            },
-        });
-    }
-
-    /// Add a conic gradient layer
-    pub fn conicGradient(self: Background, colors: []const Color) Background {
-        return self.layer(.{
-            .Gradient = .{
-                .type = .conic,
-                .direction = .toBottom,
-                .colors = colors,
-            },
-        });
-    }
-
-    // ============================================
-    // Pattern Helpers (chainable)
-    // ============================================
-
-    /// Add a grid pattern layer
-    pub fn gridPattern(self: Background, size: u8, thickness: u8, color: Color) Background {
-        return self.layer(.{ .Grid = .{
-            .size = size,
-            .thickness = thickness,
-            .color = color,
-        } });
-    }
-
-    /// Add a dot pattern layer
-    pub fn dotPattern(self: Background, radius: f16, spacing: u8, color: Color) Background {
-        return self.layer(.{ .Dot = .{
-            .radius = radius,
-            .spacing = spacing,
-            .color = color,
-        } });
-    }
-
-    /// Add a lines pattern layer
-    pub fn linesPattern(self: Background, thickness: u8, spacing: u8, dir: LinesDirection, color: Color) Background {
-        return self.layer(.{ .Lines = .{
-            .thickness = thickness,
-            .spacing = spacing,
-            .direction = dir,
-            .color = color,
-        } });
-    }
-
-    // ============================================
-    // Image Helper (chainable)
-    // ============================================
-
-    pub fn imageLayer(self: Background, url: []const u8) Background {
-        return self.layer(.{ .Image = .{ .url = url } });
-    }
-
-    // ============================================
-    // Border Gradient Helper (your use case!)
-    // ============================================
-
-    /// Creates a gradient border effect using the padding-box/border-box technique
-    /// inner_color: the fill color inside the border
-    /// border_gradient: the gradient for the border itself
-    pub fn gradientBorder(self: Background, inner_color: Color, border_dir: GradientDirection, border_colors: []const Color) Background {
-        // First layer: solid color with padding-box (inner fill)
-        // Second layer: gradient with border-box (the border)
-        return self
-            .layer(.{
-                .Gradient = .{
-                    .type = .linear,
-                    .direction = .toRight, // doesn't matter for solid
-                    .colors = &[_]Color{ inner_color, inner_color },
-                    .clip = .paddingBox,
-                },
-            })
-            .layer(.{
-            .Gradient = .{
-                .type = .linear,
-                .direction = border_dir,
-                .colors = border_colors,
-                .clip = .borderBox,
-            },
-        });
-    }
-
-    // ============================================
-    // Convenience presets (static)
-    // ============================================
-
-    pub fn hex(hex_str: []const u8) Background {
-        return solid(Color.hex(hex_str));
-    }
-
-    pub fn rgba(r: u8, g: u8, b: u8, a: f32) Background {
-        return solid(Color.rgba(r, g, b, a));
-    }
-
-    pub fn palette(thematic: ThemeTokens) Background {
-        return solid(Color.palette(thematic));
-    }
-    // --- Convenience functions from your original code, now updated ---
-
-    pub fn transparentizeHex(color: Color, alpha: f32) Background {
-        return Background{ .color = color.transparentizeHex(alpha) };
-    }
-
-    pub fn transparentize(color: Color, alpha: f32) Background {
-        return Background{ .color = color.transparentize(alpha) };
-    }
-
-    pub fn darken(color: Color, percentage: f32) Background {
-        return Background{ .color = color.darken(percentage) };
-    }
-};
-
-// // The main Background struct now models CSS properties more closely.
-// // It has a base color and an optional top layer.
-// pub const Background = struct {
-//     color: ?Color = null,
-//     layer: ?BackgroundLayer = null,
-//
-//     pub const white = Background{ .color = .{ .Literal = .{ .r = 255, .g = 255, .b = 255, .a = 1 } } };
-//     pub const black = Background{ .color = .{ .Literal = .{ .r = 0, .g = 0, .b = 0, .a = 1 } } };
-//     pub const grey = Background{ .color = .{ .Literal = .{ .r = 128, .g = 128, .b = 128, .a = 1 } } };
-//     pub const red = Background{ .color = .{ .Literal = .{ .r = 255, .g = 0, .b = 0, .a = 1 } } };
-//     pub const green = Background{ .color = .{ .Literal = .{ .r = 0, .g = 255, .b = 0, .a = 1 } } };
-//     pub const blue = Background{ .color = .{ .Literal = .{ .r = 0, .g = 0, .b = 255, .a = 1 } } };
-//     pub const yellow = Background{ .color = .{ .Literal = .{ .r = 255, .g = 255, .b = 0, .a = 1 } } };
-//     pub const cyan = Background{ .color = .{ .Literal = .{ .r = 0, .g = 255, .b = 255, .a = 1 } } };
-//     pub const magenta = Background{ .color = .{ .Literal = .{ .r = 255, .g = 0, .b = 255, .a = 1 } } };
-//     pub const light_blue = Background{ .color = .{ .Literal = .{ .r = 0, .g = 255, .b = 255, .a = 1 } } };
-//     pub const vapor_blue = Background{ .color = .vapor_blue };
-//
-//     /// Creates a background with only a solid color.
-//     pub fn solid(color: Color) Background {
-//         return .{ .color = color };
-//     }
-//
-//     /// Creates a background with a grid pattern on top of a transparent color.
-//     pub fn grid(size: u8, thickness: u8, color: Color) Background {
-//         return .{
-//             .layer = .{ .Grid = .{
-//                 .size = size,
-//                 .thickness = thickness,
-//                 .color = color,
-//             } },
-//         };
-//     }
-//
-//     pub fn dot(radius: f16, spacing: u8, color: Color) Background {
-//         return .{
-//             .layer = .{ .Dot = .{
-//                 .radius = radius,
-//                 .spacing = spacing,
-//                 .color = color,
-//             } },
-//         };
-//     }
-//
-//     pub fn gradient(gradient_type: GradientType, dir: GradientDirection, colors: []const Color) Background {
-//         return .{
-//             .layer = .{ .Gradient = .{
-//                 .type = gradient_type,
-//                 .direction = dir,
-//                 .colors = colors,
-//             } },
-//         };
-//     }
-//
-//     /// Creates a background with an image on top of a specified background color.
-//     pub fn image(url: []const u8, bg_color: Color) Background {
-//         return .{
-//             .color = bg_color,
-//             .layer = .{ .Image = .{ .url = url } },
-//         };
-//     }
-//
-//     // --- Convenience functions from your original code, now updated ---
-//
-//     pub fn hex(hex_str: []const u8) Background {
-//         return .solid(.hex(hex_str));
-//     }
-//
-//     pub fn palette(thematic: ThemeTokens) Background {
-//         return .solid(.palette(thematic));
-//     }
-//
-//     pub fn transparentizeHex(color: Color, alpha: f32) Background {
-//         return Background{ .color = color.transparentizeHex(alpha) };
-//     }
-//
-//     pub fn transparentize(color: Color, alpha: f32) Background {
-//         return Background{ .color = color.transparentize(alpha) };
-//     }
-//
-//     pub fn darken(color: Color, percentage: f32) Background {
-//         return Background{ .color = color.darken(percentage) };
-//     }
-//     pub const transparent = Background.solid(.transparent);
-// };
-
 pub const Thematic = packed struct {
     token: ThemeTokens,
     alpha: f32 = -1,
+    darken: bool = false,
 };
 pub const Rgba = packed struct { r: u8 = 0, g: u8 = 0, b: u8 = 0, a: f32 = 0 };
 pub const Color = union(enum) {
@@ -851,43 +576,6 @@ pub const Color = union(enum) {
         } };
     }
 
-    // pub fn darken(color_prop: ColorProp, color: ?Color, percentage: f32) ColorMix {
-    //     return .{ .color_prop = color_prop, .color = color, .percentage = percentage };
-    // }
-
-    // Function to darken a hex color string by a percentage and return Color struct
-    // pub fn darken(_: Color, percentage: f32) Color {
-    //     if (percentage < 0.0 or percentage > 100.0) {
-    //         @panic("Percentage must be between 0 and 100");
-    //     }
-    //     //
-    //     // if (color == .Thematic) return Color{ .Thematic = .{
-    //     //     .token = color.Thematic.token,
-    //     //     .alpha = alpha,
-    //     // } };
-    //     // const r = color.Literal.r;
-    //     // const g = color.Literal.g;
-    //     // const b = color.Literal.b;
-    //     // return .{ .Literal = .{
-    //     //     .r = r,
-    //     //     .g = g,
-    //     //     .b = b,
-    //     //     .a = alpha,
-    //     // } };
-    //     //
-    //     // const rgba_arr = Vapor.hexToRgba(hex_str);
-    //     // const factor = 1.0 - (percentage / 100.0);
-    //     //
-    //     // return .{
-    //     //     .Literal = .{
-    //     //         .r = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[0])) * factor),
-    //     //         .g = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[1])) * factor),
-    //     //         .b = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[2])) * factor),
-    //     //         .a = rgba_arr[3], // Keep alpha unchanged
-    //     //     },
-    //     // };
-    // }
-
     // // Function to lighten a hex color string by a percentage and return Color struct
     pub fn lighten(hex_str: []const u8, percentage: f32) Color {
         if (percentage < 0.0 or percentage > 100.0) {
@@ -899,9 +587,11 @@ pub const Color = union(enum) {
 
         return .{
             .Literal = .{
-                .r = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[0])) + (@as(f32, 255.0) - @as(f32, @floatFromInt(rgba_arr[0]))) * factor),
-                .g = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[1])) + (@as(f32, 255.0) - @as(f32, @floatFromInt(rgba_arr[1]))) * factor),
-                .b = @intFromFloat(@as(f32, @floatFromInt(rgba_arr[2])) + (@as(f32, 255.0) - @as(f32, @floatFromInt(rgba_arr[2]))) * factor),
+                // hexToRgba already returns [4]f32, so the channels only need
+                // narrowing back to u8 on the way out.
+                .r = @intFromFloat(rgba_arr[0] + (255.0 - rgba_arr[0]) * factor),
+                .g = @intFromFloat(rgba_arr[1] + (255.0 - rgba_arr[1]) * factor),
+                .b = @intFromFloat(rgba_arr[2] + (255.0 - rgba_arr[2]) * factor),
                 .a = rgba_arr[3], // Keep alpha unchanged
             },
         };
@@ -991,6 +681,18 @@ pub const Color = union(enum) {
                     try writer.writeByte(')');
                 }
             },
+        }
+    }
+    pub fn darken(color: Color, percentage: f32) Color {
+        switch (color) {
+            .Thematic => |thematic| {
+                return .{ .Thematic = .{
+                    .token = thematic.token,
+                    .alpha = percentage,
+                    .darken = true,
+                } };
+            },
+            else => return color,
         }
     }
 };
@@ -1289,85 +991,7 @@ pub const BorderRadius = packed struct {
     }
 };
 
-const ShadowType = enum(u8) {
-    none,
-    drop,
-    inset,
-};
-
-pub const Shadow = struct {
-    type: ShadowType = .none,
-    top: i16 = 0,
-    left: i16 = 0,
-    blur: u8 = 0,
-    spread: u8 = 0,
-    color: Color = .{ .Literal = .{} },
-
-    pub fn elevation(size: i16, color: Color) Shadow {
-        return .{
-            .blur = 0,
-            .spread = 0,
-            .top = size,
-            .left = 0,
-            .color = color,
-        };
-    }
-
-    // Flat/subtle shadow for cards
-    pub fn card(color: Color) Shadow {
-        return .{
-            .top = 4,
-            .left = 4,
-            .blur = 0,
-            .spread = 0,
-            .color = color,
-        };
-    }
-
-    // Dropdown/overlay shadow
-    pub fn dropdown(color: Color) Shadow {
-        return .{
-            .top = 6,
-            .left = 0,
-            .blur = 12,
-            .spread = 0,
-            .color = color,
-        };
-    }
-
-    // Modal/dialog shadow
-    pub fn modal(color: Color) Shadow {
-        return .{
-            .top = 16,
-            .left = 0,
-            .blur = 32,
-            .spread = 0,
-            .color = color,
-        };
-    }
-
-    // Inset shadow (for pressed buttons, input fields)
-    pub fn inset(color: Color) Shadow {
-        return .{
-            .top = 0,
-            .left = 0,
-            .blur = 2,
-            .spread = 1,
-            .color = color,
-        };
-    }
-
-    // Glow effect
-    pub fn glow(size: u8, color: Color) Shadow {
-        return .{
-            .top = 0,
-            .left = 0,
-            .blur = size,
-            .spread = size / 2,
-            .color = color,
-        };
-    }
-};
+pub const Shadow = NewShadow;
 pub const Border = packed struct {
     _top: u8 = 0,
     _bottom: u8 = 0,
@@ -1651,6 +1275,10 @@ pub const Transform = struct {
             .down => return .{ .trans_y = dist, .scale_size = scale_size, .type = &.{ .translateY, .scale }, .size_type = .px },
             .left => return .{ .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateX, .scale }, .size_type = .px },
             .right => return .{ .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateX, .scale }, .size_type = .px },
+            .up_and_left => return .{ .trans_y = -dist, .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
+            .up_and_right => return .{ .trans_y = -dist, .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
+            .down_and_left => return .{ .trans_y = dist, .trans_x = -dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
+            .down_and_right => return .{ .trans_y = dist, .trans_x = dist, .scale_size = scale_size, .type = &.{ .translateY, .translateX, .scale }, .size_type = .px },
         }
     }
 
@@ -1683,7 +1311,7 @@ pub const Transform = struct {
     }
 
     pub fn top_percent(percent: f32) Transform {
-        return .{ .percent = percent, .type = &.{.translateY}, .size_type = .percent };
+        return .{ .trans_y = percent, .type = &.{.translateY}, .size_type = .percent };
     }
 
     pub fn rotate(deg: f16) Transform {
@@ -1823,19 +1451,19 @@ pub const CheckMark = struct {
 
 pub const Dim = struct {
     type: SizingType = .fit,
-    pub const grow = Sizing{ .type = .grow, .size = .{ .minmax = .{ .min = 0, .max = 0 } } };
-    pub const fit = Sizing{ .type = .fit, .size = .{ .minmax = .{ .min = 0, .max = 0 } } };
+    pub const grow = Sizing{ .type = .grow, .size = .{ .min = 0, .max = 0 } };
+    pub const fit = Sizing{ .type = .fit, .size = .{ .min = 0, .max = 0 } };
     pub fn fixed(size: f32) Sizing {
-        return .{ .type = .fixed, .size = .{ .minmax = .{
+        return .{ .type = .fixed, .size = .{
             .min = size,
             .max = size,
-        } } };
+        } };
     }
     pub fn elastic(min: f32, max: f32) Sizing {
-        return .{ .type = .elastic, .size = .{ .minmax = .{
+        return .{ .type = .elastic, .size = .{
             .min = min,
             .max = max,
-        } } };
+        } };
     }
 };
 
@@ -1877,6 +1505,7 @@ pub const TextDecorationType = enum(u8) {
     revert,
     unset,
     line_through,
+    blink,
 };
 
 pub const WhiteSpace = enum(u8) {
@@ -2289,12 +1918,19 @@ pub const PackedColorMix = packed struct {
     percentage: f32 = 0,
 };
 
+pub const AnimationPlayState = enum(u8) {
+    none,
+    paused,
+};
+
 pub const Visual = struct {
     /// Color color as RGBA array [red, green, blue, alpha] (0-255 each)
     /// Default: transparent black
     animation_name: ?[]const u8 = null,
 
     animation: ?[]const u8 = null,
+
+    animation_play_state: ?AnimationPlayState = null,
 
     background: ?Color = null,
 
@@ -2341,7 +1977,7 @@ pub const Visual = struct {
     opacity: ?f16 = null,
 
     /// Shadow configuration for drop shadows
-    shadow: ?Shadow = null,
+    shadow: ?NewShadow = null,
     text_shadow: ?Shadow = null,
 
     new_shadow: ?NewShadow = null,
@@ -2413,12 +2049,12 @@ pub const Visual = struct {
         }
     }
 
-    pub fn button(background: Background, border: BorderGrouped) Visual {
-        return .{
-            .background = background,
-            .border = border,
-        };
-    }
+    // pub fn button(background: Background, border: BorderGrouped) Visual {
+    //     return .{
+    //         .background = background,
+    //         .border = border,
+    //     };
+    // }
 };
 
 pub const Interactive = struct {
@@ -2429,22 +2065,22 @@ pub const Interactive = struct {
     focus_within: ?Visual = null,
     cursor: ?Cursor = null,
 
-    pub fn hover_scale() Interactive {
-        return .{
-            .hover = .{ .transform = .scale() },
-        };
-    }
+    // pub fn hover_scale() Interactive {
+    //     return .{
+    //         .hover = .{ .transform = .scale() },
+    //     };
+    // }
 
-    pub fn hoverScaleTextBackground(color: Color, background: Background) Interactive {
-        return .{
-            .hover = .{ .transform = .scale(), .background = background, .text_color = color },
-        };
-    }
-    pub fn hover_text(color: Color) Interactive {
-        return .{
-            .hover = .{ .text_color = color },
-        };
-    }
+    // pub fn hoverScaleTextBackground(color: Color, background: Background) Interactive {
+    //     return .{
+    //         .hover = .{ .transform = .scale(), .background = background, .text_color = color },
+    //     };
+    // }
+    // pub fn hover_text(color: Color) Interactive {
+    //     return .{
+    //         .hover = .{ .text_color = color },
+    //     };
+    // }
 };
 
 const PackedPosType = enum(u8) {
@@ -2621,6 +2257,7 @@ pub const PackedTextDecoration = packed struct {
 pub const PackedVisual = packed struct {
     animation_name_handle: u32 = StringTable.null_handle, // Replaces ptr + len
     animation: u32 = StringTable.null_handle, // Replaces ptr + len
+    animation_play_state: AnimationPlayState = .none, // Replaces ptr + len
     background: PackedColor = .{},
     packed_layers: PackedLayers = .{},
     background_layers: PackedLayers = .{},
@@ -2692,6 +2329,24 @@ pub const PackedTransforms = packed struct {
 var user_defaults: ?Style = null;
 pub const default: Style = Style{};
 
+pub const ResponsiveStyle = struct {
+    position: ?Position = null,
+    direction: ?Direction = null,
+    size: ?Size = null,
+    aspect_ratio: ?AspectRatio = null,
+    padding: ?Padding = null,
+    margin: ?Margin = null,
+    visual: ?Visual = null,
+    layout: ?Layout = null,
+    placement: ?AnchorPlacement = null,
+    child_gap: ?u8 = null,
+    spacing: ?u8 = null,
+    font_family: ?[]const u8 = null,
+    flex_wrap: ?FlexWrap = null,
+    flex_type: ?FlexType = null,
+    scroll: ?Scroll = null,
+};
+
 /// Comprehensive styling struct that provides CSS-like properties for UI components.
 /// Supports layout, visual styling, typography, animations, and interactions.
 /// Uses a three-tier inheritance system: system defaults -> user defaults -> component styles.
@@ -2719,7 +2374,7 @@ pub const Style = struct {
     position: ?Position = null,
 
     /// Flex direction for child elements (row, column, row-reverse, column-reverse)
-    direction: Direction = .row,
+    direction: ?Direction = null,
 
     /// Size configuration for the element
     size: ?Size = null,
@@ -2735,6 +2390,7 @@ pub const Style = struct {
 
     /// Style Props
     visual: ?Visual = null,
+    target_visual: ?Visual = null,
 
     /// Horizontal overflow behavior
     scroll: ?Scroll = null,
@@ -2774,7 +2430,7 @@ pub const Style = struct {
     transition: ?Transition = null,
 
     /// Whether to show scrollbars when content overflows
-    show_scrollbar: bool = true,
+    show_scrollbar: ?bool = null,
 
     /// Interactive
     interactive: ?Interactive = null,
@@ -2805,7 +2461,9 @@ pub const Style = struct {
 
     anchor: ?[]const u8 = null,
 
-    flex_type: FlexType = .default,
+    flex_type: ?FlexType = null,
+
+    responsive: ?Responsive = null,
 
     /// Gets the current base style to use for inheritance.
     /// Returns user-defined defaults if set, otherwise returns system defaults.
@@ -2946,6 +2604,7 @@ pub const StyleFields = enum {
     show_scrollbar,
     fill,
     stroke,
+    animation_play_state,
 };
 
 pub const Config = struct {
@@ -3043,14 +2702,13 @@ pub const InputParamsDate = struct {
     value_len: usize = 0,
 };
 
-const InputParamsRadio = struct {
-    tag: []const u8,
-    value: []const u8,
+pub const InputParamsRadio = struct {
+    type: InputTypes = .radio,
+    default_ptr: ?[*]const u8 = null,
+    default_len: usize = 0,
+    value_ptr: ?[*]const u8 = null,
+    value_len: usize = 0,
     required: ?bool = null,
-    checked: ?bool = null,
-    src: ?[]const u8 = null,
-    alt: ?[]const u8 = null,
-    disabled: ?bool = null,
 };
 
 const InputParamsCheckBox = struct {
@@ -3098,7 +2756,7 @@ pub const TextFieldParams = union(enum) {
     float: InputParamsFloat,
     // on_change: ?*const fn (event: *Event) void = null,
     // checkbox: InputParamsCheckBox,
-    // radio: InputParamsRadio,
+    radio: InputParamsRadio,
     password: InputParamsPassword,
     email: InputParamsEmail,
     telephone: InputParamsTelephone,
@@ -3152,6 +2810,8 @@ pub const ElementDeclaration = struct {
     accessibility: ?Accessibility = null,
     can_have_children: bool = true,
     src: ?[]const u8 = null,
+    morph: bool = false,
+    target: ?[]const u8 = null,
 };
 
 pub const Tooltip = struct {
@@ -3193,7 +2853,7 @@ pub const EventType = enum(u8) {
     mouseout, // Fired when a pointing device is moved off an element.
     mouseenter, // Similar to mouseover but does not bubble.
     mouseleave, // Similar to mouseout but does not bubble.
-    contextmenu, // Fired when the right mouse button is clicked.
+    rightclick, // Fired when the right mouse button is clicked.
 
     // Keyboard events
     keydown, // Fired when a key is pressed.
@@ -3254,6 +2914,25 @@ pub const EventType = enum(u8) {
     show,
     close,
     cancel,
+
+    // Media events
+    play, // Fired when playback has begun.
+    pause, // Fired when playback has been paused.
+    ended, // Fired when playback has stopped because the end of the media was reached.
+    volumechange, // Fired when the volume has been changed.
+    waiting, // Fired when playback has stopped because of a temporary lack of data.
+
+    // Progress events
+    loadstart, // Fired when the browser has started to load a resource.
+    progress, // Fired periodically as the browser loads a resource.
+    loadend, // Fired when a request has completed (success or failure).
+
+    // Transition & Animation events
+    transitionend, // Fired when a CSS transition has completed.
+    animationstart, // Fired when a CSS animation has started.
+    animationend, // Fired when a CSS animation has completed.
+    animationiteration, // Fired when an iteration of a CSS animation has completed.
+    beforeinput, // Fired when an iteration of a CSS animation has completed.
 };
 
 pub const Video = struct {

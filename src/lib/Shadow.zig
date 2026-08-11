@@ -62,7 +62,6 @@ pub const Layer = struct {
             try writer.writeI16(self.spread);
             try writer.write("px ");
         }
-        // try writer.write("{d}px {d}px {d}px {d}px ", .{ self.x, self.y, self.blur, self.spread });
         // Delegate to Color's write implementation
         // Adjust this call based on how your Color struct works (e.g. .format or .toCss)
         try self.color.toCss(writer);
@@ -128,7 +127,17 @@ pub fn card(color: Color) Shadow {
 
 /// Glow effect (centered, blurred, optional spread)
 pub fn glow(size: u16, color: Color) Shadow {
-    return init().dropSpread(0, 0, size, @as(i16, @intCast(size)) / 2, color);
+    return init().dropSpread(0, 0, size, @divFloor(@as(i16, @intCast(size)), 2), color);
+}
+
+/// Glow effect (centered, blurred, optional spread)
+pub fn insetGlow(x: i16, y: i16, size: u16, color: Color) Shadow {
+    return init().dropSpread(x, y, size, @divFloor(@as(i16, @intCast(size)), 2), color);
+}
+
+/// Add an inset shadow with blur
+pub fn insetSpread(x: i16, y: i16, blur: u16, spread: i16, color: Color) Shadow {
+    return init().dropSpread(x, y, blur, spread, color);
 }
 
 // -- 5. Output Generation --
@@ -148,22 +157,6 @@ pub fn writeCss(self: Shadow, writer: *Writer) !void {
         }
     }
 }
-
-// pub fn writeTextShadowCss(self: Shadow, writer: *Writer) !void {
-//     if (self.layer_count == 0) {
-//         try writer.write("none");
-//         return;
-//     }
-//
-//     var written: u8 = 0;
-//     for (self.layers) |maybe_layer| {
-//         if (maybe_layer) |l| {
-//             if (written > 0) try writer.write(",");
-//             try l.writeTextShadowCss(writer); // Use text-shadow version
-//             written += 1;
-//         }
-//     }
-// }
 
 pub fn toCss(self: Shadow, writer: *Writer) !void {
     try self.writeCss(writer);

@@ -50,6 +50,11 @@ pub fn fromTimestamp(timestamp: i64) !DateTime {
     // Basic sanity check:
     // If the number is huge, it's likely ms or us, not seconds.
     // 253402300800 is the year 9999.
+    // Check for negative timestamps (pre-epoch not supported)
+    if (timestamp < 0) {
+        return error.InvalidTimestamp;
+    }
+
     if (timestamp > 253402300800) {
         return error.TimestampLikelyInWrongUnits;
     }
@@ -57,11 +62,6 @@ pub fn fromTimestamp(timestamp: i64) !DateTime {
     const epoch_seconds = std.time.epoch.EpochSeconds{
         .secs = @intCast(timestamp),
     };
-
-    // 1. Check for negative timestamps (if you only support Epoch onwards)
-    if (timestamp < 0) {
-        return error.InvalidTimestamp;
-    }
 
     // 2. Check for overflow before casting
     // The maximum value for u64 is much larger than what is safe for
@@ -113,7 +113,7 @@ pub fn fromMonth(month: u8, year: i32) DateTime {
 
 /// Gets the current date and time
 pub fn now() DateTime {
-    const timestamp = std.time.timestamp();
+    const timestamp = Vapor.Kit.timestamp();
     return DateTime.fromTimestamp(timestamp) catch unreachable;
 }
 
@@ -181,8 +181,10 @@ pub fn formatTime(self: DateTime, allocator: std.mem.Allocator) ![]const u8 {
     });
 }
 
-/// Add days to this date
-pub fn addDays(self: DateTime, days: i32) DateTime {
+/// Add days to this date. Negative `days` can push the result before the epoch,
+/// which `fromTimestamp` rejects, so the error is propagated rather than
+/// swallowed.
+pub fn addDays(self: DateTime, days: i32) !DateTime {
     const timestamp = self.toTimestamp() + (@as(i64, days) * 86400);
     return DateTime.fromTimestamp(timestamp);
 }

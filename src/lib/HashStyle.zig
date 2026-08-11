@@ -3,7 +3,6 @@ const types = @import("types.zig");
 const Style = types.Style;
 const Visual = types.Visual;
 const Color = types.Color;
-const Background = types.Background;
 const BackgroundLayer = types.BackgroundLayer;
 const Transform = types.Transform;
 const Interactive = types.Interactive;
@@ -116,15 +115,13 @@ fn hashVisual(hasher: *std.hash.XxHash32, v: *const Visual) void {
     // String fields
     if (v.animation_name) |name| hasher.update(name);
 
-    // Animation pointer - hash the address (or skip if you want value equality)
-    if (v.animation) |anim| {
-        const ptr_val = @intFromPtr(anim);
-        hasher.update(std.mem.asBytes(&ptr_val));
-    }
+    // `animation` is the generated CSS text, so hash its contents for value
+    // equality rather than the slice address, which changes every frame.
+    if (v.animation) |anim| hasher.update(anim);
 
-    // Background
+    // Background is a plain colour; the pattern layers are hashed just below.
     if (v.background) |bg| {
-        hashBackground(hasher, &bg);
+        hashColor(hasher, &bg);
     }
 
     // Layers
@@ -162,20 +159,9 @@ fn hashVisual(hasher: *std.hash.XxHash32, v: *const Visual) void {
     if (v.opacity) |o| hasher.update(std.mem.asBytes(&o));
 
     // Shadow
-    if (v.shadow) |s| {
-        hasher.update(std.mem.asBytes(&s.type));
-        hasher.update(std.mem.asBytes(&s.top));
-        hasher.update(std.mem.asBytes(&s.left));
-        hasher.update(std.mem.asBytes(&s.blur));
-        hasher.update(std.mem.asBytes(&s.spread));
-        hashColor(hasher, &s.color);
-    }
+    if (v.shadow) |s| hashShadow(hasher, &s);
 
-    // New shadow (pointer to Shadow struct)
-    if (v.new_shadow) |ns| {
-        // Hash the actual shadow data, not the pointer
-        hasher.update(std.mem.asBytes(&ns));
-    }
+    if (v.new_shadow) |ns| hashShadow(hasher, &ns);
 
     // Transform
     if (v.transform) |t| {
@@ -202,6 +188,22 @@ fn hashVisual(hasher: *std.hash.XxHash32, v: *const Visual) void {
     }
 }
 
+/// `Shadow` is a fixed array of optional layers, so hash the populated layers
+/// field by field. Hashing the struct's bytes would fold in padding and the
+/// unused tail slots.
+fn hashShadow(hasher: *std.hash.XxHash32, shadow: *const types.NewShadow) void {
+    hasher.update(std.mem.asBytes(&shadow.layer_count));
+    for (shadow.layers) |maybe_layer| {
+        const layer = maybe_layer orelse continue;
+        hasher.update(std.mem.asBytes(&layer.inset));
+        hasher.update(std.mem.asBytes(&layer.x));
+        hasher.update(std.mem.asBytes(&layer.y));
+        hasher.update(std.mem.asBytes(&layer.blur));
+        hasher.update(std.mem.asBytes(&layer.spread));
+        hashColor(hasher, &layer.color);
+    }
+}
+
 fn hashColor(hasher: *std.hash.XxHash32, color: *const Color) void {
     switch (color.*) {
         .Literal => |rgba| {
@@ -211,11 +213,6 @@ fn hashColor(hasher: *std.hash.XxHash32, color: *const Color) void {
             hasher.update(std.mem.asBytes(&thematic));
         },
     }
-}
-
-fn hashBackground(hasher: *std.hash.XxHash32, bg: *const Background) void {
-    if (bg.color) |c| hashColor(hasher, &c);
-    if (bg.layer) |layer| hashBackgroundLayer(hasher, &layer);
 }
 
 fn hashBackgroundLayer(hasher: *std.hash.XxHash32, layer: *const BackgroundLayer) void {
@@ -380,14 +377,7 @@ fn hashChildStyle(hasher: *std.hash.XxHash32, cs: *const types.ChildStyle) void 
         if (td.color) |c| hashColor(hasher, &c);
     }
 
-    if (cs.shadow) |s| {
-        hasher.update(std.mem.asBytes(&s.type));
-        hasher.update(std.mem.asBytes(&s.top));
-        hasher.update(std.mem.asBytes(&s.left));
-        hasher.update(std.mem.asBytes(&s.blur));
-        hasher.update(std.mem.asBytes(&s.spread));
-        hashColor(hasher, &s.color);
-    }
+    if (cs.shadow) |s| hashShadow(hasher, &s);
 
     if (cs.white_space) |ws| hasher.update(std.mem.asBytes(&ws));
     if (cs.flex_wrap) |fw| hasher.update(std.mem.asBytes(&fw));

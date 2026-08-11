@@ -9,14 +9,15 @@ const DynamicObject = @import("Dynamic.zig");
 pub const Event = @This();
 id: u32,
 type: Vapor.Types.EventType,
-pub fn element_id(evt: *Event) []const u8 {
-    const key_str: []const u8 = "target";
+
+pub fn key(evt: *Event) []const u8 {
+    const key_str: []const u8 = "key";
     const resp = getEventData(evt.id, key_str.ptr, key_str.len);
     return std.mem.span(resp);
 }
 
-pub fn key(evt: *Event) []const u8 {
-    const key_str: []const u8 = "key";
+pub fn inputType(evt: *Event) []const u8 {
+    const key_str: []const u8 = "inputType";
     const resp = getEventData(evt.id, key_str.ptr, key_str.len);
     return std.mem.span(resp);
 }
@@ -104,6 +105,7 @@ pub fn formData(evt: *Event, form_value: anytype) ?@typeInfo(@TypeOf(form_value)
                         @field(cloned_form, field.name) = obj_value.string;
                     }
                 },
+
                 .int => {
                     if (obj_value == .string) {
                         @field(cloned_form, field.name) = std.fmt.parseInt(field.type, obj_value.string, 10) catch |err| blk: {
@@ -119,15 +121,6 @@ pub fn formData(evt: *Event, form_value: anytype) ?@typeInfo(@TypeOf(form_value)
                     var section = @field(cloned_form, field.name);
                     fillStruct(field.type, &section, obj);
                     @field(cloned_form, field.name) = section;
-                    // if (obj_value == .string) {
-                    //     @field(cloned_form, field.name) = std.fmt.parseInt(field.type, obj_value.string, 10) catch |err| blk: {
-                    //         Vapor.printlnErr("Error parsing int field {s} value {s} {any}", .{ field.name, obj_value.string, err });
-                    //         break :blk 0;
-                    //     };
-                    // } else {
-                    //     @field(cloned_form, field.name) = @intCast(obj_value.int);
-                    //     Vapor.printlnSrcErr("WE NEED TO CHECK THIS SO THAT THE SIGNDNESS IS OKAY", .{}, @src());
-                    // }
                 },
                 else => {
                     Vapor.printlnErr("Cannot set non string or int float types TYPE", .{});
@@ -183,6 +176,9 @@ fn fillStruct(comptime T: type, cloned_form: *T, obj: *DynamicObject.DynamicObje
                     // Handling floats since they are common in forms
                     @field(cloned_form, field.name) = if (obj_value == .float) obj_value.float else 0;
                 },
+                .@"enum" => {
+                    std.log.info("Enum: {any}", .{obj_value});
+                },
                 .@"struct" => {},
                 else => {
                     Vapor.printlnErr("Cannot set unsupported type for field {s}: {any}", .{ field.name, field.type });
@@ -190,7 +186,6 @@ fn fillStruct(comptime T: type, cloned_form: *T, obj: *DynamicObject.DynamicObje
             }
         } else {
             std.log.warn("Field {s} not found in DynamicObject instead found {s}\n", .{ field.name, obj.fields.items[index].name });
-            // Vapor.printlnErr("Field {s} not found in DynamicObject instead found {s}\n", .{ field.name, obj.fields.items[index].name });
         }
     }
 }
@@ -205,6 +200,11 @@ pub fn stopPropagation(evt: *Event) void {
     if (isWasi) {
         Wasm.eventStopPropagation(evt.id);
     }
+}
+
+pub fn scrollTop(evt: *Event) f32 {
+    const key_str: []const u8 = "scrollTop";
+    return getEventDataNumber(evt.id, key_str.ptr, key_str.len);
 }
 
 pub fn clientX(evt: *Event) f32 {
@@ -319,14 +319,14 @@ export fn registerAllListenerCallbacks() void {
         const ui_node = entry.value_ptr.*;
         if (ui_node.event_handlers) |handlers| {
             for (handlers.handlers.items) |handler| {
-                // if (handler.event_type == .blur or handler.event_type == .focus or handler.event_type == .input or handler.event_type == .change or handler.event_type == .dblclick) {
-                //     Vapor.printlnSrcErr("Event Type: {any} is being ignored\n", .{handler.event_type}, @src());
+                // if (handler.event_type == .blur or handler.event_type == .focus or handler.event_type == .input or handler.event_type == .change or handler.event_type == .submit or handler.event_type == .keydown or handler.event_type == .keyup) {
+                //     // Vapor.printlnSrcErr("Event Type: {any} is being ignored\n", .{handler.event_type}, @src());
                 //     continue;
                 // }
 
-                // if (handler.event_type == .submit or handler.event_type == .keydown or handler.event_type == .keyup) {
-                //     continue;
-                // }
+                if (handler.event_type == .submit or handler.event_type == .mouseover or handler.event_type == .mouseout) {
+                    continue;
+                }
 
                 const event_type_str = std.enums.tagName(Vapor.Types.EventType, handler.event_type) orelse unreachable;
                 var callback_id = hashKey(ui_node.uuid);

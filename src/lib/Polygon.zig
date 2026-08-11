@@ -5,6 +5,11 @@ const Writer = @import("Writer.zig");
 
 pub const Polygons = @This();
 
+
+pub fn new() void {
+    Vapor.polygons_table = std.StringHashMap(Polygons).init(Vapor.arena(.persist));
+}
+
 // ============================================
 // TYPES
 // ============================================
@@ -442,7 +447,8 @@ fn writeFloat(writer: *Writer, val: f32) void {
 // ============================================
 
 pub fn build(self: Polygons) void {
-    Vapor.polygons_table.put(self.class, self) catch |err| {
+    if (Vapor.polygons_table == null) return;
+    Vapor.polygons_table.?.put(self.class, self) catch |err| {
         Vapor.println("Could not create polygon {any}\n", .{err});
     };
 }

@@ -76,6 +76,21 @@ pub const StringTable = struct {
         return index;
     }
 
+    /// Looks up the handle for an already-interned string, without interning it.
+    /// Returns null if the string is not present.
+    pub fn handleOf(self: *const Self, str: []const u8) ?u32 {
+        if (str.len == 0) return null;
+
+        const hash = std.hash.Wyhash.hash(0, str);
+        const index = self.index_map.get(hash) orelse return null;
+        const entry = self.entries.items[index];
+        if (entry.len == 0) return null; // removed
+
+        const existing = self.string_data.items[entry.offset..][0..entry.len];
+        if (!std.mem.eql(u8, existing, str)) return null; // hash collision
+        return index;
+    }
+
     /// Retrieves a string by its handle.
     /// Returns null if the handle is invalid, removed, or null_handle.
     pub fn get(self: *const Self, handle: u32) ?[]const u8 {

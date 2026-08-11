@@ -16,7 +16,7 @@ pub extern fn requestRerenderWasm() void;
 pub extern fn trackAllocWasm() void;
 
 /// Checks for WASM memory growth.
-pub extern fn checkMemoryGrowthWasm() void;
+// pub extern fn checkMemoryGrowthWasm() void;
 
 // =============================================================================
 // CONSOLE / DEBUGGING
@@ -33,7 +33,7 @@ pub extern fn consoleLogColoredWasm(
     style_len_1: usize,
     style_ptr_2: [*]const u8,
     style_len_2: usize,
-) i32;
+) void;
 
 /// Logs a styled/colored warning to the console.
 pub extern fn consoleLogColoredWarnWasm(
@@ -43,7 +43,7 @@ pub extern fn consoleLogColoredWarnWasm(
     style_len_1: usize,
     style_ptr_2: [*]const u8,
     style_len_2: usize,
-) i32;
+) void;
 
 /// Shows a browser alert dialog.
 pub extern fn alertWasm(ptr: [*]const u8, len: usize) void;
@@ -153,6 +153,23 @@ pub extern fn mutateDomElementStringWasm(
     value_ptr: [*]const u8,
     value_len: usize,
 ) void;
+
+pub extern fn mutateDomElementI32Wasm(
+    id_ptr: [*]const u8,
+    id_len: usize,
+    attribute: [*]const u8,
+    attribute_len: usize,
+    value: i32,
+) void;
+
+pub extern fn mutateDomElementF32Wasm(
+    id_ptr: [*]const u8,
+    id_len: usize,
+    attribute: [*]const u8,
+    attribute_len: usize,
+    value: f32,
+) void;
+
 
 pub extern fn runOnAnimationFrameWasm(callback_id: u32) void;
 
@@ -342,6 +359,7 @@ pub extern fn setWindowHashWasm(hash_ptr: [*]const u8, hash_len: usize) void;
 
 /// Sets the full window location (causes navigation).
 pub extern fn setWindowLocationWasm(url_ptr: [*]const u8, url_len: usize) void;
+pub extern fn getWindowOriginWasm() [*:0]u8;
 
 /// Navigate to a path without full page reload.
 pub extern fn navigateWasm(path_ptr: [*]const u8, path_len: usize) void;
@@ -484,16 +502,8 @@ pub extern fn readClipboardWasm(callback_id: u32) void;
 // =============================================================================
 
 /// Performs a fetch request with full options.
-pub extern fn fetchWasm(
-    url_ptr: [*]const u8,
-    url_len: usize,
-    callback_id: u32,
-    http_ptr: [*]const u8,
-    http_len: usize,
-) void;
 
-/// Performs a fetch request with parameters.
-pub extern fn fetchParamsWasm(
+pub extern fn fetchWasm(
     url_ptr: [*]const u8,
     url_len: usize,
     callback_id: u32,
@@ -1107,10 +1117,16 @@ pub extern fn selectAllWasm(id_ptr: [*]const u8, id_len: usize) void;
 // =============================================================================
 
 /// Creates a resize observer. Returns handle.
-pub extern fn createResizeObserverWasm(callback_id: u32) u32;
+pub extern fn createResizeObserverWasm(id: u32, options_ptr: *const Vapor.Kit.ResizeOptions) void;
+
 
 /// Starts observing an element for resize.
-pub extern fn observeResizeWasm(handle: u32, element_ptr: [*]const u8, element_len: usize) u32;
+pub extern fn observeResizeWasm(
+    id: u32,
+    element_ptr: [*]const u8,
+    element_len: usize,
+    index: u32,
+) void;
 
 /// Stops observing an element.
 pub extern fn unobserveResizeWasm(handle: u32, element_ptr: [*]const u8, element_len: usize) void;
@@ -1405,3 +1421,5 @@ pub extern fn runPlaygroundWasm(url_ptr: [*]const u8, url_len: usize) void;
 pub extern fn startViewTransitionWasm(callback_id: u32) void;
 
 pub extern fn windowOpenWasm(url_ptr: [*]const u8, url_len: usize) void;
+pub extern fn releasePointerCaptureWasm(id_ptr: [*]const u8, id_len: usize, event_id: u32) void;
+pub extern fn setPointerCaptureWasm(id_ptr: [*]const u8, id_len: usize, event_id: u32) void;

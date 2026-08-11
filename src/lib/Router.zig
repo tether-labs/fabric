@@ -370,9 +370,6 @@ fn printNode(node: *const Node, buffer: *std.array_list.Managed(u8)) !void {
     // Append this node's prefix to the buffer
     try buffer.appendSlice(node.prefix);
 
-    // print("\n{s}", .{node.prefix});
-    // If this node marks the end of a word, print the accumulated buffer
-
     // Recursively process all children
     var children_itr = node.children.iterator();
     while (children_itr.next()) |child| {

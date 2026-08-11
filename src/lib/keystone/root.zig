@@ -1,4 +1,5 @@
 const std = @import("std");
+const Vapor = @import("../Vapor.zig");
 
 pub const EncodingKey = @import("JWT.zig").EncodingKey;
 
@@ -52,15 +53,8 @@ pub const Header = struct {
 
     // todo add others
     //
-    pub fn format(
-        self: @This(),
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        var out = std.json.writeStream(writer, .{ .emit_null_optional_fields = false });
-        defer out.deinit();
-        try out.write(self);
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try std.json.Stringify.value(self, .{ .emit_null_optional_fields = false }, writer);
     }
 };
 
@@ -119,7 +113,7 @@ pub const Validation = struct {
     // returns "now" in seconds, relative to UTC 1970-01-01
     now: *const fn () u64 = struct {
         fn func() u64 {
-            return @intCast(std.time.timestamp());
+            return @intCast(Vapor.Kit.timestamp());
         }
     }.func,
     // skip verification of the secret - use this when you only want to view the claims from a token

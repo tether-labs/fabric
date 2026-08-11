@@ -11,9 +11,12 @@ const KeyGenerator = @import("Key.zig").KeyGenerator;
 const Types = @import("types.zig");
 const Packer = @import("Packer.zig");
 const Edges = @import("Edges.zig").Edges;
+const Abstractions = @import("Abstractions.zig");
+const ManagedMemoryPool = Abstractions.ManagedMemoryPool;
+const ManagedAutoHashMap = Abstractions.ManagedAutoHashMap;
 
 const Generator = @This();
-buffer: [8192 * 12]u8 = undefined,
+buffer: [1024 * 1024]u8 = undefined,
 start: usize = 0,
 end: usize = 0,
 pub fn init(gen: *Generator) void {
@@ -23,17 +26,22 @@ pub fn init(gen: *Generator) void {
 pub fn deinit(gen: *Generator) void {
     gen.start = 0;
     gen.end = 0;
-    gen = undefined;
     gen.buffer = undefined;
 }
 
 var writer: Writer = undefined;
+var injectedCSS = Vapor.persist.array([]const u8);
+
+pub fn injectCSS(css: []const u8) void {
+    injectedCSS.append(css);
+}
+
 // -----------------------------------------------------------------------------
 // SECTION 1: Original Helper Functions (Unchanged)
 // -----------------------------------------------------------------------------
 // These functions are already simple, single-purpose wrappers.
 
-fn writeCss(_: *Generator, node: *UINode) void {
+fn writeCss(_: *Generator, node: *UINode, _: []const u8) void {
     writer.writeByte('{') catch {};
     writer.writeByte('\n') catch {};
     StyleWriter.generateStylePass(node, &writer);
@@ -190,7 +198,7 @@ fn writeFullNodeRule(gen: *Generator, node: *UINode, selector: []const u8) void 
     writer.writeByte('.') catch {};
     writer.write(selector) catch {};
 
-    gen.writeCss(node); // This writes the full { ...styles... } block
+    gen.writeCss(node, selector); // This writes the full { ...styles... } block
 
     appendWriterToGenerator(gen);
 }
@@ -214,6 +222,69 @@ pub fn writeAllStyles(gen: *Generator) void {
 
     // Special cases with ":hover"
     writeCommonStyleGroup(gen, allocator, &Packer.interactives, "intr", &key_buf, writeInteractive, ":hover");
+    writeCommonStyleResponsive(gen, &Packer.responsives, "resp", &key_buf);
+}
+
+fn writeCommonStyleResponsive(
+    gen: *Generator,
+    map: *ManagedAutoHashMap(u32, *Vapor.Types.PackedResponsive),
+    class_prefix: []const u8,
+    key_buf: *[128]u8,
+) void {
+    var itr = map.iterator();
+    while (itr.next()) |entry| {
+        const hash = entry.key_ptr.*;
+        const value_ptr = entry.value_ptr.*;
+        const common_key = KeyGenerator.generateHashKey(key_buf, hash, class_prefix);
+
+        var local_buffer: [4096]u8 = undefined;
+        writer.init(local_buffer[0..]);
+
+        // flag 0 is mobile
+        // flag 0 is mobile (applies below tablet breakpoint)
+        if (value_ptr.flags_layout[0]) {
+            writer.write("@media (max-width: 767px) {") catch {};
+            writeToken(common_key);
+            StyleWriter.generateLayout(&value_ptr.mobile_layout, &writer);
+
+            if (value_ptr.flags_visual[0]) {
+                writer.write("\n") catch {};
+                StyleWriter.generateVisual(&value_ptr.mobile_visual, &writer);
+            }
+
+            writer.write("}\n") catch {};
+            gen.writeToGlobal();
+        }
+
+        // flag 2 is tablet (applies at tablet and above)
+        if (value_ptr.flags_layout[2]) {
+            writer.write("@media (min-width: 768px) {") catch {};
+            writeToken(common_key);
+            StyleWriter.generateLayout(&value_ptr.tablet_layout, &writer);
+
+            if (value_ptr.flags_visual[2]) {
+                writer.write("\n") catch {};
+                StyleWriter.generateVisual(&value_ptr.tablet_visual, &writer);
+            }
+
+            writer.write("}\n") catch {};
+            gen.writeToGlobal();
+        }
+        // flag 1 is desktop (applies at desktop and above)
+        if (value_ptr.flags_layout[1]) {
+            writer.write("@media (min-width: 1024px) {") catch {};
+            writeToken(common_key);
+            StyleWriter.generateLayout(&value_ptr.desktop_layout, &writer);
+
+            if (value_ptr.flags_visual[1]) {
+                writer.write("\n") catch {};
+                StyleWriter.generateVisual(&value_ptr.desktop_visual, &writer);
+            }
+
+            writer.write("}\n") catch {};
+            gen.writeToGlobal();
+        }
+    }
 }
 
 /// REFACTORED: Now uses the `writeFullNodeRule` helper.
@@ -235,12 +306,45 @@ pub fn writeNodeStyle(gen: *Generator, node: *UINode) void {
     }
 }
 
+pub fn writeTargetStyle(gen: *Generator, node: *UINode, hash_tv: u32, target_ptr: *Types.PackedVisual) void {
+    var key_buf: [128]u8 = undefined;
+    const target = node.target.?;
+
+    var buffer: [4096]u8 = undefined;
+    writer.init(buffer[0..]);
+    writer.writeByte('.') catch {};
+    const common_key = KeyGenerator.generateHashKey(&key_buf, hash_tv, "t_vis");
+    writer.write(common_key) catch {};
+    writer.write(":hover ") catch {};
+    writer.writeByte('.') catch {};
+    writer.write(target) catch {};
+    writer.writeByte(' ') catch {};
+
+    writer.write("{\n") catch {};
+    StyleWriter.generateVisual(target_ptr, &writer);
+    writer.writeByte('}') catch {};
+    writer.writeByte('\n') catch {};
+
+    appendWriterToGenerator(gen);
+}
+
 pub fn printCSS(gen: *Generator) void {
     const buffer = gen.buffer[0..gen.end];
     Vapor.println("{s}", .{buffer});
 }
 
 pub fn getCSS(gen: *Generator) []const u8 {
+    for (injectedCSS.items) |css| {
+        const len: usize = css.len;
+        gen.end += len;
+        if (gen.start + len > gen.buffer.len) {
+            Vapor.printlnErr("Buffer overflow, increase buffer size {d}\n", .{gen.start + len});
+            unreachable;
+        }
+        @memcpy(gen.buffer[gen.start..gen.end], css[0..len]);
+        gen.start += len;
+    }
+
     return gen.buffer[0..gen.end];
 }
 
@@ -254,67 +358,4 @@ pub fn getAnimations(gen: *Generator) []const u8 {
 /// Uses SIMD to check if a needle exists within a haystack.
 pub fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;
-    // // 1. Handle edge cases.
-    // if (needle.len == 0) return true;
-    // if (haystack.len < needle.len) return false;
-    //
-    // // Use a 32-byte vector (256 bits), common for AVX2.
-    // const VEC_LEN = 32;
-    // // For shorter needles, a scalar search is often faster.
-    // if (haystack.len < VEC_LEN) {
-    //     return std.mem.indexOf(u8, haystack, needle) != null;
-    // }
-    // const Vec = @Vector(VEC_LEN, u8);
-    //
-    // // 2. Prepare for the SIMD search.
-    // // Create vectors with the first and last characters of the needle
-    // // repeated across all lanes.
-    // const first_splat: Vec = @splat(needle[0]);
-    // const last_splat: Vec = @splat(needle[needle.len - 1]);
-    //
-    // var i: usize = 0;
-    //
-    // // 3. Main SIMD loop.
-    // // Process the haystack in VEC_LEN-byte chunks.
-    // while (i + needle.len - 1 + VEC_LEN <= haystack.len) : (i += VEC_LEN) {
-    //     // Load a vector starting at `i`.
-    //     const v1: Vec = @bitCast(haystack[i..][0..VEC_LEN].*);
-    //     // Load a second vector, offset to align with the needle's last character.
-    //     const v2: Vec = @bitCast(haystack[i + needle.len - 1 ..][0..VEC_LEN].*);
-    //
-    //     // Compare v1 to the first character and v2 to the last character.
-    //     const eq_first = v1 == first_splat;
-    //     const eq_last = v2 == last_splat;
-    //
-    //     // Combine the results. A '1' indicates a potential match where both
-    //     // the first and last characters are in the correct positions.
-    //     const combined_mask = eq_first & eq_last;
-    //
-    //     // Cast the boolean vector mask to an integer to quickly check for any matches.
-    //     var bits: u32 = @bitCast(combined_mask);
-    //
-    //     // 4. Verify potential matches.
-    //     // If bits is non-zero, we have one or more potential candidates in this chunk.
-    //     while (bits != 0) {
-    //         // Find the index of the candidate within the vector.
-    //         const offset = @ctz(bits); // Count Trailing Zeros
-    //         const match_start_index = i + offset;
-    //
-    //         // Perform a full, precise comparison to confirm the match.
-    //         if (std.mem.eql(u8, needle, haystack[match_start_index..][0..needle.len])) {
-    //             return true; // Found it!
-    //         }
-    //
-    //         // Clear the checked bit and continue to the next candidate in the chunk.
-    //         bits &= (bits - 1);
-    //     }
-    // }
-    //
-    // // 5. Handle the remainder.
-    // // Check the final portion of the haystack that didn't fit into a full vector chunk.
-    // if (std.mem.indexOf(u8, haystack[i..], needle) != null) {
-    //     return true;
-    // }
-    //
-    // return false;
 }
