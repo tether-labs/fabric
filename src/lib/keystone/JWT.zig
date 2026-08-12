@@ -2,8 +2,6 @@ const std = @import("std");
 const Vapor = @import("../Vapor.zig");
 const print = Vapor.println;
 
-const secret_jwt = "your-jwt-secret";
-
 pub const JWT2 = struct {
     header: []const u8,
     payload: []const u8,
@@ -179,6 +177,20 @@ pub fn decode(
     return error.MalformedJWT;
 }
 
+/// Copies a signature into a fixed-size buffer, rejecting any length that is
+/// not exactly what the algorithm expects.
+///
+/// The signature comes straight off the wire, so its decoded length is
+/// attacker-controlled. `@memcpy` between differently-sized operands is illegal
+/// behaviour in Zig: a panic under ReleaseSafe and a buffer overflow under
+/// ReleaseFast/ReleaseSmall. A wrong-length signature is simply an invalid one.
+fn signatureBytes(comptime len: usize, sig: []const u8) error{InvalidSignature}![len]u8 {
+    if (sig.len != len) return error.InvalidSignature;
+    var out: [len]u8 = undefined;
+    @memcpy(&out, sig);
+    return out;
+}
+
 pub fn verify(
     allocator: std.mem.Allocator,
     algo: Algorithm,
@@ -196,43 +208,39 @@ pub fn verify(
         switch (algo) {
             .HS256 => {
                 var dest: [std.crypto.auth.hmac.sha2.HmacSha256.mac_length]u8 = undefined;
-                var src: [dest.len]u8 = undefined;
+                const src = try signatureBytes(dest.len, sig);
                 std.crypto.auth.hmac.sha2.HmacSha256.create(&dest, msg, switch (key) {
                     .secret => |v| v,
                     else => return error.InvalidDecodingKey,
                 });
-                @memcpy(&src, sig);
                 if (!std.crypto.timing_safe.eql([dest.len]u8, src, dest)) {
                     return error.InvalidSignature;
                 }
             },
             .HS384 => {
                 var dest: [std.crypto.auth.hmac.sha2.HmacSha384.mac_length]u8 = undefined;
-                var src: [dest.len]u8 = undefined;
+                const src = try signatureBytes(dest.len, sig);
                 std.crypto.auth.hmac.sha2.HmacSha384.create(&dest, msg, switch (key) {
                     .secret => |v| v,
                     else => return error.InvalidDecodingKey,
                 });
-                @memcpy(&src, sig);
                 if (!std.crypto.timing_safe.eql([dest.len]u8, src, dest)) {
                     return error.InvalidSignature;
                 }
             },
             .HS512 => {
                 var dest: [std.crypto.auth.hmac.sha2.HmacSha512.mac_length]u8 = undefined;
-                var src: [dest.len]u8 = undefined;
+                const src = try signatureBytes(dest.len, sig);
                 std.crypto.auth.hmac.sha2.HmacSha512.create(&dest, msg, switch (key) {
                     .secret => |v| v,
                     else => return error.InvalidDecodingKey,
                 });
-                @memcpy(&src, sig);
                 if (!std.crypto.timing_safe.eql([dest.len]u8, src, dest)) {
                     return error.InvalidSignature;
                 }
             },
             .ES256 => {
-                var src: [std.crypto.sign.ecdsa.EcdsaP256Sha256.Signature.encoded_length]u8 = undefined;
-                @memcpy(&src, sig);
+                const src = try signatureBytes(std.crypto.sign.ecdsa.EcdsaP256Sha256.Signature.encoded_length, sig);
                 std.crypto.sign.ecdsa.EcdsaP256Sha256.Signature.fromBytes(src).verify(msg, switch (key) {
                     .es256 => |v| v,
                     else => return error.InvalidDecodingKey,
@@ -241,8 +249,7 @@ pub fn verify(
                 };
             },
             .ES384 => {
-                var src: [std.crypto.sign.ecdsa.EcdsaP384Sha384.Signature.encoded_length]u8 = undefined;
-                @memcpy(&src, sig);
+                const src = try signatureBytes(std.crypto.sign.ecdsa.EcdsaP384Sha384.Signature.encoded_length, sig);
                 std.crypto.sign.ecdsa.EcdsaP384Sha384.Signature.fromBytes(src).verify(msg, switch (key) {
                     .es384 => |v| v,
                     else => return error.InvalidDecodingKey,
@@ -261,8 +268,7 @@ pub fn verify(
             //     };
             // },
             .EdDSA => {
-                var src: [std.crypto.sign.Ed25519.Signature.encoded_length]u8 = undefined;
-                @memcpy(&src, sig);
+                const src = try signatureBytes(std.crypto.sign.Ed25519.Signature.encoded_length, sig);
                 std.crypto.sign.Ed25519.Signature.fromBytes(src).verify(msg, switch (key) {
                     .edsa => |v| v,
                     else => return error.InvalidDecodingKey,
@@ -454,6 +460,8 @@ pub fn getRefreshPayload(payload_str: []const u8, allocator: std.mem.Allocator) 
     return payload.value;
 }
 
+/// Claim shape for a backend-issued session token. Use it to *decode*:
+/// `JWT.decode(allocator, SessionClaims, token, key, validation)`.
 pub const SessionClaims = struct {
     sub: []const u8, // your user id
     email: []const u8,
@@ -462,32 +470,16 @@ pub const SessionClaims = struct {
     exp: i64,
 };
 
-pub fn createSessionToken(allocator: std.mem.Allocator, user_id: []const u8, email: []const u8, name: []const u8) ![]const u8 {
-    const now = Vapor.Kit.timestamp();
-
-    const header = HeaderRoot{
-        .alg = .HS256,
-        .typ = "JWT",
-    };
-
-    const claims = SessionClaims{
-        .sub = user_id,
-        .email = email,
-        .name = name,
-        .iat = now,
-        .exp = now + (60 * 60 * 24 * 7), // 7 days
-    };
-
-    // Use a secret key (store this securely, e.g., env var)
-    const secret = "your-super-secret-key-change-this";
-
-    return try encode(
-        allocator,
-        header,
-        claims,
-        .{ .secret = secret },
-    );
-}
+// There is deliberately no `createSessionToken` here.
+//
+// Signing a session token in the browser requires the signing key to be present
+// in the wasm binary, where anyone can read it out and mint tokens of their
+// own — the signature stops meaning anything. Session tokens must be issued by
+// a backend that holds the key. KeyStone already does this: it exchanges the
+// OAuth code at `/exchange/{provider}/token` and only ever *reads* the result.
+//
+// `encode` below is still available for server-side use, where the caller
+// supplies a key that never reaches a client.
 
 pub fn isExpired(token: []const u8) bool {
     const parsed = decodePayloadUnverified(token) catch return true;

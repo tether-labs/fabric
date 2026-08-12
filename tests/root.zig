@@ -3,7 +3,6 @@ const Vapor = @import("vapor");
 
 const Fetch = Vapor.Fetch.Fetch;
 
-
 fn noop() void {}
 
 test "public API surface used by docs examples compiles" {
@@ -561,4 +560,464 @@ test "renderCycle queues removals from rendered child deletions" {
     try std.testing.expectEqualStrings("alpha", alpha.uuid);
     try std.testing.expectEqual(@as(usize, 1), Vapor.Animation.removalCount());
     try expectRemovalId(0, "beta");
+}
+
+// -----------------------------------------------------------------------------
+// Writer bounds
+//
+// Writer fills fixed static buffers (4096/8192 bytes) that are handed to JS as
+// C strings. It previously performed no bounds checks at all: the writes were
+// plain @memcpy into buffer[pos..pos+len] and the `!void` return type never
+// produced an error, so in ReleaseFast/ReleaseSmall an oversized style silently
+// wrote past the end of the buffer.
+// -----------------------------------------------------------------------------
+
+const Writer = Vapor.Writer;
+
+test "writer reserves a trailing byte so callers can NUL-terminate" {
+    var buffer: [16]u8 = undefined;
+    var writer: Writer = undefined;
+    writer.init(&buffer);
+
+    // Capacity is one short of the buffer, leaving room for the terminator.
+    try std.testing.expectEqual(@as(usize, 15), writer.size);
+
+    try writer.write("012345678901234");
+    try std.testing.expectEqual(@as(usize, 15), writer.pos);
+    try std.testing.expect(!writer.overflowed);
+
+    // The NUL every call site writes at `pos` stays inside the buffer.
+    buffer[writer.pos] = 0;
+    try std.testing.expectEqual(@as(u8, 0), buffer[15]);
+}
+
+test "writer refuses writes past capacity instead of overflowing" {
+    var buffer: [16]u8 = undefined;
+    var writer: Writer = undefined;
+    writer.init(&buffer);
+
+    try writer.write("0123456789");
+    try std.testing.expectError(error.OutOfSpace, writer.write("way too long to fit"));
+
+    // The rejected write left the cursor and contents untouched.
+    try std.testing.expectEqual(@as(usize, 10), writer.pos);
+    try std.testing.expectEqualStrings("0123456789", writer.getAll());
+    try std.testing.expect(writer.overflowed);
+
+    // A write that still fits after a refusal is accepted.
+    try writer.write("abcde");
+    try std.testing.expectEqualStrings("0123456789abcde", writer.getAll());
+}
+
+test "writer bounds-checks every write entry point" {
+    var buffer: [4]u8 = undefined;
+    var writer: Writer = undefined;
+    writer.init(&buffer);
+    try std.testing.expectEqual(@as(usize, 3), writer.size);
+
+    try writer.write("abc");
+    try std.testing.expectError(error.OutOfSpace, writer.writeByte('x'));
+    try std.testing.expectError(error.OutOfSpace, writer.write("x"));
+    try std.testing.expectError(error.OutOfSpace, writer.writeU8Num(200));
+    try std.testing.expectError(error.OutOfSpace, writer.writeU16(65535));
+    try std.testing.expectError(error.OutOfSpace, writer.writeU32(4294967295));
+    try std.testing.expectError(error.OutOfSpace, writer.writeUsize(123456));
+    try std.testing.expectError(error.OutOfSpace, writer.writeI16(-12345));
+    try std.testing.expectError(error.OutOfSpace, writer.writeI32(-1234567));
+    try std.testing.expectError(error.OutOfSpace, writer.writeF32(3.14159));
+    try std.testing.expectError(error.OutOfSpace, writer.writeF16(2.5));
+
+    // Nothing moved the cursor past what actually fit.
+    try std.testing.expectEqual(@as(usize, 3), writer.pos);
+    try std.testing.expectEqualStrings("abc", writer.getAll());
+}
+
+test "writer reset clears the overflow flag" {
+    var buffer: [8]u8 = undefined;
+    var writer: Writer = undefined;
+    writer.init(&buffer);
+
+    try std.testing.expectError(error.OutOfSpace, writer.write("far too long"));
+    try std.testing.expect(writer.overflowed);
+
+    writer.reset();
+    try std.testing.expect(!writer.overflowed);
+    try std.testing.expectEqual(@as(usize, 0), writer.pos);
+    try writer.write("ok");
+    try std.testing.expectEqualStrings("ok", writer.getAll());
+}
+
+test "writer handles a zero-length buffer without underflowing capacity" {
+    var buffer: [0]u8 = undefined;
+    var writer: Writer = undefined;
+    writer.init(&buffer);
+
+    try std.testing.expectEqual(@as(usize, 0), writer.size);
+    try std.testing.expectError(error.OutOfSpace, writer.writeByte('x'));
+}
+
+// -----------------------------------------------------------------------------
+// JWT signature length
+//
+// The decoded signature length comes straight off the wire. verify() used to
+// @memcpy it into a fixed-size array without checking, which is illegal
+// behaviour in Zig when the lengths differ: a panic under ReleaseSafe, a buffer
+// overflow under the ReleaseSmall builds that ship.
+// -----------------------------------------------------------------------------
+
+const JWT = Vapor.Testing.JWT;
+
+fn hs256Token(allocator: std.mem.Allocator, signature_b64: []const u8) []const u8 {
+    const encoder = std.base64.url_safe_no_pad.Encoder;
+
+    const header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+    const claims = "{\"exp\":99999999999,\"sub\":\"alice\"}";
+
+    const header_b64 = allocator.alloc(u8, encoder.calcSize(header.len)) catch unreachable;
+    _ = encoder.encode(header_b64, header);
+    const claims_b64 = allocator.alloc(u8, encoder.calcSize(claims.len)) catch unreachable;
+    _ = encoder.encode(claims_b64, claims);
+
+    return std.mem.join(allocator, ".", &.{ header_b64, claims_b64, signature_b64 }) catch unreachable;
+}
+
+test "jwt rejects signatures that are not the algorithm's length" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const Claims = struct { sub: []const u8 };
+
+    // HS256 expects a 32-byte signature. Each of these decodes to some other
+    // length, and every one must be refused rather than crash or overflow.
+    const wrong_lengths = [_][]const u8{
+        "", // 0 bytes
+        "AA", // 1 byte
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", // 31 bytes
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", // 32 bytes + 1 bit of slack
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", // 63 bytes
+    };
+
+    for (wrong_lengths) |sig_b64| {
+        const token = hs256Token(allocator, sig_b64);
+        const result = JWT.decode(allocator, Claims, token, .{ .secret = "test-secret" }, .{});
+        try std.testing.expectError(error.InvalidSignature, result);
+    }
+}
+
+test "jwt still rejects a correct-length but wrong signature" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const Claims = struct { sub: []const u8 };
+
+    // Exactly 32 bytes of zeroes: right length, wrong value. This must fail on
+    // the constant-time compare, not on the length guard.
+    const encoder = std.base64.url_safe_no_pad.Encoder;
+    const zeroes = [_]u8{0} ** 32;
+    const sig_b64 = try allocator.alloc(u8, encoder.calcSize(zeroes.len));
+    _ = encoder.encode(sig_b64, &zeroes);
+
+    const token = hs256Token(allocator, sig_b64);
+    const result = JWT.decode(allocator, Claims, token, .{ .secret = "test-secret" }, .{});
+    try std.testing.expectError(error.InvalidSignature, result);
+}
+
+// -----------------------------------------------------------------------------
+// HTML escaping
+//
+// The SSR path wrote ui_node.text and attribute values straight into the served
+// document, so any string containing markup stopped being content and became
+// tags. Vapor.Html(...) and Svg stay raw on purpose; everything else escapes.
+// -----------------------------------------------------------------------------
+
+const HtmlGenerator = Vapor.Testing.HtmlGenerator;
+
+fn escape(buf: []u8, text: []const u8) []const u8 {
+    var out = std.Io.Writer.fixed(buf);
+    HtmlGenerator.escapeInto(&out, text);
+    return out.buffered();
+}
+
+test "html escaping neutralises markup in text and attributes" {
+    var buf: [512]u8 = undefined;
+
+    // The classic injection: without escaping this closes the element and opens
+    // a script tag in the served page.
+    try std.testing.expectEqualStrings(
+        "&lt;script&gt;alert(1)&lt;/script&gt;",
+        escape(&buf, "<script>alert(1)</script>"),
+    );
+
+    // Breaking out of a double-quoted attribute value.
+    try std.testing.expectEqualStrings(
+        "x&quot; onerror=&quot;alert(1)",
+        escape(&buf, "x\" onerror=\"alert(1)"),
+    );
+
+    // Single quotes matter for single-quoted attributes.
+    try std.testing.expectEqualStrings(
+        "x&#39; onerror=&#39;alert(1)",
+        escape(&buf, "x' onerror='alert(1)"),
+    );
+
+    // Ampersand first, so an escape cannot be double-decoded into markup.
+    try std.testing.expectEqualStrings("&amp;lt;script&amp;gt;", escape(&buf, "&lt;script&gt;"));
+}
+
+test "html escaping leaves ordinary text untouched" {
+    var buf: [512]u8 = undefined;
+
+    try std.testing.expectEqualStrings("", escape(&buf, ""));
+    try std.testing.expectEqualStrings("Hello, world", escape(&buf, "Hello, world"));
+    try std.testing.expectEqualStrings("caf\u{00e9} \u{2014} 100%", escape(&buf, "caf\u{00e9} \u{2014} 100%"));
+
+    // Runs between metacharacters are copied whole, including the boundaries.
+    try std.testing.expectEqualStrings("a&lt;b&gt;c", escape(&buf, "a<b>c"));
+    try std.testing.expectEqualStrings("&lt;&gt;&amp;", escape(&buf, "<>&"));
+    try std.testing.expectEqualStrings("&lt;lead", escape(&buf, "<lead"));
+    try std.testing.expectEqualStrings("trail&gt;", escape(&buf, "trail>"));
+}
+
+// -----------------------------------------------------------------------------
+// README examples
+//
+// Every construct the README shows is type-checked here, so documentation
+// cannot drift away from the API without the build failing. These are comptime
+// type queries — nothing renders.
+// -----------------------------------------------------------------------------
+
+fn readmeOnClick() void {}
+
+test "README examples type-check against the real API" {
+    comptime {
+        // "A minimal app"
+        _ = @TypeOf(Vapor.Center().size(.full));
+        _ = @TypeOf(Vapor.Text("Hello, world!"));
+        _ = Vapor.Page;
+        _ = Vapor.init;
+        _ = Vapor.Animation.new;
+        _ = Vapor.setGlobalStyleVariables;
+        _ = Vapor.ThemeDefinition;
+
+        // "Components"
+        _ = @TypeOf(Vapor.Box().size(.full).padding(.all(16)));
+        _ = @TypeOf(Vapor.Heading(1, "Title"));
+        _ = @TypeOf(Vapor.Button(readmeOnClick, .{}));
+
+        // Every component the README lists as available.
+        _ = @TypeOf(Vapor.Box());
+        _ = @TypeOf(Vapor.Row());
+        _ = @TypeOf(Vapor.Stack());
+        _ = @TypeOf(Vapor.Center());
+        _ = @TypeOf(Vapor.TextFmt("{d}", .{1}));
+        _ = @TypeOf(Vapor.Link(.{ .url = "/docs" }));
+        _ = @TypeOf(Vapor.Image(.{ .src = "/logo.png", .alt = "Logo" }));
+        _ = @TypeOf(Vapor.List());
+        _ = @TypeOf(Vapor.Table());
+        _ = @TypeOf(Vapor.Form(readmeOnClick, .{}));
+        _ = Vapor.Svg;
+        _ = Vapor.Icon;
+        _ = Vapor.TextField;
+        _ = Vapor.TextArea;
+
+        // "Pages, layouts and hooks"
+        _ = Vapor.registerLayout;
+        _ = Vapor.registerHook;
+
+        // "Memory" — the four arenas the table documents.
+        _ = Vapor.Arena.frame;
+        _ = Vapor.Arena.view;
+        _ = Vapor.Arena.request;
+        _ = Vapor.Arena.persist;
+        _ = Vapor.frame.fmt;
+        _ = Vapor.dupe;
+
+        // "Data fetching"
+        _ = Fetch.fetch;
+        _ = @TypeOf(Fetch.fetch);
+
+        // "Authentication"
+        _ = Vapor.KeyStone.signIn;
+        _ = Vapor.KeyStone.isAuthenticated;
+        _ = Vapor.KeyStone.getAccessToken;
+
+        // "Setup" — the theme fixture mirrors what the README tells users to write.
+        _ = Vapor.Types.Color.black;
+        _ = Vapor.Types.Color.white;
+        _ = Vapor.Types.Color.vapor_blue;
+    }
+}
+
+test "static components are reachable via the generic builder" {
+    // The docs point at Vapor.Builder(.static) now that the old Vapor.Static
+    // namespace is gone; keep that path compiling.
+    comptime {
+        _ = @TypeOf(Vapor.Builder(.static).Box);
+        _ = @TypeOf(Vapor.BuilderClose(.static).Text("x"));
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Keyed diff: middle insertion / deletion
+//
+// Reconciler.zig carries a TODO saying the different-length keyed paths
+// duplicate a button when a form toggles. These drive those paths directly.
+// -----------------------------------------------------------------------------
+
+fn addedCount(root: *UINode) usize {
+    var n: usize = 0;
+    var it = root.children();
+    while (it.next()) |c| {
+        if (c.state_type == .added) n += 1;
+    }
+    return n;
+}
+
+test "keyed diff: inserting in the middle adds only the new node" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const route_arena = initReconcilerRuntime(arena.allocator());
+    defer deinitReconcilerRuntime(arena.allocator(), route_arena);
+
+    const old_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "a", .index = 0, .finger_print = 1, .props_hash = 1, .text = "A" },
+        .{ .uuid = "b", .index = 1, .finger_print = 2, .props_hash = 2, .text = "B" },
+    });
+    const new_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "a", .index = 0, .finger_print = 1, .props_hash = 1, .text = "A" },
+        .{ .uuid = "x", .index = 1, .finger_print = 3, .props_hash = 3, .text = "X" },
+        .{ .uuid = "b", .index = 2, .finger_print = 2, .props_hash = 2, .text = "B" },
+    });
+
+    Reconciler.traverseNodes(old_root, new_root);
+
+    // Only "x" is new. "a" and "b" already exist and must not be re-added,
+    // or the DOM ends up with two of them.
+    try std.testing.expectEqual(@as(usize, 1), addedCount(new_root));
+    try std.testing.expectEqual(Vapor.Types.StateType.added, child(new_root, 1).state_type);
+    try std.testing.expectEqual(@as(usize, 0), Vapor.Animation.removalCount());
+}
+
+test "keyed diff: deleting from the middle removes only that node" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const route_arena = initReconcilerRuntime(arena.allocator());
+    defer deinitReconcilerRuntime(arena.allocator(), route_arena);
+
+    const old_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "a", .index = 0, .finger_print = 1, .props_hash = 1, .text = "A" },
+        .{ .uuid = "x", .index = 1, .finger_print = 3, .props_hash = 3, .text = "X" },
+        .{ .uuid = "b", .index = 2, .finger_print = 2, .props_hash = 2, .text = "B" },
+    });
+    const new_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "a", .index = 0, .finger_print = 1, .props_hash = 1, .text = "A" },
+        .{ .uuid = "b", .index = 1, .finger_print = 2, .props_hash = 2, .text = "B" },
+    });
+
+    Reconciler.traverseNodes(old_root, new_root);
+
+    try std.testing.expectEqual(@as(usize, 0), addedCount(new_root));
+    try std.testing.expectEqual(@as(usize, 1), Vapor.Animation.removalCount());
+    try expectRemovalId(0, "x");
+}
+
+test "keyed diff cannot recognise a node that moved (identity is positional)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const route_arena = initReconcilerRuntime(arena.allocator());
+    defer deinitReconcilerRuntime(arena.allocator(), route_arena);
+
+    // KeyGenerator.generateKey hashes the child index into the uuid, so the
+    // same Button has a different uuid at index 1 and index 2. This mirrors a
+    // form toggling an extra field in above the submit button.
+    const old_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "Swit_a-gk", .index = 0, .finger_print = 1, .props_hash = 1 },
+        .{ .uuid = "Butt_1-gk", .index = 1, .finger_print = 2, .props_hash = 2 },
+    });
+    const new_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "Swit_a-gk", .index = 0, .finger_print = 1, .props_hash = 1 },
+        .{ .uuid = "Text_b-gk", .index = 1, .finger_print = 3, .props_hash = 3 },
+        .{ .uuid = "Butt_2-gk", .index = 2, .finger_print = 2, .props_hash = 2 },
+    });
+
+    Reconciler.traverseNodes(old_root, new_root);
+
+    // The button did not change, it only moved down one slot. Ideally only the
+    // inserted field would be added. Instead the old button is queued for
+    // removal and a second one is added, because the uuid it is matched on
+    // encodes its position.
+    try std.testing.expectEqual(@as(usize, 2), addedCount(new_root));
+    try std.testing.expectEqual(@as(usize, 1), Vapor.Animation.removalCount());
+    try expectRemovalId(0, "Butt_1-gk");
+}
+
+// -----------------------------------------------------------------------------
+// Style compiler
+//
+// convertStyleCustomWriter fills fixed static buffers via Writer. Now that
+// Writer refuses out-of-space writes rather than running off the end, the
+// behaviour under pressure is truncation — these pin both the normal output and
+// that boundary.
+// -----------------------------------------------------------------------------
+
+const StyleCompiler = Vapor.Testing.StyleCompiler;
+
+test "style compiler emits padding and margin declarations" {
+    var buf: [256]u8 = undefined;
+    var writer: Vapor.Writer = undefined;
+    writer.init(&buf);
+
+    const mp = Vapor.Types.PackedMarginsPaddings{ .padding = .all(12) };
+    StyleCompiler.generateMarginsPadding(&mp, &writer);
+
+    try std.testing.expectEqualStrings(
+        "padding:12px 12px 12px 12px;\nmargin:0px 0px 0px 0px;\n",
+        writer.getAll(),
+    );
+    try std.testing.expect(!writer.overflowed);
+}
+
+test "style compiler truncates instead of running past its buffer" {
+    // A generous tail the writer is not allowed to touch. Before Writer was
+    // bounds-checked, an oversized style walked straight into it.
+    var backing = [_]u8{0xAA} ** 128;
+    const capacity = 16;
+
+    var writer: Vapor.Writer = undefined;
+    writer.init(backing[0..capacity]);
+
+    const mp = Vapor.Types.PackedMarginsPaddings{ .padding = .all(12) };
+    StyleCompiler.generateMarginsPadding(&mp, &writer);
+
+    // Far more CSS than 16 bytes, so it must have given up partway.
+    try std.testing.expect(writer.overflowed);
+    try std.testing.expect(writer.pos <= capacity - 1);
+
+    // Whatever it did write stays inside the buffer, and the caller can still
+    // NUL-terminate at `pos`.
+    backing[writer.pos] = 0;
+    for (backing[capacity..]) |byte| {
+        try std.testing.expectEqual(@as(u8, 0xAA), byte);
+    }
+}
+
+test "style compiler keeps truncating safely once full" {
+    var backing = [_]u8{0xAA} ** 96;
+    const capacity = 8;
+    var writer: Vapor.Writer = undefined;
+    writer.init(backing[0..capacity]);
+
+    // Repeatedly generating into an already-full writer must stay in bounds.
+    const mp = Vapor.Types.PackedMarginsPaddings{ .padding = .all(255) };
+    var i: usize = 0;
+    while (i < 50) : (i += 1) {
+        StyleCompiler.generateMarginsPadding(&mp, &writer);
+    }
+
+    try std.testing.expect(writer.pos <= capacity - 1);
+    for (backing[capacity..]) |byte| {
+        try std.testing.expectEqual(@as(u8, 0xAA), byte);
+    }
 }

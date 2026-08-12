@@ -368,10 +368,23 @@ pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
         // Case: New has items, Old was empty -> Add all new
         addAllChildren(new_node);
     } else if (old_count == new_count) {
-        // Case: Same length -> Try simple 1:1 traversal first, fall back to keyed
-        reconcileSame(old_node, new_node, old_count); // TODO: This is working but the one below is not, for the form it duplicates the button on switch toggle
+        // Case: Same length -> keyed diff with prefix/suffix fast paths
+        reconcileSame(old_node, new_node, old_count);
     } else {
-        // Case: Different lengths -> Keyed diff
+        // Case: Different lengths -> keyed diff.
+        //
+        // KNOWN LIMITATION: these paths cannot recognise a node that merely
+        // moved. `KeyGenerator.generateKey` hashes the child index into the
+        // uuid, so a node's identity changes with its position — matching on
+        // uuid is really a positional match. Insert an element above a button
+        // and the button's uuid changes, so it is queued for removal while a
+        // second one is marked `.added`. That is the "duplicated button on
+        // switch toggle" symptom: for as long as the deferred removal is
+        // outstanding, both exist.
+        //
+        // Fixing it properly needs identity that survives a move, i.e. a
+        // caller-supplied key feeding `generateKey` in place of the index.
+        // See the "keyed diff cannot recognise a node that moved" test.
         if (old_count > new_count) {
             reconcileDeletions(old_node, new_node, old_count, new_count);
         } else {

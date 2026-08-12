@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned deliberately: Vapor tracks Zig closely and 0.16 removed APIs the
+      # library uses. An unpinned "master" here would fail for reasons unrelated
+      # to the change under test.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Formatting
+        run: zig fmt --check build.zig src tests
+
+      # The real gate. Zig analyses declarations lazily, so `zig build` alone
+      # type-checks only what it happens to reach; this forces every public
+      # declaration in every module, for wasm32-wasi and the host.
+      - name: Type-check the whole library
+        run: zig build check
+
+      - name: Tests
+        run: zig build test
+
+      # The shipping target, at the optimisation level that actually ships.
+      # Bounds and safety behaviour differ here from Debug.
+      - name: Build for wasm32-wasi (ReleaseSmall)
+        run: zig build -Dtarget=wasm32-wasi -Doptimize=ReleaseSmall

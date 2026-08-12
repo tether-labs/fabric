@@ -1392,7 +1392,6 @@ pub const RemovalQueue = struct {
     items: std.array_list.Managed(PendingRemoval),
     animations: AnimationIntern,
     current_generation: u32 = 0,
-    removals: std.array_list.Managed(u32),
 
     pub fn init(allocator: Allocator) void {
         removal_queue = .{
@@ -1400,7 +1399,6 @@ pub const RemovalQueue = struct {
             .items = std.array_list.Managed(PendingRemoval).init(allocator),
             .animations = AnimationIntern.init(allocator),
             .current_generation = 0,
-            .removals = std.array_list.Managed(u32).init(allocator),
         };
     }
 
@@ -1420,17 +1418,12 @@ pub const RemovalQueue = struct {
             break :blk try self.animations.intern(css_ptr[0..len]);
         } else std.math.maxInt(AnimationId); // sentinel for "no animation"
 
-        const handle: u32 = @intCast(self.items.items.len);
         try self.items.append(.{
             .uuid = node.uuid,
             .node_index = @intCast(node_index),
             .animation_id = anim_id,
             .generation = self.current_generation,
         });
-        if (node.type == .Text) {
-            try self.removals.append(handle);
-        }
-        try self.removals.append(handle);
     }
 
     pub fn getAnimationCss(self: *RemovalQueue, handle: u32) ?[]const u8 {
@@ -1472,7 +1465,6 @@ pub const RemovalQueue = struct {
         self.animations.lookup.clearRetainingCapacity();
         self.animations.ref_counts.clearRetainingCapacity();
         self.current_generation = 0;
-        self.removals.clearRetainingCapacity();
     }
 };
 

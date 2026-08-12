@@ -296,4 +296,3 @@ test "compact reclaims bytes" {
     try std.testing.expect(bytes_after < bytes_before);
     try std.testing.expectEqual(bytes_before - 8, bytes_after);
 }
-

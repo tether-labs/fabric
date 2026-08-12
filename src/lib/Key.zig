@@ -8,7 +8,6 @@ const utils = @import("utils.zig");
 var buf_128: [128]u8 = undefined;
 var writer: Writer = undefined;
 pub const KeyGenerator = struct {
-
     pub fn initWriter() void {
         writer.init(&buf_128);
     }
@@ -22,9 +21,9 @@ pub const KeyGenerator = struct {
         const class_name = utils.hashToBase62(hash, &buf_short);
 
         writer.reset();
-        writer.write(tag) catch "";
-        writer.writeByte('_') catch "";
-        writer.write(class_name) catch "";
+        writer.write(tag) catch {};
+        writer.writeByte('_') catch {};
+        writer.write(class_name) catch {};
         const key = writer.buffer[0..writer.pos];
         @memcpy(buf[0..key.len], key);
         return buf[0..key.len];

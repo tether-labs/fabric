@@ -2,23 +2,58 @@ const std = @import("std");
 const Vapor = @import("Vapor.zig");
 const Writer = @This();
 
+pub const Error = error{OutOfSpace};
+
 buffer: []u8,
+/// Usable capacity, which is one byte short of `buffer.len`. These buffers are
+/// handed to JS as C strings, and every caller writes its own NUL at `pos`
+/// after the last write, so that byte is reserved up front rather than
+/// remembered at fifteen call sites.
 size: usize,
 pos: usize,
 start: usize = 0,
+/// Set the first time a write did not fit. Once true the contents are
+/// truncated, never past the end of `buffer`.
+overflowed: bool = false,
 
 pub fn init(writer: *Writer, buffer: []u8) void {
     writer.* = .{
         .buffer = buffer,
-        .size = buffer.len,
+        .size = if (buffer.len == 0) 0 else buffer.len - 1,
         .pos = 0,
         .start = 0,
+        .overflowed = false,
     };
 }
 
 pub fn reset(self: *Writer) void {
     self.pos = 0;
     self.start = 0;
+    self.overflowed = false;
+}
+
+/// Claims `n` bytes at the cursor and returns them, or fails having written
+/// nothing. Every write goes through here — it is the only place `pos` moves
+/// forward, so it is the only place that has to be right.
+fn reserve(self: *Writer, n: usize) Error![]u8 {
+    // Saturating add: `n` is a caller-supplied length and must not wrap.
+    if (self.pos +| n > self.size) return self.overflow(n);
+    const dest = self.buffer[self.pos .. self.pos + n];
+    self.pos += n;
+    return dest;
+}
+
+/// Reports the first overflow on this writer, then stays quiet so a single
+/// oversized node cannot flood the console.
+fn overflow(self: *Writer, needed: usize) Error {
+    if (!self.overflowed) {
+        self.overflowed = true;
+        Vapor.printlnErr(
+            "Writer out of space: needed {d} more bytes at {d}/{d}. Output is truncated.",
+            .{ needed, self.pos, self.size },
+        );
+    }
+    return error.OutOfSpace;
 }
 
 /// Mark the current position as the start of a new segment
@@ -41,32 +76,28 @@ pub fn resetSegment(self: *Writer) void {
     self.pos = self.start;
 }
 
-pub fn writeByte(self: *Writer, byte: u8) !void {
-    self.buffer[self.pos] = byte;
-    self.pos += 1;
+pub fn writeByte(self: *Writer, byte: u8) Error!void {
+    const dest = try self.reserve(1);
+    dest[0] = byte;
 }
 
-pub fn writeU8Num(self: *Writer, byte: u8) !void {
-    const u32_string = fastLargeIntToString(byte);
-    @memcpy(self.buffer[self.pos .. self.pos + u32_string.len], u32_string);
-    self.pos += u32_string.len;
+pub fn writeU8Num(self: *Writer, byte: u8) Error!void {
+    try self.write(fastLargeIntToString(byte));
 }
 
-pub fn write(self: *Writer, value: []const u8) !void {
-    @memcpy(self.buffer[self.pos .. self.pos + value.len], value);
-    self.pos += value.len;
+pub fn write(self: *Writer, value: []const u8) Error!void {
+    const dest = try self.reserve(value.len);
+    @memcpy(dest, value);
 }
 
-pub fn writeF32(self: *Writer, value: f32) !void {
-    const remaining_buffer = self.buffer[self.pos..];
-    const formatted = try std.fmt.bufPrint(remaining_buffer, "{d:.2}", .{value});
+pub fn writeF32(self: *Writer, value: f32) Error!void {
+    const formatted = std.fmt.bufPrint(self.buffer[self.pos..self.size], "{d:.2}", .{value}) catch
+        return self.overflow(0);
     self.pos += formatted.len;
 }
 
-pub fn writeF16(self: *Writer, value: f16) !void {
-    const f16_string = fastFloatToString(value);
-    @memcpy(self.buffer[self.pos .. self.pos + f16_string.len], f16_string);
-    self.pos += f16_string.len;
+pub fn writeF16(self: *Writer, value: f16) Error!void {
+    try self.write(fastFloatToString(value));
 }
 
 var float_buffer_16: [32]u8 = undefined;
@@ -213,28 +244,24 @@ fn fastFloatToString(value: f32) []const u8 {
     return float_buffer[0..buf_idx];
 }
 
-pub fn writeI32(self: *Writer, value: i32) !void {
-    const remaining_buffer = self.buffer[self.pos..];
-    const formatted = try std.fmt.bufPrint(remaining_buffer, "{d}", .{value});
+pub fn writeI32(self: *Writer, value: i32) Error!void {
+    const formatted = std.fmt.bufPrint(self.buffer[self.pos..self.size], "{d}", .{value}) catch
+        return self.overflow(0);
     self.pos += formatted.len;
 }
 
-pub fn writeI16(self: *Writer, value: i16) !void {
-    const remaining_buffer = self.buffer[self.pos..];
-    const formatted = try std.fmt.bufPrint(remaining_buffer, "{d}", .{value});
+pub fn writeI16(self: *Writer, value: i16) Error!void {
+    const formatted = std.fmt.bufPrint(self.buffer[self.pos..self.size], "{d}", .{value}) catch
+        return self.overflow(0);
     self.pos += formatted.len;
 }
 
-pub fn writeU16(self: *Writer, value: u16) !void {
-    const u32_string = fastLargeIntToString(value);
-    @memcpy(self.buffer[self.pos .. self.pos + u32_string.len], u32_string);
-    self.pos += u32_string.len;
+pub fn writeU16(self: *Writer, value: u16) Error!void {
+    try self.write(fastLargeIntToString(value));
 }
 
-pub fn writeUsize(self: *Writer, value: usize) !void {
-    const u32_string = fastLargeIntToString(value);
-    @memcpy(self.buffer[self.pos .. self.pos + u32_string.len], u32_string);
-    self.pos += u32_string.len;
+pub fn writeUsize(self: *Writer, value: usize) Error!void {
+    try self.write(fastLargeIntToString(value));
 }
 
 var large_int_buffer: [32]u8 = undefined;
@@ -270,10 +297,8 @@ fn fastLargeF32ToString(value: f32) []const u8 {
     return large_int_buffer[buf_idx..];
 }
 
-pub fn writeU32(self: *Writer, value: u32) !void {
-    const u32_string = fastLargeIntToString(value);
-    @memcpy(self.buffer[self.pos .. self.pos + u32_string.len], u32_string);
-    self.pos += u32_string.len;
+pub fn writeU32(self: *Writer, value: u32) Error!void {
+    try self.write(fastLargeIntToString(value));
 }
 
 pub fn print(self: *Writer) !void {

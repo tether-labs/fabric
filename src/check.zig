@@ -8,11 +8,11 @@
 //!
 //! Referenced only by the `check` build step, which `zig build` and
 //! `zig build test` both depend on. `build.zig` verifies that every `.zig`
-//! file under `src/` appears in one of the three lists below, so a new file
+//! file under `src/` appears in one of the two lists below, so a new file
 //! cannot silently opt out of type-checking.
 //!
-//! `not_yet_checked` is down to a single module; everything else in the
-//! library is type-checked on both the wasm and host targets.
+//! Every module in the library is type-checked, on both the wasm and the host
+//! target. There is no opt-out list.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -25,8 +25,8 @@ const builtin = @import("builtin");
 pub const Types = @import("lib/types.zig");
 
 /// Modules the gate enforces. Every source file under `src/` belongs either
-/// here, in `host_only_modules`, or in `not_yet_checked` — `build.zig` fails
-/// the check if one is listed nowhere.
+/// here or in `host_only_modules`; `build.zig` fails the check if one is
+/// listed in neither.
 const modules = .{
     @import("comptime.zig"),
     @import("lib/Abstractions.zig"),
@@ -74,21 +74,6 @@ const modules = .{
     @import("lib/types.zig"),
     @import("lib/utils.zig"),
     @import("main.zig"),
-};
-
-/// Modules that do not type-check today. Every entry is a bug, not an
-/// exemption: these files contain references to fields, functions and types
-/// that no longer exist, left behind by refactors that Zig's lazy analysis
-/// never forced anyone to notice.
-///
-/// Delete a line once its file compiles — that is the whole workflow. The
-/// counts are from the run that introduced this list and are a guide, not a
-/// contract; fixing one error commonly reveals the next one behind it.
-///
-/// Nothing may be added to this list. A new file goes in `modules`.
-const not_yet_checked = .{
-    @import("lib/helpers.zig"), // 3 — needs a time/entropy source: std 0.16 removed std.time.timestamp,
-    //                             std.crypto.random and fmt.FormatOptions. Imported by nothing.
 };
 
 /// Modules that only build for a host target. They use filesystem access and

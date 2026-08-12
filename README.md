@@ -1,195 +1,244 @@
-# Fabric 🚧 Under heavy development 🚧
+# Vapor
 
-Fabric is a modern, lightweight framework for building fast, memory-efficient applications with Zig. Fabric 
-can be combined with any renderer to generate various application types, including web, native, and even mobile apps.
+A UI framework for Zig that compiles to WebAssembly.
 
-A modern, lightweight web framework for building WebAssembly applications with Zig. 
-Fabric enables developers to create fast, efficient web applications by compiling Zig code directly to WebAssembly, 
-bringing systems programming performance to the browser.
+Vapor gives you a declarative component API, a keyed reconciler, and a CSS
+compiler, with a memory model built for the browser: per-route arenas, interned
+strings, and style data packed behind pointer groups so the node tree stays
+small. You write pages and components in Zig; Vapor produces the DOM operations
+and the stylesheet.
 
-## ✨ Features
+> **Status: alpha.** The API is still moving. Breaking changes bump the major
+> version and are documented with migration notes in
+> [CHANGELOG.md](CHANGELOG.md), but there is no deprecation cycle yet. It is
+> used in production by one site ([senet.build](https://senet.build)).
 
-- **WebAssembly Support**: Compile Fabric to a 60kb WebAssembly binary uncompressed
-- **Zig Native**: Leverages Zig's safety, performance, and compile-time guarantees
-- **Component System**: Modular architecture for building reusable UI components
-- **Theme Support**: Built-in theming system for consistent styling
-- **Hot Reload**: Development-friendly with auto-rebuild capabilities
-- **WASI Compatible**: Supports WebAssembly System Interface for enhanced capabilities
+## Requirements
 
-## 🚀 Quick Start
+- **Zig 0.16.0** — Vapor tracks Zig closely and will not build on older versions.
+- A WebAssembly host. The shipping target is `wasm32-wasi`.
 
-### Prerequisites
-
-- [Zig](https://ziglang.org/) (latest stable version)
-- Basic knowledge of Zig programming
-
-### Installation
-
-1. **Install Zig** (recommended: use [ZVM](https://www.zvm.app/) for version management)
-2. [Learn Zig](https://www.openmymind.net/learning_zig/language_overview_1/)
-
-# Install Fabric CLI
-
-Run this command to install fabric-cli on your macOS (Apple Silicon):
+## Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/vic-Rokx/fabric-cli/main/install.sh | bash
+zig fetch --save git+https://github.com/senet-toolbox/vapor
 ```
 
-## What this does:
-
-- Downloads the latest version of fabric-cli
-- Installs it to `/usr/local/bin/fabric`
-- Makes it executable and available in your PATH
-
-## Requirements:
-
-- macOS with Apple Silicon (M1/M2/M3)
-- Administrator privileges (for `sudo` during installation)
-
-After installation, you can run:
-
-```bash
-metal fabric --help
-```
-
-```bash
-metal fabric create myapp
-```
-
-## 📖 Tutorial 
-[Fabric Tutorial](https://github.com/vic-Rokx/fabric/blob/main/tutorial.md)
-
-## 📖 Documentation 
-
-### Core Concepts
-
-#### Fabric Instance
-
-The global Fabric instance manages your application state and rendering:
+Or, while developing against a local checkout:
 
 ```zig
-var fb: fabric.lib = undefined;
+// build.zig.zon
+.dependencies = .{
+    .vapor = .{ .path = "../vapor" },
+},
 ```
 
-#### Render Cycle
+## Setup
 
-Fabric uses a render cycle approach for updating the UI:
+Vapor requires two modules from your application. It will not compile without
+them — they are how the framework learns your icon set and your theme.
+
+| Module   | Provides                                        |
+| -------- | ----------------------------------------------- |
+| `config` | `IconTokens` — the icons your app can reference  |
+| `theme`  | `ThemeTokens` and `Colors` — your design tokens  |
 
 ```zig
-export fn renderCommands(route_ptr: [*:0]u8) i32 {
-    const route = std.mem.span(route_ptr);
-    fabric.renderCycle(route);
-    return 0;
-}
+// build.zig
+const config_module = b.addModule("config", .{
+    .root_source_file = b.path("src/config.zig"),
+    .optimize = optimize,
+});
+
+const vapor_dep = b.dependency("vapor", .{ .target = target, .optimize = optimize });
+const vapor_module = vapor_dep.module("vapor");
+vapor_module.addImport("config", config_module);
+
+// theme depends on vapor, and vapor depends on theme — a deliberate cycle,
+// which Zig resolves at the module level.
+const theme_module = b.addModule("theme", .{
+    .root_source_file = b.path("src/Theme.zig"),
+    .target = target,
+    .optimize = optimize,
+    .imports = &.{.{ .name = "vapor", .module = vapor_module }},
+});
+vapor_module.addImport("theme", theme_module);
 ```
 
-#### Memory Management
-
-Fabric is designed to work with WebAssembly's memory model:
+The two modules are small:
 
 ```zig
-pub fn main() !void {
-    // Use WASM allocator for optimal performance
-    allocator = std.heap.wasm_allocator;
-}
-```
+// src/config.zig
+pub const IconTokens = struct {
+    web: ?[]const u8 = null,
+    svg: ?[]const u8 = null,
 
-### Component System
-
-Fabric provides a component-based architecture for building reusable UI elements:
-
-```zig
-// Example component structure
-const MyComponent = struct {
-    // Component state
-    title: []const u8,
-    visible: bool = true,
-
-    // Component methods
-    pub fn render(self: *MyComponent) void {
-        // Rendering logic here
-    }
-
-    pub fn update(self: *MyComponent) void {
-        // Update logic here
-    }
+    pub const search = IconTokens{ .web = "bi bi-search", .svg = "<svg …</svg>" };
 };
 ```
-## 🛠️ Development
-### Project Structure
-
-```
-my-fabric-app/
-├── build.zig
-├── build.zig.zon
-├── src/
-│   ├── main.zig
-│   ├── Theme.zig
-│   └── components/
-│       └── *.zig
-└── web/
-    └── index.html
-    ...
-```
-
-## 🔧 Configuration
-
-### Build Options
-
-Fabric supports various build configurations:
 
 ```zig
-// Optimize for size (recommended for web)
-.preferred_optimize_mode = .ReleaseSmall,
+// src/Theme.zig
+const Vapor = @import("vapor");
+const Color = Vapor.Types.Color;
+
+pub const ThemeTokens = enum(u8) { none, text, background, primary };
+
+pub const Colors = struct {
+    text: Color = .black,
+    background: Color = .white,
+    primary: Color = .vapor_blue,
+};
+
+pub const Light = Colors{};
+pub const Dark = Colors{ .text = .white, .background = .black };
 ```
 
-### Target Options
+## A minimal app
 
 ```zig
-// Standard WebAssembly with WASI
-.default_target = .{ .cpu_arch = .wasm32, .os_tag = .wasi },
+const std = @import("std");
+const Vapor = @import("vapor");
+const Theme = @import("theme");
+
+fn HomePage() void {
+    Vapor.Center().size(.full).children({
+        Vapor.Text("Hello, world!").end();
+    });
+}
+
+fn initPages() void {
+    Vapor.Page(.{ .route = "/" }, HomePage, null);
+}
+
+// Called from JavaScript once the module is instantiated.
+pub export fn init() void {
+    Vapor.init(.{});
+    Vapor.Animation.new();
+
+    Vapor.setGlobalStyleVariables(.{
+        .themes = &.{
+            .{ .name = "light", .theme = Theme.Light, .default = true },
+            .{ .name = "dark", .theme = Theme.Dark },
+        },
+    });
+
+    initPages();
+}
 ```
 
-## 📊 Performance
+## Core concepts
 
-Fabric is designed for optimal WebAssembly performance:
+### Components
 
-- **Small Bundle Size**: Base wasm is 40kb 
-- **Fast Startup**: Quick initialization times
-- **Efficient Memory**: Careful memory management for WASM constraints
-- **Zero-Cost Abstractions**: Zig's compile-time optimizations
+Components are built with a fluent builder. Containers take a `children` block;
+leaves end with `.end()`.
 
-## 🤝 Contributing
+```zig
+Vapor.Box()
+    .size(.full)
+    .padding(.all(16))
+    .children({
+        Vapor.Heading(1, "Title").end();
+        Vapor.Text("Body copy").end();
+        Vapor.Button(onClick, .{}).children({
+            Vapor.Text("Click me").end();
+        });
+    });
+```
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+The full set is re-exported from the root: `Box`, `Row`, `Stack`, `Center`,
+`Text`, `TextFmt`, `Heading`, `Button`, `Link`, `Image`, `Svg`, `Icon`, `List`,
+`Table`, `Form`, `TextField`, `TextArea`, and others.
 
-### Development Setup
+### Pages, layouts and hooks
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/vic-Rokx/fabric.git`
-3. Create a feature branch: `git checkout -b feature/amazing-feature`
-4. Make your changes and test them
-5. Commit your changes: `git commit -m 'Add amazing feature'`
-6. Push to the branch: `git push origin feature/amazing-feature`
-7. Open a Pull Request
+```zig
+Vapor.Page(.{ .route = "/docs" }, DocsPage, null);
 
-## 📄 License
+// Wrap a route subtree in shared chrome.
+try Vapor.registerLayout("/docs", docsLayout, .{ .reset = true });
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+// Run before or after navigation.
+_ = Vapor.registerHook("/docs", beforeNavigate, .before);
+```
 
-## 🙏 Acknowledgments
+### Memory
 
-- Built with [Zig](https://ziglang.org/) - A general-purpose programming language
-- Inspired by modern web frameworks and WebAssembly capabilities
-- Special thanks to the Zig community for their support and contributions
+Vapor never asks you for an allocator. It exposes four arenas with different
+lifetimes, and you choose which one a value belongs to:
 
-## 📞 Support
+| Arena      | Lives for                                     |
+| ---------- | --------------------------------------------- |
+| `.frame`   | one render pass — the default for UI strings   |
+| `.view`    | the current route                              |
+| `.request` | one in-flight request                          |
+| `.persist` | the life of the application                    |
 
-- **Issues**: [GitHub Issues](https://github.com/vic-Rokx/fabric/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vic-Rokx/fabric/discussions)
-- **Documentation**: [Wiki](https://github.com/vic-Rokx/fabric/wiki)
+```zig
+const label = Vapor.frame.fmt("{d} items", .{count}); // freed after this frame
+const name  = Vapor.dupe(user.name, .persist);        // survives navigation
+```
 
----
+### Data fetching
 
-**Built with Zig and WebAssembly**
+`Fetch` coalesces requests so several components can ask for the same resource
+without duplicating it. `GET` and `OPTIONS` coalesce by URL; other methods get
+their own slot unless you give them an explicit `key`.
+
+```zig
+const req = Fetch.fetch("/api/accounts", .{ .method = .GET });
+req.handle(onAccounts, .{});
+
+// Two mutations with the same key coalesce; without one they stay separate.
+_ = Fetch.fetch("/api/sync", .{ .method = .POST, .key = "account-sync" });
+```
+
+### Authentication
+
+`Vapor.KeyStone` wraps OAuth sign-in, session storage, token refresh and
+authenticated fetch for Google, GitHub, Apple and Azure. It expects a backend
+that exchanges the OAuth code — tokens are never minted in the browser.
+
+## Build options
+
+| Option     | Default | Effect                                    |
+| ---------- | ------- | ----------------------------------------- |
+| `-Dstatic` | `false` | Static-render mode                        |
+| `-Datomic` | `true`  | Atomic render cycle                       |
+
+## Bundle size
+
+Size depends almost entirely on what your application pulls in — icon sets and
+component libraries dominate. Build with `-Doptimize=ReleaseSmall` for the
+smallest output, and measure your own binary rather than trusting a headline
+number.
+
+## Development
+
+```bash
+zig build          # build, and type-check the whole library
+zig build check    # type-check only, for wasm32-wasi and the host
+zig build test     # run the test suite (also runs check)
+```
+
+`zig build check` is worth explaining. Zig analyses declarations lazily, so a
+function nothing references is parsed but never type-checked — which means a
+library can compile clean while parts of its public API are broken, and users
+discover it one API at a time. `src/check.zig` references every public
+declaration in every module, so compiling it forces full semantic analysis.
+`build.zig` additionally fails the step if a new file under `src/` is not listed
+there, so nothing can silently opt out.
+
+It runs against both `wasm32-wasi` (what ships) and the host target (the SSR
+path in `HtmlGenerator` and `File` only builds there).
+
+## Security notes
+
+- Text and attribute values are HTML-escaped in the SSR path.
+- `Vapor.Html(...)` and `Svg` emit raw markup **by design** and are not escaped.
+  Treat them like `dangerouslySetInnerHTML`: never pass user input.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

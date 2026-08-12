@@ -5,7 +5,6 @@ const Writer = @import("Writer.zig");
 
 pub const Polygons = @This();
 
-
 pub fn new() void {
     Vapor.polygons_table = std.StringHashMap(Polygons).init(Vapor.arena(.persist));
 }

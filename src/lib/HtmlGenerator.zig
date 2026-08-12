@@ -59,12 +59,50 @@ pub fn generate(root: *UINode, new_writer: *std.Io.Writer, style_path: []const u
     writer.writeAll("</main>\n</body>\n</html>") catch unreachable;
 }
 
+/// Writes `text` with the HTML metacharacters replaced by entities.
+///
+/// This is the boundary between application data and markup. Without it any
+/// value containing `<` stops being content and becomes tags in the served
+/// page. The same escape set covers both text nodes and double-quoted
+/// attribute values, so there is only one function to get right; escaping
+/// quotes inside text content is harmless, they render as themselves.
+///
+/// Deliberate raw markup — `Vapor.Html(...)` and `Svg` — does not come through
+/// here. Those are the documented escape hatches and are the caller's
+/// responsibility, exactly like `dangerouslySetInnerHTML`.
+fn writeEscaped(text: []const u8) void {
+    var start: usize = 0;
+    for (text, 0..) |c, i| {
+        const entity = switch (c) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => "&quot;",
+            '\'' => "&#39;",
+            else => continue,
+        };
+        if (i > start) writer.writeAll(text[start..i]) catch unreachable;
+        writer.writeAll(entity) catch unreachable;
+        start = i + 1;
+    }
+    if (start < text.len) writer.writeAll(text[start..]) catch unreachable;
+}
+
+/// Escapes into a caller-supplied writer. Exposed so the escaping rules can be
+/// tested without standing up a whole render.
+pub fn escapeInto(out: *std.Io.Writer, text: []const u8) void {
+    const previous = writer;
+    defer writer = previous;
+    writer = out;
+    writeEscaped(text);
+}
+
 /// Writes an optional HTML attribute if the value is not null.
 fn writeOptionalProp(name: []const u8, value: ?[]const u8) void {
     if (value) |v| {
         _ = writer.write(name) catch unreachable;
         _ = writer.write("=\"") catch unreachable;
-        _ = writer.write(v) catch unreachable; // TODO: Escape attribute value
+        writeEscaped(v);
         _ = writer.write("\"") catch unreachable;
     }
 }
@@ -74,7 +112,7 @@ fn writeAllProps(ui_node: *UINode) void {
     // Write mandatory ID
     _ = writer.write(" ") catch unreachable;
     _ = writer.write(" id=\"") catch unreachable;
-    _ = writer.write(ui_node.uuid) catch unreachable;
+    writeEscaped(ui_node.uuid);
     _ = writer.write("\"") catch unreachable;
     writeOptionalProp(" data-vp", "");
 
@@ -137,11 +175,27 @@ pub fn createParagraphOpen(ui_node: *UINode) void {
     writeAllProps(ui_node);
     _ = writer.write(">") catch unreachable;
     if (ui_node.text) |text| {
-        _ = writer.write(text) catch unreachable; // TODO: Escape HTML content
+        writeEscaped(text);
     }
 }
 
 pub fn createParagraphClose() void {
+    _ = writer.write("</p>") catch unreachable;
+}
+
+/// Writes `Vapor.Html(...)` content verbatim.
+///
+/// `.HtmlText` is the library's deliberate raw-markup escape hatch — the whole
+/// point of the `Html` component is to emit tags — so this is the one text path
+/// that must not be escaped. Anything reaching it is trusted by the caller, the
+/// same contract as React's `dangerouslySetInnerHTML`.
+pub fn createRawHtml(ui_node: *UINode) void {
+    _ = writer.write("<p") catch unreachable;
+    writeAllProps(ui_node);
+    _ = writer.write(">") catch unreachable;
+    if (ui_node.text) |text| {
+        writer.writeAll(text) catch unreachable;
+    }
     _ = writer.write("</p>") catch unreachable;
 }
 
@@ -150,7 +204,7 @@ pub fn createField(ui_node: *UINode) void {
     writeAllProps(ui_node);
     _ = writer.write(">") catch unreachable;
     if (ui_node.text) |text| {
-        _ = writer.write(text) catch unreachable; // TODO: Escape HTML content
+        writeEscaped(text);
     }
     _ = writer.write("</p>") catch unreachable;
 }
@@ -233,7 +287,7 @@ pub fn createLabel(ui_node: *UINode) void {
     writeAllProps(ui_node);
     _ = writer.write(">") catch unreachable;
     if (ui_node.text) |text| {
-        _ = writer.write(text) catch unreachable; // TODO: Escape HTML content
+        writeEscaped(text);
     }
     _ = writer.write("</label>") catch unreachable;
 }
@@ -318,7 +372,7 @@ pub fn createCodeOpen(ui_node: *UINode) void {
     writeAllProps(ui_node);
     _ = writer.write(">") catch unreachable;
     if (ui_node.text) |text| {
-        _ = writer.write(text) catch unreachable; // TODO: Escape HTML content
+        writeEscaped(text);
     }
 }
 pub fn createCodeClose() void {
@@ -334,7 +388,7 @@ pub fn createHeadingOpen(ui_node: *UINode) void {
     writeAllProps(ui_node);
     _ = writer.write(">") catch unreachable;
     if (ui_node.text) |text| {
-        _ = writer.write(text) catch unreachable; // TODO: Escape HTML content
+        writeEscaped(text);
     }
 }
 pub fn createHeadingClose() void {
@@ -395,8 +449,7 @@ pub fn createElementOpen(ui_node: *UINode) void {
         },
 
         .HtmlText => {
-            createParagraphOpen(ui_node);
-            createParagraphClose();
+            createRawHtml(ui_node);
             // if (ui_node.text) |text| {
             //     if (std.mem.find(u8, text, "ZIG")) |_| {
             //         std.debug.print("ZIG: {s}\n", .{writer.buffer[0..writer.end]});

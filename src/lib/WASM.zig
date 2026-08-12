@@ -170,7 +170,6 @@ pub extern fn mutateDomElementF32Wasm(
     value: f32,
 ) void;
 
-
 pub extern fn runOnAnimationFrameWasm(callback_id: u32) void;
 
 pub extern fn consoleLogColoredErrorWasm(
@@ -502,7 +501,6 @@ pub extern fn readClipboardWasm(callback_id: u32) void;
 // =============================================================================
 
 /// Performs a fetch request with full options.
-
 pub extern fn fetchWasm(
     url_ptr: [*]const u8,
     url_len: usize,
@@ -1118,7 +1116,6 @@ pub extern fn selectAllWasm(id_ptr: [*]const u8, id_len: usize) void;
 
 /// Creates a resize observer. Returns handle.
 pub extern fn createResizeObserverWasm(id: u32, options_ptr: *const Vapor.Kit.ResizeOptions) void;
-
 
 /// Starts observing an element for resize.
 pub extern fn observeResizeWasm(

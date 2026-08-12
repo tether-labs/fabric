@@ -1,0 +1,93 @@
+# Changelog
+
+All notable changes to this project are documented here. This project follows
+[Semantic Versioning](https://semver.org/): breaking changes bump the major
+version and are listed with a migration note.
+
+## [2.0.0] — 2026-08-11
+
+A correctness and hardening release. Three memory-safety bugs are fixed, a
+type-checking gate was added that surfaced 68 latent compile errors across 22
+modules, and the public API changed in several places as a result.
+
+### Security
+
+- **`Writer` performed no bounds checking.** Every write was a raw `@memcpy`
+  into a fixed 4096/8192-byte buffer, and the `!void` return type never actually
+  produced an error. In `ReleaseFast`/`ReleaseSmall` — the modes used to ship
+  wasm — an oversized style silently wrote past the end of the buffer. Writes
+  are now bounds-checked and truncate cleanly, reporting the first overflow.
+- **JWT signature lengths were unchecked.** `verify` copied the decoded
+  signature into a fixed-size array with `@memcpy` without comparing lengths.
+  The decoded length is attacker-controlled, so a crafted token caused a panic
+  under ReleaseSafe and a buffer overflow under ReleaseFast/ReleaseSmall. A
+  wrong-length signature is now `error.InvalidSignature`.
+- **The SSR path did not escape HTML.** Text nodes and attribute values were
+  written into the served document verbatim, so any value containing markup
+  became markup. Text and attributes are now escaped. `Vapor.Html(...)` and
+  `Svg` remain raw by design — treat them like `dangerouslySetInnerHTML`.
+
+### Breaking changes
+
+| Before | After | Why |
+| --- | --- | --- |
+| `JWT.DecodingKey.fromEs256Bytes([N]u8)` | `fromEs256Sec1([]const u8)` | ECDSA public keys are SEC1-encoded and accept compressed or uncompressed forms; the old fixed-array signature could not express either |
+| `JWT.DecodingKey.fromEs384Bytes([N]u8)` | `fromEs384Sec1([]const u8)` | as above |
+| `DateTime.addDays(...) DateTime` | `addDays(...) !DateTime` | negative day counts can land before the epoch, which `fromTimestamp` rejects |
+| `.gradient(types.Background)` | `.gradient(types.Color)` | `types.Background` no longer exists; the field it assigns is `?Color` |
+| `.hoverBackground(types.Background)` | `.hoverBackground(types.Color)` | as above |
+| `Draggable.element: Binded` | `element: *Binded` | `init` always took a pointer; the value field could never be constructed |
+| `printUIRouteTree(u32)` | `printUIRouteTree([]const u8)` | routes are string paths everywhere else |
+| `Writer.write(...) !void` | `... error{OutOfSpace}!void` | the old error set was empty, so `catch` branches were dead code that silently type-checked |
+
+**Removed** — each of these referenced types, fields or functions that no longer
+existed and could not compile if called:
+
+- `Vapor.ThemeType`, `Vapor.SrcComponent` — dangling re-exports pointing at nothing
+- `lib/helpers.zig` (`generateUUID`, `UUID`) — needed a time and entropy source
+  that Zig 0.16 no longer provides ambiently on freestanding wasm
+- `Element.removeFromParent` — called `Vapor.removeFromParent`, which never existed
+- `Vapor.addRoute`, `Vapor.end` — superseded, and referencing removed APIs
+- `UIContext.endContext`, `createStack`, `traverse`, `traverseChildren` — a dead
+  `RenderCommand` tree layer calling allocator methods that no longer exist
+
+**Behavioural notes:**
+
+- `Writer.size` is now `buffer.len - 1`. The last byte is reserved so callers
+  can always write their NUL terminator at `pos`; these buffers are handed to JS
+  as C strings.
+- `types.TextDecorationType` gained a `blink` member. Exhaustive switches over
+  it need a new prong.
+- `types.color_theme` is now `var`, not `const`. `switchColorTheme()` mutates
+  it, which previously could not compile.
+
+### Added
+
+- **`zig build check`** — a type-checking gate. Zig analyses declarations
+  lazily, so unreferenced code is parsed but never type-checked; this is how 68
+  errors accumulated unnoticed across 22 modules. `src/check.zig` references
+  every public declaration in every module, and `build.zig` fails if a new file
+  under `src/` is not listed. Runs against `wasm32-wasi` and the host. Wired
+  into both `zig build` and `zig build test`.
+- `StringTable.handleOf` — look up an interned string's handle without
+  interning it. Lets `Vapor.unpin([]const u8)` work.
+- `Kit.Fetch` and `Kit.Response` — aliases into `Fetch.zig`, where the HTTP
+  layer now lives.
+- `Vapor.StateType` — re-export that `comptime.zig` already claimed to provide.
+- MIT `LICENSE` file, which the README had referenced without it existing.
+- Test suite grew from 28 to 38 tests, covering `Writer` bounds, JWT signature
+  lengths, HTML escaping, and compile-checking every example in the README.
+
+### Fixed
+
+- `Animation.RemovalQueue.release` freed memory it did not own — `uuid` is
+  borrowed from the `UINode`.
+- `HashStyle` hashed `v.animation` by pointer address. It is frame-arena
+  allocated, so identical styles hashed differently on every frame.
+- Bridge's timeout dispatch pointed at three registries that no longer existed,
+  and nine of its wasm exports lacked a calling convention, so they could not be
+  exported at all.
+- `Configuration.configurePlainByNode` was missing the `.radio` prong that
+  `configureByNode` already had.
+- `Kit.Window.params` and `Element.selection` fell off the end of non-void
+  functions on their non-wasm paths.

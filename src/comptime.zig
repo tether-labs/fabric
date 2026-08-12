@@ -81,6 +81,10 @@ pub const alert = lib.alert;
 pub const Builder = ComponentBuilder;
 pub const BuilderClose = ComponentBuilderClose;
 
+/// Declarative lifecycle hooks: `Hooks(.{ .mounted = f, .destroyed = g })({ … })`.
+pub const Hooks = @import("lib/Components.zig").Hooks;
+pub const HooksFuncs = lib.HooksFuncs;
+
 pub const printErrSrc = lib.printlnSrcErr;
 pub const printErr = lib.printlnErr;
 
@@ -149,6 +153,9 @@ pub const Testing = if (builtin.is_test) struct {
     pub const Reconciler = @import("lib/Reconciler.zig");
     pub const UIContext = @import("lib/UITree.zig");
     pub const FrameAllocator = @import("lib/FrameAllocator.zig");
+    pub const JWT = @import("lib/keystone/JWT.zig");
+    pub const HtmlGenerator = @import("lib/HtmlGenerator.zig");
+    pub const StyleCompiler = @import("lib/convertStyleCustomWriter.zig");
 } else struct {};
 
 /// Gets the pointer of the parent Struct, given a pointer to one of its fields, the parent struct type, and the field name.
