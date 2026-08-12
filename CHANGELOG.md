@@ -73,7 +73,9 @@ longer existed and could not compile if called:
   errors accumulated unnoticed across 22 modules. `src/check.zig` references
   every public declaration in every module, and `build.zig` fails if a new file
   under `src/` is not listed. Runs against `wasm32-wasi` and the host. Wired
-  into both `zig build` and `zig build test`.
+  into both `zig build` and `zig build test`. Runs against three targets:
+  `wasm32-wasi`, the host, and `x86_64-linux` explicitly, so a macOS developer
+  sees what CI sees.
 - `StringTable.handleOf` — look up an interned string's handle without
   interning it. Lets `Vapor.unpin([]const u8)` work.
 - `Kit.Fetch` and `Kit.Response` — aliases into `Fetch.zig`, where the HTTP

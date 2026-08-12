@@ -256,8 +256,11 @@ declaration in every module, so compiling it forces full semantic analysis.
 `build.zig` additionally fails the step if a new file under `src/` is not listed
 there, so nothing can silently opt out.
 
-It runs against both `wasm32-wasi` (what ships) and the host target (the SSR
-path in `HtmlGenerator` and `File` only builds there).
+It runs against three targets: `wasm32-wasi` (what ships), your host, and
+`x86_64-linux` explicitly — the last so that a macOS developer sees the same
+result CI does. Native hosts need libc and position-independent code where wasm
+does not, and macOS supplies both implicitly, so a Linux-only failure is
+otherwise invisible until CI.
 
 ## Security notes
 

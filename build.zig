@@ -138,13 +138,42 @@ fn addCheckStep(
     // wasm32-wasi is what ships, and it alone catches target-specific breakage
     // such as invalid `export` signatures. The host target is checked too
     // because the SSR path in HtmlGenerator and File only builds there.
-    const targets = [_]std.Build.ResolvedTarget{
-        b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi }),
-        b.resolveTargetQuery(.{}),
+    //
+    // Native hosts need two things wasm does not:
+    //
+    //   link_libc  the SSR path reaches std.heap's C allocator, which is a
+    //              compile error without it. macOS links libc implicitly, so
+    //              omitting this only fails on Linux — i.e. only in CI.
+    //   pic        WASM.zig declares its imports as `extern "env"`. On
+    //              x86_64-linux that is a dynamic-library dependency and needs
+    //              position-independent code.
+    const CheckTarget = struct {
+        name: []const u8,
+        query: std.Target.Query,
+        native_host: bool,
     };
-    const names = [_][]const u8{ "vapor-check-wasm", "vapor-check-host" };
+    const targets = [_]CheckTarget{
+        .{
+            .name = "vapor-check-wasm",
+            .query = .{ .cpu_arch = .wasm32, .os_tag = .wasi },
+            .native_host = false,
+        },
+        .{
+            .name = "vapor-check-host",
+            .query = .{},
+            .native_host = true,
+        },
+        // Explicit Linux, so a macOS developer sees what CI sees.
+        .{
+            .name = "vapor-check-linux",
+            .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+            .native_host = true,
+        },
+    };
 
-    for (targets, names) |target, name| {
+    for (targets) |check_target| {
+        const target = b.resolveTargetQuery(check_target.query);
+        const name = check_target.name;
         const theme_module = b.createModule(.{
             .root_source_file = b.path("tests/support/theme.zig"),
             .target = target,
@@ -160,6 +189,8 @@ fn addCheckStep(
                 .{ .name = "config", .module = config_module },
                 .{ .name = "theme", .module = theme_module },
             },
+            .link_libc = if (check_target.native_host) true else null,
+            .pic = if (check_target.native_host) true else null,
         });
 
         // tests/support/theme.zig imports "vapor" by name; point it at the same
