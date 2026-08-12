@@ -151,6 +151,32 @@ The full set is re-exported from the root: `Box`, `Row`, `Stack`, `Center`,
 `Text`, `TextFmt`, `Heading`, `Button`, `Link`, `Image`, `Svg`, `Icon`, `List`,
 `Table`, `Form`, `TextField`, `TextArea`, and others.
 
+### Stable identity — `.id()`
+
+Vapor names each element automatically, from its type and its position among
+its siblings. That is fine for static layout, but it means **an element that
+moves gets a new name**, and the reconciler — which matches old to new by name —
+sees a delete and an insert rather than a move.
+
+Give anything that can move an explicit id:
+
+```zig
+for (todos.items) |todo| {
+    Vapor.Row().id(todo.id).children({      // survives reordering
+        Vapor.Text(todo.title).end();
+    });
+}
+```
+
+Reach for it when a list can reorder, when items are inserted or removed
+anywhere but the end, or when an element sits after a sibling that renders
+conditionally. The symptom of a missing id is an element that appears twice for
+a moment, or that loses its DOM state (scroll position, focus, an in-progress
+CSS transition) when something above it changes.
+
+The value also becomes the element's DOM id, so it must be unique in the
+document.
+
 ### Pages, layouts and hooks
 
 ```zig

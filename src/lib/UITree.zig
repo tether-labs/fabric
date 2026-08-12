@@ -117,8 +117,11 @@ pub const UINode = struct {
     morph: bool = false,
     prev_uuid: []const u8 = "", // the uuid this node had in the DOM before this frame
     uuid_changed: bool = false, // DOM needs a rename / re-id
-    key: ?[]const u8 = null,
     unkeyed_child_count: usize = 0,
+    /// True once `.id()` or `.src()` has replaced the generated uuid. The
+    /// unkeyed slot taken by `setUUID` is refunded on the first override only;
+    /// refunding twice would renumber every later sibling, or underflow.
+    uuid_is_user_set: bool = false,
 
     // uuid
     identity_hash: u32 = 0,
@@ -176,6 +179,25 @@ pub const UINode = struct {
         }
 
         return null;
+    }
+
+    /// Returns the unkeyed numbering slot that `setUUID` took for this node.
+    ///
+    /// Children without an explicit id are named from a running count of their
+    /// unkeyed siblings. When a caller overrides the uuid with `.id()` or
+    /// `.src()` the node stops being unkeyed, so its slot goes back and later
+    /// siblings keep the names they already had.
+    ///
+    /// Only the first override refunds. `.src(...).id(...)`, or two `.id()`
+    /// calls, would otherwise decrement twice for one slot — renumbering every
+    /// later sibling, and underflowing the usize once the count reaches zero.
+    pub fn refundUnkeyedSlot(self: *UINode) void {
+        if (self.uuid_is_user_set) return;
+        self.uuid_is_user_set = true;
+        if (self.uuid.len == 0) return; // setUUID has not run; nothing was taken
+        const parent = self.parent orelse return;
+        if (parent.unkeyed_child_count == 0) return;
+        parent.unkeyed_child_count -= 1;
     }
 
     /// Iterator for convenient for-loop syntax

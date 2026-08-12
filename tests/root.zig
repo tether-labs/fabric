@@ -822,6 +822,10 @@ test "README examples type-check against the real API" {
         _ = Vapor.TextField;
         _ = Vapor.TextArea;
 
+        // "Stable identity"
+        _ = @TypeOf(Vapor.Row().id("todo-1"));
+        _ = @TypeOf(Vapor.Box().src(@src()));
+
         // "Pages, layouts and hooks"
         _ = Vapor.registerLayout;
         _ = Vapor.registerHook;
@@ -1020,4 +1024,114 @@ test "style compiler keeps truncating safely once full" {
     for (backing[capacity..]) |byte| {
         try std.testing.expectEqual(@as(u8, 0xAA), byte);
     }
+}
+
+test "a caller-set id survives a move, so the diff sees no churn" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const route_arena = initReconcilerRuntime(arena.allocator());
+    defer deinitReconcilerRuntime(arena.allocator(), route_arena);
+
+    // Same shape as the failing move test, except the button carries a
+    // caller-set id. `.id()` writes node.uuid directly and refunds the unkeyed
+    // slot, so the uuid no longer encodes position.
+    const old_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "Swit_a-gk", .index = 0, .finger_print = 1, .props_hash = 1 },
+        .{ .uuid = "submit-btn", .index = 1, .finger_print = 2, .props_hash = 2 },
+    });
+    const new_root = try makeTree(arena.allocator(), &.{
+        .{ .uuid = "Swit_a-gk", .index = 0, .finger_print = 1, .props_hash = 1 },
+        .{ .uuid = "Text_b-gk", .index = 1, .finger_print = 3, .props_hash = 3 },
+        .{ .uuid = "submit-btn", .index = 2, .finger_print = 2, .props_hash = 2 },
+    });
+
+    Reconciler.traverseNodes(old_root, new_root);
+
+    // Only the inserted field is new; the button is matched through the
+    // suffix scan and never removed.
+    try std.testing.expectEqual(@as(usize, 1), addedCount(new_root));
+    try std.testing.expectEqual(@as(usize, 0), Vapor.Animation.removalCount());
+}
+
+// -----------------------------------------------------------------------------
+// Unkeyed slot accounting
+//
+// setUUID gives every auto-named child an "unkeyed" slot number, and .id()/.src()
+// hand that slot back so overriding one child's uuid does not renumber the rest.
+// The refund must happen exactly once however many times the uuid is overridden.
+// -----------------------------------------------------------------------------
+
+test "overriding a uuid refunds its unkeyed slot exactly once" {
+    var parent = UINode{ .uuid = "parent" };
+    var node = UINode{ .uuid = "Butt_generated-gk", .parent = &parent };
+    parent.unkeyed_child_count = 3;
+
+    const builder = Vapor.Builder(.pure){ ._elem_type = .Button, ._ui_node = &node };
+
+    _ = builder.id("submit");
+    try std.testing.expectEqual(@as(usize, 2), parent.unkeyed_child_count);
+    try std.testing.expectEqualStrings("submit", node.uuid);
+    try std.testing.expect(node.uuid_is_user_set);
+
+    // A second override — `.src(...).id(...)`, or just calling .id() twice —
+    // must not take another slot off the parent.
+    _ = builder.id("submit-again");
+    try std.testing.expectEqual(@as(usize, 2), parent.unkeyed_child_count);
+    try std.testing.expectEqualStrings("submit-again", node.uuid);
+}
+
+test "refunding never underflows the sibling count" {
+    var parent = UINode{ .uuid = "parent" };
+    var node = UINode{ .uuid = "Butt_generated-gk", .parent = &parent };
+    parent.unkeyed_child_count = 0; // nothing was ever taken
+
+    const builder = Vapor.Builder(.pure){ ._elem_type = .Button, ._ui_node = &node };
+    _ = builder.id("only-child");
+
+    // usize: a decrement here used to wrap to a huge number in release builds.
+    try std.testing.expectEqual(@as(usize, 0), parent.unkeyed_child_count);
+}
+
+test "a node whose uuid was never generated takes no refund" {
+    var parent = UINode{ .uuid = "parent" };
+    var node = UINode{ .parent = &parent }; // setUUID has not run: uuid is ""
+    parent.unkeyed_child_count = 2;
+
+    const builder = Vapor.Builder(.pure){ ._elem_type = .Button, ._ui_node = &node };
+    _ = builder.id("early");
+
+    try std.testing.expectEqual(@as(usize, 2), parent.unkeyed_child_count);
+    try std.testing.expectEqualStrings("early", node.uuid);
+}
+
+test "TextField.id keys the node the same way the element builders do" {
+    var parent = UINode{ .uuid = "parent" };
+    var node = UINode{ .uuid = "Text_generated-gk", .parent = &parent };
+    parent.unkeyed_child_count = 3;
+
+    const field = Vapor.TextFieldBuilder(.pure){ ._elem_type = .TextField, ._ui_node = &node };
+
+    _ = field.id("email-field");
+    try std.testing.expectEqual(@as(usize, 2), parent.unkeyed_child_count);
+    try std.testing.expectEqualStrings("email-field", node.uuid);
+    try std.testing.expect(node.uuid_is_user_set);
+
+    // Once-only, exactly as on ComponentBuilder.
+    _ = field.id("email-field-2");
+    try std.testing.expectEqual(@as(usize, 2), parent.unkeyed_child_count);
+}
+
+test "both builders refund identically, so keying is consistent across them" {
+    var parent_a = UINode{ .uuid = "pa" };
+    var node_a = UINode{ .uuid = "Butt_gen-gk", .parent = &parent_a };
+    parent_a.unkeyed_child_count = 4;
+    _ = (Vapor.Builder(.pure){ ._elem_type = .Button, ._ui_node = &node_a }).id("x");
+
+    var parent_b = UINode{ .uuid = "pb" };
+    var node_b = UINode{ .uuid = "Text_gen-gk", .parent = &parent_b };
+    parent_b.unkeyed_child_count = 4;
+    _ = (Vapor.TextFieldBuilder(.pure){ ._elem_type = .TextField, ._ui_node = &node_b }).id("x");
+
+    try std.testing.expectEqual(parent_a.unkeyed_child_count, parent_b.unkeyed_child_count);
+    try std.testing.expectEqualStrings(node_a.uuid, node_b.uuid);
 }

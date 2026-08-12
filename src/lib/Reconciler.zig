@@ -373,18 +373,18 @@ pub fn traverseNodes(old_node: *UINode, new_node: *UINode) void {
     } else {
         // Case: Different lengths -> keyed diff.
         //
-        // KNOWN LIMITATION: these paths cannot recognise a node that merely
-        // moved. `KeyGenerator.generateKey` hashes the child index into the
-        // uuid, so a node's identity changes with its position — matching on
-        // uuid is really a positional match. Insert an element above a button
-        // and the button's uuid changes, so it is queued for removal while a
-        // second one is marked `.added`. That is the "duplicated button on
-        // switch toggle" symptom: for as long as the deferred removal is
-        // outstanding, both exist.
+        // The diff matches children on uuid. For a child that never called
+        // `.id()`, `KeyGenerator.generateKey` derives that uuid from the node's
+        // position, so moving it changes its identity and the diff sees a
+        // delete plus an insert rather than a move. Since removals are deferred
+        // through the animation queue while additions apply immediately, both
+        // copies are briefly live — the "duplicated button on switch toggle".
         //
-        // Fixing it properly needs identity that survives a move, i.e. a
-        // caller-supplied key feeding `generateKey` in place of the index.
-        // See the "keyed diff cannot recognise a node that moved" test.
+        // `.id()` fixes this: it writes the uuid directly, so identity survives
+        // the move and the suffix scan below matches the node. Callers with
+        // reorderable lists are expected to use it. See the two tests
+        // "keyed diff cannot recognise a node that moved" and "a caller-set id
+        // survives a move".
         if (old_count > new_count) {
             reconcileDeletions(old_node, new_node, old_count, new_count);
         } else {

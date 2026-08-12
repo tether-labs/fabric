@@ -1309,19 +1309,20 @@ pub const ComponentBuilder = struct {
         return self;
     }
 
+    /// Gives the element a stable identity.
+    ///
+    /// The generated uuid encodes the child's position, so an element that
+    /// moves is seen by the reconciler as a delete plus an insert. Anything in
+    /// a list that can reorder, or that sits after a conditionally-rendered
+    /// sibling, wants an id — it is what keeps the node itself alive across the
+    /// move. The value also becomes the element's DOM id.
     pub fn id(self: *const Self, element_id: []const u8) Self {
         var n = self.*;
         const node = n._ui_node.?;
-
-        // If setUUID already ran and consumed an unkeyed slot, give it back
-        if (node.uuid.len > 0 and node.parent != null) {
-            // Only refund if the uuid was auto-generated (not already user-set)
-            // You may need a flag to distinguish
-            node.parent.?.unkeyed_child_count -= 1;
-        }
+        node.refundUnkeyedSlot();
 
         n._id = element_id;
-        n._ui_node.?.uuid = element_id;
+        node.uuid = element_id;
         return n;
     }
 
@@ -1329,21 +1330,10 @@ pub const ComponentBuilder = struct {
         var n = self.*;
         const node = n._ui_node.?;
 
-        // If setUUID already ran and consumed an unkeyed slot, give it back
-        if (node.uuid.len > 0 and node.parent != null) {
-            // Only refund if the uuid was auto-generated (not already user-set)
-            // You may need a flag to distinguish
-            node.parent.?.unkeyed_child_count -= 1;
-        }
+        node.refundUnkeyedSlot();
 
         n._id = Vapor.frame.fmt("{s}-{d}", .{ source_location.file, source_location.line });
         node.uuid = n._id.?;
-        return n;
-    }
-
-    pub fn key(self: *const Self, value: []const u8) Self {
-        var n = self.*;
-        n._ui_node.?.key = value;
         return n;
     }
 

@@ -6,7 +6,7 @@ version and are listed with a migration note.
 
 ## [2.0.0] — 2026-08-11
 
-A correctness and hardening release. Three memory-safety bugs are fixed, a
+A correctness and hardening release. Four memory-safety bugs are fixed, a
 type-checking gate was added that surfaced 68 latent compile errors across 22
 modules, and the public API changed in several places as a result.
 
@@ -40,8 +40,13 @@ modules, and the public API changed in several places as a result.
 | `printUIRouteTree(u32)` | `printUIRouteTree([]const u8)` | routes are string paths everywhere else |
 | `Writer.write(...) !void` | `... error{OutOfSpace}!void` | the old error set was empty, so `catch` branches were dead code that silently type-checked |
 
-**Removed** — each of these referenced types, fields or functions that no longer
-existed and could not compile if called:
+**Removed** — `.key()` on the component builders, along with `UINode.key`. It
+assigned a field that nothing in the library ever read, so it silently did
+nothing. `.id()` is the real keying mechanism: it writes the uuid directly, so
+identity survives a move. Anything using `.key()` should use `.id()`.
+
+Also removed — each of these referenced types, fields or functions that no
+longer existed and could not compile if called:
 
 - `Vapor.ThemeType`, `Vapor.SrcComponent` — dangling re-exports pointing at nothing
 - `lib/helpers.zig` (`generateUUID`, `UUID`) — needed a time and entropy source
@@ -75,10 +80,23 @@ existed and could not compile if called:
   layer now lives.
 - `Vapor.StateType` — re-export that `comptime.zig` already claimed to provide.
 - MIT `LICENSE` file, which the README had referenced without it existing.
-- Test suite grew from 28 to 38 tests, covering `Writer` bounds, JWT signature
-  lengths, HTML escaping, and compile-checking every example in the README.
+- Test suite grew from 28 to 51 tests, covering `Writer` bounds, JWT signature
+  lengths, HTML escaping, the style compiler's truncation boundary, keyed
+  reconciliation, and compile-checking every example in the README.
 
 ### Fixed
+
+- **`TextField.id()` did not key the node.** It set `_id`, which reached the
+  uuid later through the style, but never returned the node's unkeyed slot — so
+  a conditionally-rendered field with an id renumbered all of its unkeyed
+  siblings. It now behaves exactly like `.id()` on the element builders. The
+  shared logic lives on `UINode.refundUnkeyedSlot`.
+- **`.id()` and `.src()` could corrupt sibling naming, or panic.** Both refund
+  the "unkeyed slot" that automatic naming took for the node, but nothing
+  tracked whether the refund had already happened. `.src(...).id(...)`, or two
+  `.id()` calls, decremented twice for one slot — renumbering every later
+  sibling, and overflowing the `usize` when the count was already zero. A
+  `uuid_is_user_set` flag now makes the refund happen exactly once.
 
 - `Animation.RemovalQueue.release` freed memory it did not own — `uuid` is
   borrowed from the `UINode`.

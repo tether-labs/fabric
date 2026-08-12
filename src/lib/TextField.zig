@@ -899,9 +899,21 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             return new_self;
         }
 
+        /// Gives the field a stable identity, the same as `.id()` on the
+        /// element builders.
+        ///
+        /// The generated uuid encodes the child's position, so a field that
+        /// moves is seen by the reconciler as a delete plus an insert. `_id`
+        /// also travels through `end()` into the style, which is where
+        /// `Configuration` picks it up; setting the uuid here as well means the
+        /// identity is established as soon as the caller asks for it.
         pub fn id(self: *const Self, element_id: []const u8) Self {
             var new_self: Self = self.*;
             new_self._id = element_id;
+            if (new_self._ui_node) |node| {
+                node.refundUnkeyedSlot();
+                node.uuid = element_id;
+            }
             return new_self;
         }
 
