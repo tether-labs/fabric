@@ -131,18 +131,25 @@ fn configureLayouts(ui_node: *UINode, style: *const Vapor.Style) u32 {
     hash_l = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layout));
 
     if (hash_id) {
-        const packed_layout_ptr = Packer.layouts_pool.create() catch unreachable;
-        packed_layout_ptr.* = packed_layout;
-        ui_node.packed_field_ptrs.?.layout_ptr = packed_layout_ptr;
+        if (Packer.layouts_pool.create()) |packed_layout_ptr| {
+            packed_layout_ptr.* = packed_layout;
+            ui_node.packed_field_ptrs.?.layout_ptr = packed_layout_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_l;
     }
-    ui_node.packed_field_ptrs.?.layout_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_l,
         types.PackedLayout,
         packed_layout,
         &Packer.layouts,
         &Packer.layouts_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.layout_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
     return hash_l;
 }
 
@@ -262,19 +269,26 @@ fn configureResponsive(ui_node: *UINode, style: *const Vapor.Style) u32 {
     hash_r = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_responsive));
 
     if (hash_id) {
-        const packed_responsive_ptr = Packer.responsive_pool.create() catch unreachable;
-        packed_responsive_ptr.* = packed_responsive;
-        ui_node.packed_field_ptrs.?.responsive_ptr = packed_responsive_ptr;
+        if (Packer.responsive_pool.create()) |packed_responsive_ptr| {
+            packed_responsive_ptr.* = packed_responsive;
+            ui_node.packed_field_ptrs.?.responsive_ptr = packed_responsive_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_r;
     }
 
-    ui_node.packed_field_ptrs.?.responsive_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_r,
         types.PackedResponsive,
         packed_responsive,
         &Packer.responsives,
         &Packer.responsive_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.responsive_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
 
     return hash_r;
 }
@@ -308,18 +322,25 @@ fn configureTransforms(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     if (hash_id) {
-        const packed_transforms_ptr = Packer.transforms_pool.create() catch unreachable;
-        packed_transforms_ptr.* = packed_transforms;
-        ui_node.packed_field_ptrs.?.transforms_ptr = packed_transforms_ptr;
+        if (Packer.transforms_pool.create()) |packed_transforms_ptr| {
+            packed_transforms_ptr.* = packed_transforms;
+            ui_node.packed_field_ptrs.?.transforms_ptr = packed_transforms_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_t;
     }
-    ui_node.packed_field_ptrs.?.transforms_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_t,
         types.PackedTransforms,
         packed_transforms,
         &Packer.transforms,
         &Packer.transforms_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.transforms_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
     return hash_t;
 }
 
@@ -355,16 +376,22 @@ fn createPackedLayer(layer: types.BackgroundLayer, current_hash_v: *u32) types.P
             packed_layer.Dot.packed_color = dots_color;
             hash_v +%= std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_layer));
         },
-        .Gradient => |gradient| {
+        .Gradient => |gradient| blk: {
             packed_layer = .{ .Gradient = .{} };
             packed_layer.Gradient.type = gradient.type;
             packed_layer.Gradient.direction = gradient.direction;
-            var gradient_colors = Vapor.arena(.frame).alloc(types.PackedColor, gradient.colors.len) catch unreachable;
+            var gradient_colors = Vapor.arena(.frame).alloc(types.PackedColor, gradient.colors.len) catch |err| {
+                Vapor.printlnErr("gradient: could not allocate colours, layer skipped: {any}", .{err});
+                break :blk;
+            };
             for (gradient.colors, 0..) |color, j| {
                 packColor(color, &gradient_colors[j]);
             }
             const count = Vapor.packed_colors.count() + 1;
-            Vapor.packed_colors.put(count, gradient_colors) catch unreachable;
+            Vapor.packed_colors.put(count, gradient_colors) catch |err| {
+                Vapor.printlnErr("gradient: could not register colours, layer skipped: {any}", .{err});
+                break :blk;
+            };
             packed_layer.Gradient.colors_ptr = count;
             packed_layer.Gradient.colors_len = @intCast(gradient_colors.len);
             packed_layer.Gradient.clip = gradient.clip;
@@ -382,10 +409,16 @@ fn configureLayers(visual: *const Vapor.Types.Visual, current_hash_v: u32) u32 {
     var hash_v: u32 = current_hash_v;
     var packed_layers: []types.PackedLayer = undefined;
     if (visual.layer) |layer| {
-        packed_layers = Vapor.arena(.frame).alloc(types.PackedLayer, 1) catch unreachable;
+        packed_layers = Vapor.arena(.frame).alloc(types.PackedLayer, 1) catch |err| {
+            Vapor.printlnErr("layers: could not allocate, background layer skipped: {any}", .{err});
+            return hash_v;
+        };
         packed_layers[0] = createPackedLayer(layer, &hash_v);
     } else if (visual.layers) |layers| {
-        packed_layers = Vapor.arena(.frame).alloc(types.PackedLayer, layers.len) catch unreachable;
+        packed_layers = Vapor.arena(.frame).alloc(types.PackedLayer, layers.len) catch |err| {
+            Vapor.printlnErr("layers: could not allocate, background layers skipped: {any}", .{err});
+            return hash_v;
+        };
         for (layers, 0..) |layer, i| {
             packed_layers[i] = createPackedLayer(layer, &hash_v);
         }
@@ -393,7 +426,10 @@ fn configureLayers(visual: *const Vapor.Types.Visual, current_hash_v: u32) u32 {
         return hash_v;
     }
     const count = Vapor.packed_layers.count() + 1;
-    Vapor.packed_layers.put(count, packed_layers) catch unreachable;
+    Vapor.packed_layers.put(count, packed_layers) catch |err| {
+        Vapor.printlnErr("layers: could not register, background layers skipped: {any}", .{err});
+        return hash_v;
+    };
     packed_visual.packed_layers.items_ptr = count;
     packed_visual.packed_layers.len = @intCast(packed_layers.len);
     return hash_v;
@@ -473,19 +509,26 @@ fn configureVisual(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     if (hash_id) {
-        const packed_visual_ptr = Packer.visuals_pool.create() catch unreachable;
-        packed_visual_ptr.* = packed_visual;
-        ui_node.packed_field_ptrs.?.visual_ptr = packed_visual_ptr;
+        if (Packer.visuals_pool.create()) |packed_visual_ptr| {
+            packed_visual_ptr.* = packed_visual;
+            ui_node.packed_field_ptrs.?.visual_ptr = packed_visual_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_v;
     }
 
-    ui_node.packed_field_ptrs.?.visual_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_v,
         types.PackedVisual,
         packed_visual,
         &Packer.visuals,
         &Packer.visuals_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.visual_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
 
     return hash_v;
 }
@@ -515,18 +558,25 @@ fn configurePositions(ui_node: *UINode, style: *const Vapor.Style) u32 {
     hash_p = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_position));
 
     if (hash_id) {
-        const packed_position_ptr = Packer.positions_pool.create() catch unreachable;
-        packed_position_ptr.* = packed_position;
-        ui_node.packed_field_ptrs.?.position_ptr = packed_position_ptr;
+        if (Packer.positions_pool.create()) |packed_position_ptr| {
+            packed_position_ptr.* = packed_position;
+            ui_node.packed_field_ptrs.?.position_ptr = packed_position_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_p;
     }
-    ui_node.packed_field_ptrs.?.position_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_p,
         types.PackedPosition,
         packed_position,
         &Packer.positions,
         &Packer.positions_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.position_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
     return hash_p;
 }
 
@@ -539,18 +589,25 @@ fn configureMarginsPaddings(ui_node: *UINode, style: *const Vapor.Style) u32 {
     // This is an expensive operation, since the the visual hash is quite large
     hash_mp = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_margins_paddings));
     if (hash_id) {
-        const packed_margin_paddings_ptr = Packer.margins_paddings_pool.create() catch unreachable;
-        packed_margin_paddings_ptr.* = packed_margins_paddings;
-        ui_node.packed_field_ptrs.?.margins_paddings_ptr = packed_margin_paddings_ptr;
+        if (Packer.margins_paddings_pool.create()) |packed_margin_paddings_ptr| {
+            packed_margin_paddings_ptr.* = packed_margins_paddings;
+            ui_node.packed_field_ptrs.?.margins_paddings_ptr = packed_margin_paddings_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_mp;
     }
-    ui_node.packed_field_ptrs.?.margins_paddings_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_mp,
         types.PackedMarginsPaddings,
         packed_margins_paddings,
         &Packer.margins_paddings,
         &Packer.margins_paddings_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.margins_paddings_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
     return hash_mp;
 }
 
@@ -597,19 +654,26 @@ fn configureAnimations(ui_node: *UINode, elem_decl: ElemDecl) u32 {
     hash_a = std.hash.XxHash32.hash(0, std.mem.asBytes(&packed_animations));
 
     if (hash_id) {
-        const packed_animations_ptr = Packer.animations_pool.create() catch unreachable;
-        packed_animations_ptr.* = packed_animations;
-        ui_node.packed_field_ptrs.?.animations_ptr = packed_animations_ptr;
+        if (Packer.animations_pool.create()) |packed_animations_ptr| {
+            packed_animations_ptr.* = packed_animations;
+            ui_node.packed_field_ptrs.?.animations_ptr = packed_animations_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_a;
     }
 
-    ui_node.packed_field_ptrs.?.animations_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_a,
         types.PackedAnimations,
         packed_animations,
         &Packer.animations,
         &Packer.animations_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.animations_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
     return hash_a;
 }
 
@@ -670,19 +734,26 @@ fn configureInteractive(ui_node: *UINode, style: *const Vapor.Style) u32 {
     }
 
     if (hash_id) {
-        const packed_interactive_ptr = Packer.interactives_pool.create() catch unreachable;
-        packed_interactive_ptr.* = packed_interactive;
-        ui_node.packed_field_ptrs.?.interactive_ptr = packed_interactive_ptr;
+        if (Packer.interactives_pool.create()) |packed_interactive_ptr| {
+            packed_interactive_ptr.* = packed_interactive;
+            ui_node.packed_field_ptrs.?.interactive_ptr = packed_interactive_ptr;
+        } else |err| {
+            Vapor.printlnErr("style: could not allocate, node renders without this group: {any}", .{err});
+        }
         return hash_i;
     }
 
-    ui_node.packed_field_ptrs.?.interactive_ptr = getOrPutAndUpdateHash(
+    if (getOrPutAndUpdateHash(
         hash_i,
         types.PackedInteractive,
         packed_interactive,
         &Packer.interactives,
         &Packer.interactives_pool,
-    ) catch unreachable;
+    )) |ptr| {
+        ui_node.packed_field_ptrs.?.interactive_ptr = ptr;
+    } else |err| {
+        Vapor.printlnErr("style: could not cache, node renders without this group: {any}", .{err});
+    }
     return hash_i;
 }
 
@@ -717,7 +788,10 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
     }
 
     if (elem_decl.hover_style_fields) |fields| {
-        const hover_style_fields = Vapor.arena(.frame).create([]const types.StyleFields) catch unreachable;
+        const hover_style_fields = Vapor.arena(.frame).create([]const types.StyleFields) catch |err| blk_hover: {
+            Vapor.printlnErr("hover style: could not allocate, hover styles skipped: {any}", .{err});
+            break :blk_hover null;
+        } orelse return current_open;
         hover_style_fields.* = fields;
         current_open.hover_style_fields = hover_style_fields;
     }
@@ -727,8 +801,11 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
         current_open.finger_print +%= hashKey(target);
     }
 
-    if (elem_decl.text_field_params) |params| {
-        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch unreachable;
+    if (elem_decl.text_field_params) |params| blk_tfp: {
+        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch |err| {
+            Vapor.printlnErr("text field: could not allocate params, field renders without them: {any}", .{err});
+            break :blk_tfp;
+        };
         text_field_params.* = params;
         current_open.text_field_params = text_field_params;
         switch (params) {
@@ -864,7 +941,9 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
             const class = Vapor.frame.fmt("t_vis-{s}", .{target});
             const new_class_hash = hashKey(class);
             _ = Vapor.class_cache.get(new_class_hash) orelse {
-                Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+                Vapor.class_cache.set(new_class_hash, .defined) catch |err| {
+                    Vapor.printlnErr("class cache: not recorded, rule may be re-emitted: {any}", .{err});
+                };
                 Vapor.generator.writeTargetStyle(current_open, hash_tv, &target_packed_visual);
             };
         }
@@ -873,7 +952,9 @@ pub fn configure(ui_ctx: *UIContext, elem_decl: ElemDecl) *UINode {
             const class = current_open.class.?;
             const new_class_hash = hashKey(class);
             _ = Vapor.class_cache.get(new_class_hash) orelse {
-                Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+                Vapor.class_cache.set(new_class_hash, .defined) catch |err| {
+                    Vapor.printlnErr("class cache: not recorded, rule may be re-emitted: {any}", .{err});
+                };
                 Vapor.generator.writeNodeStyle(current_open);
             };
         } else {
@@ -945,8 +1026,11 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
         current_open.finger_print +%= hashKey(text);
     }
 
-    if (elem_decl.text_field_params) |params| {
-        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch unreachable;
+    if (elem_decl.text_field_params) |params| blk_tfp: {
+        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch |err| {
+            Vapor.printlnErr("text field: could not allocate params, field renders without them: {any}", .{err});
+            break :blk_tfp;
+        };
         text_field_params.* = params;
         current_open.text_field_params = text_field_params;
         switch (params) {
@@ -1056,7 +1140,10 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
     }
 
     if (elem_decl.hover_style_fields) |fields| {
-        const hover_style_fields = Vapor.arena(.frame).create([]const types.StyleFields) catch unreachable;
+        const hover_style_fields = Vapor.arena(.frame).create([]const types.StyleFields) catch |err| blk_hover: {
+            Vapor.printlnErr("hover style: could not allocate, hover styles skipped: {any}", .{err});
+            break :blk_hover null;
+        } orelse return current_open;
         hover_style_fields.* = fields;
         current_open.hover_style_fields = hover_style_fields;
     }
@@ -1177,7 +1264,9 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
         const class = Vapor.frame.fmt("t_vis-{s}", .{target});
         const new_class_hash = hashKey(class);
         _ = Vapor.class_cache.get(new_class_hash) orelse {
-            Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+            Vapor.class_cache.set(new_class_hash, .defined) catch |err| {
+                Vapor.printlnErr("class cache: not recorded, rule may be re-emitted: {any}", .{err});
+            };
             Vapor.generator.writeTargetStyle(current_open, hash_tv, &target_packed_visual);
         };
     }
@@ -1186,7 +1275,9 @@ pub fn configureByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
         const class = current_open.class.?;
         const new_class_hash = hashKey(class);
         _ = Vapor.class_cache.get(new_class_hash) orelse {
-            Vapor.class_cache.set(new_class_hash, .defined) catch unreachable;
+            Vapor.class_cache.set(new_class_hash, .defined) catch |err| {
+                Vapor.printlnErr("class cache: not recorded, rule may be re-emitted: {any}", .{err});
+            };
             Vapor.generator.writeNodeStyle(current_open);
         };
     } else {
@@ -1356,7 +1447,10 @@ pub fn checkVisual(visual: *const types.Visual, packet_visual: *types.PackedVisu
         var count = Vapor.shadows.count();
         count += 1;
         packet_visual.new_shadow = count;
-        Vapor.shadows.put(count, new_shadow) catch unreachable;
+        Vapor.shadows.put(count, new_shadow) catch |err| {
+            Vapor.printlnErr("shadow: could not register, shadow skipped: {any}", .{err});
+            packet_visual.new_shadow = 0;
+        };
     }
 }
 
@@ -1384,8 +1478,11 @@ pub fn configurePlainByNode(ui_node: ?*UINode, elem_decl: ElemDecl) *UINode {
         current_open.finger_print +%= hashKey(text);
     }
 
-    if (elem_decl.text_field_params) |params| {
-        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch unreachable;
+    if (elem_decl.text_field_params) |params| blk_tfp: {
+        const text_field_params = Vapor.arena(.frame).create(types.TextFieldParams) catch |err| {
+            Vapor.printlnErr("text field: could not allocate params, field renders without them: {any}", .{err});
+            break :blk_tfp;
+        };
         text_field_params.* = params;
         current_open.text_field_params = text_field_params;
         switch (params) {

@@ -296,17 +296,18 @@ fn setUUID(parent: *UINode, child: *UINode) void {
 pub var cache_count: u32 = 0;
 pub var prev_style_hashes: std.AutoHashMap(u32, u32) = undefined;
 pub fn captureHash(node: *UINode) void {
-    prev_style_hashes.put(node.hash, node.prev_style_hash_computed) catch unreachable;
+    // The hash cache is an optimisation; a miss just means recomputing.
+    prev_style_hashes.put(node.hash, node.prev_style_hash_computed) catch return;
     if (node.packed_field_ptrs == null) return;
     if (style_info_map.get(node.prev_style_hash_computed) != null) return;
-    const style_info = Vapor.arena(.persist).create(StyleInfo) catch unreachable;
+    const style_info = Vapor.arena(.persist).create(StyleInfo) catch return;
     style_info.* = .{
         .packed_field_ptrs = node.packed_field_ptrs.?,
         .style_hashes = node.style_hashes,
         .style_hash = node.style_hash,
         .class = node.class,
     };
-    style_info_map.put(node.prev_style_hash_computed, style_info) catch unreachable;
+    style_info_map.put(node.prev_style_hash_computed, style_info) catch return;
 }
 
 // Open takes a current stack and adds the elements depth first search

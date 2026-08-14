@@ -723,7 +723,10 @@ pub fn StructSchema(comptime T: type) type {
             }
 
             const struct_fields = type_info.@"struct".fields;
-            fields = Vapor.arena(.persist).alloc(FieldDescriptor, struct_fields.len) catch unreachable;
+            fields = Vapor.arena(.persist).alloc(FieldDescriptor, struct_fields.len) catch |err| {
+                Vapor.printlnErr("StructSchema: allocation failed: {any}", .{err});
+                @panic("vapor: out of memory building a struct schema");
+            };
 
             inline for (struct_fields, 0..) |field, i| {
                 const field_type = mapZigTypeToFieldType(field.type);
@@ -861,7 +864,10 @@ pub const Observer = struct {
 
     pub fn observe(self: *Observer, item: Vapor.ObserverNode, index: ?usize) void {
         if (!isWasi) return;
-        self.oberver_nodes.append(item) catch unreachable;
+        self.oberver_nodes.append(item) catch |err| {
+            Vapor.printlnErr("observe: could not record node, not observed: {any}", .{err});
+            return;
+        };
         const hash = hashKey(self.name);
         switch (item) {
             .uuid => |uuid| {
@@ -1046,7 +1052,10 @@ pub const ResizeObserver = struct {
             fn deinitFn(_: *Vapor.Node) void {}
         };
 
-        const closure = Vapor.arena(.persist).create(Closure) catch unreachable;
+        const closure = Vapor.arena(.persist).create(Closure) catch |err| {
+            Vapor.printlnErr("ResizeObserver: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a ResizeObserver");
+        };
         closure.* = .{};
 
         const hash = hashKey(name);
@@ -1067,7 +1076,10 @@ pub const ResizeObserver = struct {
 
     pub fn observeWithCallback(self: *ResizeObserver, item: Vapor.ObserverNode, callback_hash: ?u32) void {
         if (!isWasi) return;
-        self.observer_nodes.append(item) catch unreachable;
+        self.observer_nodes.append(item) catch |err| {
+            Vapor.printlnErr("observe: could not record node, not observed: {any}", .{err});
+            return;
+        };
         const hash = hashKey(self.name);
         switch (item) {
             .uuid => |uuid| {
@@ -1082,7 +1094,10 @@ pub const ResizeObserver = struct {
 
     pub fn observe(self: *ResizeObserver, item: Vapor.ObserverNode, index: ?usize) void {
         if (!isWasi) return;
-        self.observer_nodes.append(item) catch unreachable;
+        self.observer_nodes.append(item) catch |err| {
+            Vapor.printlnErr("observe: could not record node, not observed: {any}", .{err});
+            return;
+        };
         const hash = hashKey(self.name);
         switch (item) {
             .uuid => |uuid| {

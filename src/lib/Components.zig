@@ -263,13 +263,13 @@ pub fn persistText(ui_node: ?*UINode, text_value: ?[]const u8) ?[]const u8 {
     if (text_string_table.get(uuid)) |entry| {
         const old_string = entry.persisted;
         if (entry.len == slice.len and entry.ptr == slice.ptr and std.mem.eql(u8, entry.persisted, slice)) return entry.persisted;
-        const new_copy = Vapor.arena(.persist).dupe(u8, slice) catch unreachable;
-        text_string_table.put(uuid, .{ .ptr = slice.ptr, .len = slice.len, .persisted = new_copy }) catch unreachable;
+        const new_copy = Vapor.arena(.persist).dupe(u8, slice) catch return null;
+        text_string_table.put(uuid, .{ .ptr = slice.ptr, .len = slice.len, .persisted = new_copy }) catch return null;
         defer Vapor.arena(.persist).free(old_string);
         return new_copy;
     } else {
-        const copy = Vapor.arena(.persist).dupe(u8, slice) catch unreachable;
-        text_string_table.put(uuid, .{ .ptr = slice.ptr, .len = slice.len, .persisted = copy }) catch unreachable;
+        const copy = Vapor.arena(.persist).dupe(u8, slice) catch return null;
+        text_string_table.put(uuid, .{ .ptr = slice.ptr, .len = slice.len, .persisted = copy }) catch return null;
         return copy;
     }
 }
@@ -513,7 +513,10 @@ pub const ComponentBuilder = struct {
             Vapor.printlnSrcErr("Could not add component to lifecycle {any}\n", .{error.CouldNotAllocate}, @src());
             unreachable;
         };
-        const self = Vapor.arena(.frame).create(Self) catch unreachable;
+        const self = Vapor.arena(.frame).create(Self) catch |err| {
+            Vapor.printlnErr("component builder: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a component");
+        };
         self.* = .{
             ._ui_node = ui_node,
             ._elem_type = .FlexBox,
@@ -676,7 +679,10 @@ pub const ComponentBuilder = struct {
 
     pub fn Text(value: anytype) *Self {
         const ui_node = createNode(.{ .state_type = _state_type, .elem_type = .Text, .can_have_children = false });
-        const self = Vapor.arena(.frame).create(Self) catch unreachable;
+        const self = Vapor.arena(.frame).create(Self) catch |err| {
+            Vapor.printlnErr("component builder: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a component");
+        };
         const text = blk: switch (@typeInfo(@TypeOf(value))) {
             .pointer => |ptr_info| {
                 if (ptr_info.size == .one) return {
@@ -1415,7 +1421,11 @@ pub const ComponentBuilder = struct {
         element.element_type = self._elem_type;
         element._node_ptr = ui_node;
         n._element = element;
-        Vapor.element_registry.put(hashKey(ui_node.uuid), element) catch unreachable;
+        // Without the registry entry the element simply is not addressable
+        // from JS; the node still renders.
+        Vapor.element_registry.put(hashKey(ui_node.uuid), element) catch |err| {
+            Vapor.printlnErr("ref: could not register element: {any}", .{err});
+        };
         return n;
     }
 

@@ -186,7 +186,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
         const segment = path[start..end];
         start = end;
 
-        node_path.append('/') catch unreachable; // ← Add '/' once per segment HERE
+        node_path.append('/') catch return null; // ← Add '/' once per segment HERE
 
         var remaining = segment;
         while (remaining.len > 0) {
@@ -197,7 +197,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
             if (common_len != match.prefix.len) return null;
             remaining = remaining[common_len..];
             node = match;
-            node_path.appendSlice(match.sub_path) catch unreachable; // Don't add '/' here
+            node_path.appendSlice(match.sub_path) catch return null; // Don't add '/' here
         }
 
         // Handle dynamic parameters
@@ -211,8 +211,8 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
             _ = path[param_start..param_end];
             start = param_end + 1;
             node = dynamic_child;
-            node_path.append('/') catch unreachable;
-            node_path.appendSlice(dynamic_child.sub_path) catch unreachable;
+            node_path.append('/') catch return null;
+            node_path.appendSlice(dynamic_child.sub_path) catch return null;
         }
     }
 
@@ -221,7 +221,7 @@ pub fn searchRoute(radix: *const Radix, path: []const u8) ?Route {
             .ui_tree = node.tree.?,
             .page = node.page,
             .is_dynamic = node.is_dynamic,
-            .path = node_path.toOwnedSlice() catch unreachable,
+            .path = node_path.toOwnedSlice() catch return null,
             .route_arena = node.route_arena,
         };
     }

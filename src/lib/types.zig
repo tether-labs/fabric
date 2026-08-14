@@ -2215,13 +2215,13 @@ pub const PackedTransform = packed struct {
 
     pub fn set(packed_transform: *PackedTransform, transform: *const Transform) void {
         const type_slice = transform.type;
-        var slice: []TransformType = Vapor.arena(.frame).alloc(TransformType, type_slice.len) catch unreachable;
+        var slice: []TransformType = Vapor.arena(.frame).alloc(TransformType, type_slice.len) catch return;
         for (type_slice, 0..) |element, i| {
             slice[i] = element;
         }
 
         const count = Vapor.packed_transforms.count() + 1;
-        Vapor.packed_transforms.put(count, slice) catch unreachable;
+        Vapor.packed_transforms.put(count, slice) catch return;
 
         packed_transform.type_ptr = count;
         packed_transform.type_len = slice.len;

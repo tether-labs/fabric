@@ -68,7 +68,10 @@ pub const Draggable = struct {
 
     // Initialize a draggable with fluent API
     pub fn init(element: *Vapor.Binded) *Draggable {
-        const self = Vapor.arena(.persist).create(Draggable) catch unreachable;
+        const self = Vapor.arena(.persist).create(Draggable) catch |err| {
+            Vapor.printlnErr("Draggable.init: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a Draggable");
+        };
         self.* = .{ .element = element };
 
         // Setup listeners on the element or handle

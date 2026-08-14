@@ -141,11 +141,16 @@ fn writeToken(token: []const u8) void {
 /// NEW: This helper just performs the buffer copy.
 fn appendWriterToGenerator(gen: *Generator) void {
     const len: usize = writer.pos;
-    gen.end += len;
     if (gen.start + len > gen.buffer.len) {
-        Vapor.printlnErr("Buffer overflow, increase buffer size {d}\n", .{gen.start + len});
-        unreachable;
+        // Truncate rather than run past the buffer. `unreachable` here was
+        // undefined behaviour in the ReleaseSmall builds that ship.
+        Vapor.printlnErr(
+            "css: stylesheet exceeds the {d} byte buffer, output truncated at {d}",
+            .{ gen.buffer.len, gen.start },
+        );
+        return;
     }
+    gen.end += len;
     @memcpy(gen.buffer[gen.start..gen.end], writer.buffer[0..len]);
     gen.start += len;
 }
@@ -178,7 +183,12 @@ fn writeCommonStyleGroup(
 
         if (token_suffix) |suffix| {
             // Handle special cases like ":hover"
-            const full_token = std.fmt.allocPrint(allocator, "{s}{s}", .{ common_key, suffix }) catch unreachable;
+            // Losing this token means the rule is not emitted for that
+            // pseudo-state, not that the whole stylesheet is invalid.
+            const full_token = std.fmt.allocPrint(allocator, "{s}{s}", .{ common_key, suffix }) catch |err| {
+                Vapor.printlnErr("css: could not build token '{s}{s}': {any}", .{ common_key, suffix, err });
+                return;
+            };
             writeToken(full_token);
             // No free needed, `allocator` is a frame allocator
         } else {
@@ -297,7 +307,10 @@ pub fn writeNodeStyle(gen: *Generator, node: *UINode) void {
             if (contains(token, "gk")) {
                 // Generate the "fbc-..." selector
                 var fbc_buf: [256]u8 = undefined; // Buffer for UUID string
-                const fbc_selector = std.fmt.bufPrint(&fbc_buf, "fbc-{s}", .{node.uuid}) catch unreachable;
+                const fbc_selector = std.fmt.bufPrint(&fbc_buf, "fbc-{s}", .{node.uuid}) catch |err| {
+                    Vapor.printlnErr("css: uuid too long for a selector '{s}': {any}", .{ node.uuid, err });
+                    continue;
+                };
                 writeFullNodeRule(gen, node, fbc_selector);
             } else if (token.len > 0) {
                 writeFullNodeRule(gen, node, token);

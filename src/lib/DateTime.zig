@@ -21,7 +21,7 @@ pub var years_buffers: [100][20]u8 = undefined; // Using [20]u8 as requested
 
 pub fn initYearsString() void {
     for (0..years_string.len) |i| {
-        years_string[i] = std.fmt.bufPrint(&years_buffers[i], "{d}", .{2025 - i}) catch unreachable;
+        years_string[i] = std.fmt.bufPrint(&years_buffers[i], "{d}", .{2025 - i}) catch "";
     }
 }
 
@@ -114,7 +114,9 @@ pub fn fromMonth(month: u8, year: i32) DateTime {
 /// Gets the current date and time
 pub fn now() DateTime {
     const timestamp = Vapor.Kit.timestamp();
-    return DateTime.fromTimestamp(timestamp) catch unreachable;
+    // A clock reporting a pre-epoch or out-of-range time should not take the
+    // app down; fall back to the epoch.
+    return DateTime.fromTimestamp(timestamp) catch DateTime.init(1970, 1, 1, 0, 0, 0);
 }
 
 /// Gets the month in string format

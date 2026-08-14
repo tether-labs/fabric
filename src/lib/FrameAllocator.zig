@@ -144,7 +144,12 @@ pub fn deinit(self: *FrameAllocator) void {
 
 // Call this to create a new RouteFrameArena for a route
 pub fn createRouteArena(self: *FrameAllocator) *RouteFrameArena {
-    const route_arena = self.backing_allocator.create(RouteFrameArena) catch unreachable;
+    // Returns *RouteFrameArena, so there is no value to degrade to. @panic at
+    // least aborts identically in every optimize mode and says why.
+    const route_arena = self.backing_allocator.create(RouteFrameArena) catch |err| {
+        Vapor.printlnErr("createRouteArena: allocation failed: {any}", .{err});
+        @panic("vapor: out of memory creating a route arena");
+    };
     route_arena.* = RouteFrameArena.init(self.backing_allocator);
     return route_arena;
 }

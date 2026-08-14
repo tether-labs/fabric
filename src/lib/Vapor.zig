@@ -149,8 +149,11 @@ pub fn getStore(comptime T: type, key: []const u8) ?T {
         []const u8 => {
             const string = Wasm.getLocalStorageStringWasm(key.ptr, key.len) orelse return null;
             const value = std.mem.span(string);
-            const handle = storage_table.replaceOrAddStr(key, value) catch unreachable;
-            const stored_value = storage_table.getStr(handle) orelse unreachable;
+            const handle = storage_table.replaceOrAddStr(key, value) catch |err| {
+                printlnErr("getStore: could not intern '{s}': {any}", .{ key, err });
+                return null;
+            };
+            const stored_value = storage_table.getStr(handle) orelse return null;
             return stored_value;
         },
         usize => return @intCast(Wasm.getLocalStorageU32Wasm(key.ptr, key.len)),
@@ -161,8 +164,11 @@ pub fn getStore(comptime T: type, key: []const u8) ?T {
             if (@typeInfo(T) == .@"enum") {
                 const string = Wasm.getLocalStorageStringWasm(key.ptr, key.len) orelse return null;
                 const value = std.mem.span(string);
-                const handle = storage_table.replaceOrAddStr(key, value) catch unreachable;
-                const stored_value = storage_table.getStr(handle) orelse unreachable;
+                const handle = storage_table.replaceOrAddStr(key, value) catch |err| {
+                    printlnErr("getStore: could not intern '{s}': {any}", .{ key, err });
+                    return null;
+                };
+                const stored_value = storage_table.getStr(handle) orelse return null;
                 return std.meta.stringToEnum(T, stored_value);
             } else {
                 return null;
@@ -358,7 +364,7 @@ pub fn init(config: VaporConfig) void {
 
     class_cache.init(allocator) catch |err| {
         printlnErr("Could not init ClassCache {any}\n", .{err});
-        unreachable;
+        @panic("vapor: ClassCache init failed");
     };
     UIContext.element_style_hash_map = std.AutoHashMap(u32, [10]u32).init(allocator);
     UIContext.class_string_cache = std.AutoHashMap(u32, []const u8).init(allocator);
@@ -781,15 +787,18 @@ pub fn runOnAnimationFrame(callback: anytype, args: anytype) u32 {
     };
 
     const closure = Vapor.arena(.frame).create(Closure) catch |err| {
-        println("Error could not create closure {any}\n ", .{err});
-        unreachable;
+        printlnErr("runOnAnimationFrame: could not allocate closure, frame not scheduled: {any}", .{err});
+        return 0;
     };
     closure.* = .{
         .arguments = args,
     };
 
     animation_frame_callback = &closure.run_node;
-    ctx_callback_registry.put(@intFromPtr(animation_frame_callback), &closure.run_node) catch unreachable;
+    ctx_callback_registry.put(@intFromPtr(animation_frame_callback), &closure.run_node) catch |err| {
+        printlnErr("runOnAnimationFrame: could not register callback, frame not scheduled: {any}", .{err});
+        return 0;
+    };
 
     if (isWasi) {
         return Wasm.requestAnimationFrameWasm(@intFromPtr(animation_frame_callback));
@@ -1102,7 +1111,7 @@ pub fn attachEventCtxCallback(ui_node: *UINode, event_type: EventType, cb: anyty
 
     var type_onid = hashKey(ui_node.uuid);
     type_onid +%= @intFromEnum(event_type);
-    erased_event_registry.put(type_onid, erased) catch unreachable;
+    try erased_event_registry.put(type_onid, erased);
 
     const onid = hashKey(ui_node.uuid);
     try nodes_with_events.put(onid, ui_node);
@@ -1180,15 +1189,18 @@ pub inline fn removeElementEventListener(
 pub fn addGlobalListener(event_type: EventType, cb: fn (*Event) void) ?u32 {
     if (!isWasi) return null;
 
-    const erased = ErasedEventCallback.make(arena(.persist), event_type, cb, .{}) catch unreachable;
+    const erased = ErasedEventCallback.make(arena(.persist), event_type, cb, .{}) catch |err| {
+        printlnErr("addGlobalListener: could not allocate callback, listener not attached: {any}", .{err});
+        return null;
+    };
 
     const id = erased_event_registry.count() + 1;
     erased_event_registry.put(id, erased) catch |err| {
-        println("Button Function Registry {any}\n", .{err});
-        unreachable;
+        printlnErr("addGlobalListener: could not register, listener not attached: {any}", .{err});
+        return null;
     };
 
-    const event_type_str: []const u8 = std.enums.tagName(types.EventType, event_type) orelse unreachable;
+    const event_type_str: []const u8 = std.enums.tagName(types.EventType, event_type) orelse return null;
     if (isWasi) {
         Wasm.createEventListenerGlobal(event_type_str.ptr, event_type_str.len, id);
     }
@@ -1199,15 +1211,18 @@ pub fn addGlobalListener(event_type: EventType, cb: fn (*Event) void) ?u32 {
 pub fn addGlobalListenerCtx(event_type: EventType, cb: anytype, args: anytype) ?u32 {
     if (!isWasi) return null;
 
-    const erased = ErasedEventCallback.make(arena(.persist), event_type, cb, args) catch unreachable;
+    const erased = ErasedEventCallback.make(arena(.persist), event_type, cb, args) catch |err| {
+        printlnErr("addGlobalListenerCtx: could not allocate callback, listener not attached: {any}", .{err});
+        return null;
+    };
 
     const id = erased_event_registry.count() + 1;
     erased_event_registry.put(id, erased) catch |err| {
-        println("Button Function Registry {any}\n", .{err});
-        unreachable;
+        printlnErr("addGlobalListenerCtx: could not register, listener not attached: {any}", .{err});
+        return null;
     };
 
-    const event_type_str: []const u8 = std.enums.tagName(types.EventType, event_type) orelse unreachable;
+    const event_type_str: []const u8 = std.enums.tagName(types.EventType, event_type) orelse return null;
     if (isWasi) {
         Wasm.createEventListenerGlobal(event_type_str.ptr, event_type_str.len, id);
     }
@@ -1310,6 +1325,26 @@ var generated_file: std.Io.File = undefined;
 var generating: bool = false;
 const release_dir = "release";
 
+/// Aborts static generation with a diagnostic.
+///
+/// Generation runs in the CLI, not the browser, so failing hard on a bad path
+/// or a full disk is right. `unreachable` is the wrong way to say that: it is
+/// undefined behaviour under ReleaseFast/ReleaseSmall, and it prints nothing.
+/// This names the operation and the path, and aborts identically in every
+/// optimize mode.
+fn generatorFatal(comptime what: []const u8, err: anyerror, path: []const u8) noreturn {
+    std.debug.print("vapor: static generation failed: " ++ what ++ ": '{s}': {any}\n", .{ path, err });
+    @panic("static generation failed");
+}
+
+/// `createDirPath` when the directory already existing is success.
+fn ensureDir(io: anytype, cwd: std.Io.Dir, path: []const u8) void {
+    cwd.createDirPath(io, path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => generatorFatal("creating directory", err, path),
+    };
+}
+
 pub fn generate() void {
     generating = true;
     const cwd = std.Io.Dir.cwd();
@@ -1317,24 +1352,18 @@ pub fn generate() void {
     const io = threaded.io();
 
     // Create release/ and release/static/
-    cwd.createDirPath(io, release_dir) catch |err| {
-        switch (err) {
-            error.PathAlreadyExists => {},
-            else => unreachable,
-        }
-    };
-    const static_dir = std.fmt.allocPrint(allocator_global, "{s}/static", .{release_dir}) catch unreachable;
-    cwd.createDirPath(io, static_dir) catch |err| {
-        switch (err) {
-            error.PathAlreadyExists => {},
-            else => unreachable,
-        }
-    };
+    ensureDir(io, cwd, release_dir);
+    const static_dir = std.fmt.allocPrint(allocator_global, "{s}/static", .{release_dir}) catch |err|
+        generatorFatal("building the static/ path", err, release_dir);
+    ensureDir(io, cwd, static_dir);
 
     // CSS variables into release/static/
-    const css_vars_path = std.fmt.allocPrint(allocator_global, "{s}/static/style_variables.css", .{release_dir}) catch unreachable;
-    var css_variables = cwd.createFile(io, css_vars_path, .{}) catch unreachable;
-    css_variables.writePositionalAll(io, StyleCompiler.global_style, 0) catch unreachable;
+    const css_vars_path = std.fmt.allocPrint(allocator_global, "{s}/static/style_variables.css", .{release_dir}) catch |err|
+        generatorFatal("building the style_variables.css path", err, release_dir);
+    var css_variables = cwd.createFile(io, css_vars_path, .{}) catch |err|
+        generatorFatal("creating file", err, css_vars_path);
+    css_variables.writePositionalAll(io, StyleCompiler.global_style, 0) catch |err|
+        generatorFatal("writing file", err, css_vars_path);
 
     var page_itr = page_map.iterator();
     while (page_itr.next()) |entry| {
@@ -1353,33 +1382,31 @@ pub fn generate() void {
                 current_dir = std.fmt.allocPrint(allocator_global, "{s}/{s}", .{
                     current_dir,
                     sub_dir,
-                }) catch unreachable;
-                cwd.createDirPath(io, current_dir) catch |err| {
-                    switch (err) {
-                        error.PathAlreadyExists => {},
-                        else => unreachable,
-                    }
-                };
+                }) catch |err| generatorFatal("building a route directory path", err, sub_dir);
+                ensureDir(io, cwd, current_dir);
             }
         }
 
         // release/index.html or release/components/index.html
         const path = if (dir.len == 0)
-            std.fmt.allocPrint(allocator_global, "{s}/index.html", .{release_dir}) catch unreachable
+            std.fmt.allocPrint(allocator_global, "{s}/index.html", .{release_dir}) catch |err|
+                generatorFatal("building the index.html path", err, release_dir)
         else
-            std.fmt.allocPrint(allocator_global, "{s}/{s}/index.html", .{ release_dir, dir }) catch unreachable;
+            std.fmt.allocPrint(allocator_global, "{s}/{s}/index.html", .{ release_dir, dir }) catch |err|
+                generatorFatal("building the index.html path", err, dir);
         defer allocator_global.free(path);
 
-        generated_file = cwd.createFile(io, path, .{}) catch |err| {
-            std.debug.print("Create Error: {any} {s}\n", .{ err, path });
-            unreachable;
-        };
+        generated_file = cwd.createFile(io, path, .{}) catch |err|
+            generatorFatal("creating file", err, path);
         defer generated_file.close(io);
 
         generateHtml(route, dir);
-        _ = generated_file.writePositionalAll(io, writer.buffer[0..writer.end], 0) catch unreachable;
+        _ = generated_file.writePositionalAll(io, writer.buffer[0..writer.end], 0) catch |err|
+            generatorFatal("writing file", err, path);
     }
-    copyDirRecursive(io, cwd, "assets", std.fmt.allocPrint(allocator_global, "{s}/assets", .{release_dir}) catch unreachable);
+    const assets_dest = std.fmt.allocPrint(allocator_global, "{s}/assets", .{release_dir}) catch |err|
+        generatorFatal("building the assets/ path", err, release_dir);
+    copyDirRecursive(io, cwd, "assets", assets_dest);
 
     // Copy bundle.min.js from project root to release/
     var dest_dir = cwd.openDir(io, release_dir, .{}) catch return;
@@ -1473,13 +1500,18 @@ pub fn generateHtml(route: []const u8, dir: []const u8) void {
     const frames = generator.getAnimations();
 
     // Write CSS to release/static/
-    const style_fs_path = std.fmt.allocPrint(allocator_global, "{s}/static/style.css", .{release_dir}) catch unreachable;
+    const style_fs_path = std.fmt.allocPrint(allocator_global, "{s}/static/style.css", .{release_dir}) catch |err|
+        generatorFatal("building the style.css path", err, release_dir);
 
-    var generated_css = cwd.createFile(io, style_fs_path, .{}) catch unreachable;
+    var generated_css = cwd.createFile(io, style_fs_path, .{}) catch |err|
+        generatorFatal("creating file", err, style_fs_path);
     defer generated_css.close(io);
-    generated_css.writePositionalAll(io, css, 0) catch unreachable;
-    const stat = generated_css.stat(io) catch unreachable;
-    generated_css.writePositionalAll(io, frames, stat.size) catch unreachable;
+    generated_css.writePositionalAll(io, css, 0) catch |err|
+        generatorFatal("writing css", err, style_fs_path);
+    const stat = generated_css.stat(io) catch |err|
+        generatorFatal("stat", err, style_fs_path);
+    generated_css.writePositionalAll(io, frames, stat.size) catch |err|
+        generatorFatal("writing keyframes", err, style_fs_path);
 
     // Browser URL — not filesystem path
     HtmlGenerator.generate(new_ctx.root.?, &writer, "/static/style.css");
@@ -1487,12 +1519,7 @@ pub fn generateHtml(route: []const u8, dir: []const u8) void {
 
 fn copyDirRecursive(io: anytype, cwd: std.Io.Dir, src: []const u8, dest: []const u8) void {
     // Ensure destination exists
-    cwd.createDirPath(io, dest) catch |err| {
-        switch (err) {
-            error.PathAlreadyExists => {},
-            else => unreachable,
-        }
-    };
+    ensureDir(io, cwd, dest);
 
     var src_dir = cwd.openDir(io, src, .{ .iterate = true }) catch return;
     defer src_dir.close(io);
@@ -1504,8 +1531,10 @@ fn copyDirRecursive(io: anytype, cwd: std.Io.Dir, src: []const u8, dest: []const
     while (iter.next(io) catch return) |entry| {
         switch (entry.kind) {
             .directory => {
-                const src_path = std.fmt.allocPrint(allocator_global, "{s}/{s}", .{ src, entry.name }) catch unreachable;
-                const dest_path = std.fmt.allocPrint(allocator_global, "{s}/{s}", .{ dest, entry.name }) catch unreachable;
+                const src_path = std.fmt.allocPrint(allocator_global, "{s}/{s}", .{ src, entry.name }) catch |err|
+                    generatorFatal("building a source path", err, src);
+                const dest_path = std.fmt.allocPrint(allocator_global, "{s}/{s}", .{ dest, entry.name }) catch |err|
+                    generatorFatal("building a destination path", err, dest);
                 copyDirRecursive(io, cwd, src_path, dest_path);
             },
             .file => {
@@ -1649,15 +1678,27 @@ fn printStaticTextNode(node: *UINode) void {
     if (node.state_type == .static) blk: {
         var valid_text: []const u8 = "";
         if (node.text) |text| {
-            valid_text = escapeForJson(text) catch unreachable;
+            valid_text = escapeForJson(text) catch |err| {
+                printlnErr("static text: skipping '{s}': {any}", .{ node.uuid, err });
+                break :blk;
+            };
         } else if (node.href) |href| {
-            valid_text = escapeForJson(href) catch unreachable;
+            valid_text = escapeForJson(href) catch |err| {
+                printlnErr("static text: skipping '{s}': {any}", .{ node.uuid, err });
+                break :blk;
+            };
         } else break :blk;
         defer allocator_global.free(valid_text);
         if (writer.end > current_route.len + 10) {
-            _ = writer.write(",\n") catch unreachable;
+            _ = writer.write(",\n") catch |err| {
+                printlnErr("static text: manifest truncated at '{s}': {any}", .{ node.uuid, err });
+                break :blk;
+            };
         }
-        writer.print("\"{s}\":\"{s}\"", .{ node.uuid, valid_text }) catch unreachable;
+        writer.print("\"{s}\":\"{s}\"", .{ node.uuid, valid_text }) catch |err| {
+            printlnErr("static text: manifest truncated at '{s}': {any}", .{ node.uuid, err });
+            break :blk;
+        };
     }
     var children = node.children();
     while (children.next()) |child| {
@@ -1665,9 +1706,17 @@ fn printStaticTextNode(node: *UINode) void {
     }
 }
 
+/// Set when `collectComponentIds` could not record a match, so
+/// `queryComponentIds` can report a short list instead of returning one that
+/// looks complete.
+var component_id_collection_failed: bool = false;
+
 fn collectComponentIds(node: *UINode, selected_type: ElementType, component_ids: *std.array_list.Managed([]const u8)) void {
     if (node.type == selected_type) {
-        component_ids.append(node.uuid) catch unreachable;
+        component_ids.append(node.uuid) catch |err| {
+            printlnErr("queryComponentIds: could not record '{s}': {any}", .{ node.uuid, err });
+            component_id_collection_failed = true;
+        };
     }
     var children = node.children();
     while (children.next()) |child| {
@@ -1678,7 +1727,12 @@ fn collectComponentIds(node: *UINode, selected_type: ElementType, component_ids:
 pub fn queryComponentIds(target_type: ElementType) ![][]const u8 {
     const root = current_ctx.root orelse return error.NoTree;
     var component_ids = std.array_list.Managed([]const u8).init(allocator_global);
+    component_id_collection_failed = false;
     collectComponentIds(root, target_type, &component_ids);
+    if (component_id_collection_failed) {
+        component_ids.deinit();
+        return error.OutOfMemory;
+    }
     return try component_ids.toOwnedSlice();
 }
 
@@ -1913,7 +1967,9 @@ pub fn dupe(
 }
 
 pub fn pin(value: []const u8) void {
-    _ = string_table.intern(value) catch unreachable;
+    _ = string_table.intern(value) catch |err| {
+        printlnErr("pin: could not intern, string stays unpinned: {any}", .{err});
+    };
 }
 
 pub fn unpin(value: []const u8) void {
@@ -1922,7 +1978,9 @@ pub fn unpin(value: []const u8) void {
 }
 
 pub fn compact() void {
-    _ = string_table.compact() catch unreachable;
+    string_table.compact() catch |err| {
+        printlnErr("compact: string table left as-is: {any}", .{err});
+    };
 }
 
 pub fn cloneFrame(
@@ -1931,7 +1989,10 @@ pub fn cloneFrame(
     const T = @TypeOf(value);
     if (T == []const u8) return fmtln("{s}", .{value});
     const allocator = arena(.frame);
-    const memory: *@TypeOf(value) = allocator.create(T) catch unreachable;
+    const memory: *@TypeOf(value) = allocator.create(T) catch |err| {
+        printlnErr("cloneFrame: could not allocate: {any}", .{err});
+        return "";
+    };
     memory.* = value;
     return memory.*;
 }
@@ -2217,15 +2278,15 @@ pub fn println(
 /// delay: delay in ms
 pub fn loopInterval(name: []const u8, delay_ms: u32, callback: anytype, args: anytype) void {
     const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
-        println("Error could not create closure {any}\n", .{err});
-        unreachable;
+        printlnErr("loopInterval '{s}': could not allocate closure, interval not started: {any}", .{ name, err });
+        return;
     };
 
     const callback_id: u32 = hashKey(name);
     // Store just the ErasedCallback instead of *Node
     Vapor.erased_registry.put(callback_id, erased) catch |err| {
-        println("Registry error {any}\n", .{err});
-        unreachable;
+        printlnErr("loopInterval '{s}': could not register, interval not started: {any}", .{ name, err });
+        return;
     };
 
     if (isWasi) {
@@ -2288,8 +2349,8 @@ pub fn timeout(callback_name: []const u8, ms: u32, cb: anytype, args: anytype) v
     };
 
     const closure = allocator_global.create(Closure) catch |err| {
-        println("Error could not create closure {any}\n ", .{err});
-        unreachable;
+        printlnErr("timeout: could not allocate closure, callback not scheduled: {any}", .{err});
+        return;
     };
     closure.* = .{
         .arguments = args,
@@ -2437,8 +2498,8 @@ pub fn onLayout(callback: anytype, args: anytype) void {
     };
 
     const closure = Vapor.allocator_global.create(Closure) catch |err| {
-        println("Error could not create closure {any}\n ", .{err});
-        unreachable;
+        printlnErr("onLayout: could not allocate closure, callback not scheduled: {any}", .{err});
+        return;
     };
     closure.* = .{
         .arguments = args,
@@ -2476,8 +2537,8 @@ pub fn onCommitCtx(callback: anytype, args: anytype) void {
     };
 
     const closure = Vapor.arena(.frame).create(Closure) catch |err| {
-        println("Error could not create closure {any}\n ", .{err});
-        unreachable;
+        printlnErr("onCommitCtx: could not allocate closure, callback not scheduled: {any}", .{err});
+        return;
     };
     closure.* = .{
         .arguments = args,
@@ -2874,15 +2935,15 @@ pub const ErasedCallback = struct {
 
 pub fn startViewTransition(callback: anytype, args: anytype) void {
     const erased = Vapor.ErasedCallback.make(Vapor.arena(.frame), callback, args) catch |err| {
-        println("Error could not create closure {any}\n", .{err});
-        unreachable;
+        printlnErr("view transition: could not allocate closure, transition skipped: {any}", .{err});
+        return;
     };
 
     const callback_id: u32 = hashKey("view-transition");
     // Store just the ErasedCallback instead of *Node
     Vapor.erased_registry.put(callback_id, erased) catch |err| {
-        println("Registry error {any}\n", .{err});
-        unreachable;
+        printlnErr("view transition: could not register callback, transition skipped: {any}", .{err});
+        return;
     };
 
     if (isWasi) {
@@ -2967,13 +3028,19 @@ pub const persist = struct {
     // Join slices: &.{"a", "b", "c"} with ", " -> "a, b, c"
     pub fn join(parts: []const []const u8, separator: []const u8) []const u8 {
         const _allocator = Vapor.arena(.persist);
-        return std.mem.join(_allocator, separator, parts) catch unreachable;
+        return std.mem.join(_allocator, separator, parts) catch |err| {
+            println("join: could not allocate, returning empty. {any}\n", .{err});
+            return "";
+        };
     }
 
     // Split string into slice of slices
     pub fn split(str: []const u8, delimiter: []const u8) std.mem.SplitIterator(u8, .sequence) {
         const _allocator = Vapor.arena(.persist);
-        var split_buffer = _allocator.alloc(u8, str.len) catch unreachable;
+        var split_buffer = _allocator.alloc(u8, str.len) catch |err| {
+            println("split: could not allocate, returning empty. {any}\n", .{err});
+            return std.mem.splitSequence(u8, "", delimiter);
+        };
         @memcpy(split_buffer[0..], str);
         return std.mem.splitSequence(u8, split_buffer[0..], delimiter);
     }
@@ -2981,9 +3048,15 @@ pub const persist = struct {
     // Repeat: repeat("ha", 3) -> "hahaha"
     pub fn repeat(str: []const u8, count: usize) []const u8 {
         const _allocator = Vapor.arena(.persist);
-        const list = _allocator.alloc([]const u8, count) catch unreachable;
+        const list = _allocator.alloc([]const u8, count) catch |err| {
+            println("repeat: could not allocate, returning empty. {any}\n", .{err});
+            return "";
+        };
         @memset(list, str);
-        return std.mem.join(_allocator, "", list) catch unreachable;
+        return std.mem.join(_allocator, "", list) catch |err| {
+            println("repeat: could not allocate, returning empty. {any}\n", .{err});
+            return "";
+        };
     }
 
     pub fn toLowerCase(str: []const u8) []const u8 {
@@ -3120,7 +3193,10 @@ pub const frame = struct {
     // Join slices: &.{"a", "b", "c"} with ", " -> "a, b, c"
     pub fn join(parts: []const []const u8, separator: []const u8) []const u8 {
         const allocator = Vapor.arena(.frame);
-        return std.mem.join(allocator, separator, parts) catch unreachable;
+        return std.mem.join(allocator, separator, parts) catch |err| {
+            println("join: could not allocate, returning empty. {any}\n", .{err});
+            return "";
+        };
     }
 
     // Split string into slice of slices
@@ -3131,9 +3207,15 @@ pub const frame = struct {
     // Repeat: repeat("ha", 3) -> "hahaha"
     pub fn repeat(str: []const u8, count: usize) []const u8 {
         const allocator = Vapor.arena(.frame);
-        const list = allocator.alloc([]const u8, count) catch unreachable;
+        const list = allocator.alloc([]const u8, count) catch |err| {
+            println("repeat: could not allocate, returning empty. {any}\n", .{err});
+            return "";
+        };
         @memset(list, str);
-        return std.mem.join(allocator, "", list) catch unreachable;
+        return std.mem.join(allocator, "", list) catch |err| {
+            println("repeat: could not allocate, returning empty. {any}\n", .{err});
+            return "";
+        };
     }
 
     pub fn toLowerCase(str: []const u8) []const u8 {

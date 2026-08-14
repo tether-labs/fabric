@@ -108,22 +108,22 @@ pub fn lerp(a: f64, b: f64, t: f64) f64 {
 }
 
 pub fn toLowerCase(str: []const u8, arena_type: Vapor.ArenaType) []const u8 {
-    return std.ascii.allocLowerString(Vapor.arena(arena_type), str) catch unreachable;
+    return std.ascii.allocLowerString(Vapor.arena(arena_type), str) catch return str;
 }
 
 pub fn toUpperCase(str: []const u8, arena_type: Vapor.ArenaType) []const u8 {
-    return std.ascii.allocUpperString(Vapor.arena(arena_type), str) catch unreachable;
+    return std.ascii.allocUpperString(Vapor.arena(arena_type), str) catch return str;
 }
 
 pub fn firstLetterToUpper(str: []const u8, arena_type: Vapor.ArenaType) []const u8 {
-    const capital = std.ascii.allocUpperString(Vapor.allocator_global, str[0..1]) catch unreachable;
+    const capital = std.ascii.allocUpperString(Vapor.allocator_global, str[0..1]) catch return str;
     defer Vapor.allocator_global.free(capital);
-    return std.fmt.allocPrint(Vapor.arena(arena_type), "{s}{s}", .{ capital, str[1..] }) catch unreachable;
+    return std.fmt.allocPrint(Vapor.arena(arena_type), "{s}{s}", .{ capital, str[1..] }) catch return str;
 }
 
 pub fn stringReplace(str: []const u8, needle: []const u8, replacement: []const u8, arena_type: Vapor.ArenaType) []const u8 {
     const size = std.mem.replacementSize(u8, str, needle, replacement);
-    const buf = Vapor.arena(arena_type).alloc(u8, size) catch unreachable;
+    const buf = Vapor.arena(arena_type).alloc(u8, size) catch return str;
     _ = std.mem.replace(u8, str, needle, replacement, buf);
     return buf;
 }
@@ -147,25 +147,25 @@ pub fn formatJson(input: []const u8) []const u8 {
         const c = input[i];
 
         if (escape) {
-            result.append(c) catch unreachable;
+            result.append(c) catch return input;
             escape = false;
             continue;
         }
 
         if (c == '\\' and in_string) {
-            result.append(c) catch unreachable;
+            result.append(c) catch return input;
             escape = true;
             continue;
         }
 
         if (c == '"') {
             in_string = !in_string;
-            result.append(c) catch unreachable;
+            result.append(c) catch return input;
             continue;
         }
 
         if (in_string) {
-            result.append(c) catch unreachable;
+            result.append(c) catch return input;
             continue;
         }
 
@@ -174,40 +174,40 @@ pub fn formatJson(input: []const u8) []const u8 {
 
         switch (c) {
             '{', '[' => {
-                result.append(c) catch unreachable;
+                result.append(c) catch return input;
                 // Peek ahead: if the matching close is next (empty object/array), keep compact
                 const next = skipWhitespace(input, i + 1);
                 const close: u8 = if (c == '{') '}' else ']';
                 if (next < input.len and input[next] == close) {
-                    result.append(close) catch unreachable;
+                    result.append(close) catch return input;
                     i = next;
                 } else {
                     indent_level += 1;
-                    result.append('\n') catch unreachable;
+                    result.append('\n') catch return input;
                     appendIndent(&result, indent_level, indent_str);
                 }
             },
             '}', ']' => {
                 indent_level -|= 1;
-                result.append('\n') catch unreachable;
+                result.append('\n') catch return input;
                 appendIndent(&result, indent_level, indent_str);
-                result.append(c) catch unreachable;
+                result.append(c) catch return input;
             },
             ':' => {
-                result.appendSlice(": ") catch unreachable;
+                result.appendSlice(": ") catch return input;
             },
             ',' => {
-                result.append(',') catch unreachable;
-                result.append('\n') catch unreachable;
+                result.append(',') catch return input;
+                result.append('\n') catch return input;
                 appendIndent(&result, indent_level, indent_str);
             },
             else => {
-                result.append(c) catch unreachable;
+                result.append(c) catch return input;
             },
         }
     }
 
-    return result.toOwnedSlice() catch unreachable;
+    return result.toOwnedSlice() catch return input;
 }
 
 fn skipWhitespace(input: []const u8, start: usize) usize {
@@ -218,7 +218,8 @@ fn skipWhitespace(input: []const u8, start: usize) usize {
 
 fn appendIndent(result: *std.array_list.Managed(u8), level: usize, indent_str: []const u8) void {
     for (0..level) |_| {
-        result.appendSlice(indent_str) catch unreachable;
+        // Losing indentation only affects how the JSON looks.
+        result.appendSlice(indent_str) catch return;
     }
 }
 

@@ -19,6 +19,31 @@ const mode_options =
         pub const enable_atomic = true;
     };
 
+/// Aborts static generation with a diagnostic.
+///
+/// Generation runs in the CLI, not the browser, so failing hard is right — but
+/// `unreachable` is undefined behaviour under ReleaseFast/ReleaseSmall and
+/// prints nothing. This aborts identically in every optimize mode and says
+/// what went wrong.
+fn fatal(comptime what: []const u8, err: anyerror) noreturn {
+    std.debug.print("vapor: html generation failed: " ++ what ++ ": {any}\n", .{err});
+    @panic("html generation failed");
+}
+
+fn fatalMsg(comptime msg: []const u8) noreturn {
+    std.debug.print("vapor: html generation failed: " ++ msg ++ "\n", .{});
+    @panic("html generation failed");
+}
+
+/// Writes to the output document.
+///
+/// `Io.Writer.write` is allowed to write fewer bytes than asked and report the
+/// count; every call site here discarded that count, so a short write silently
+/// truncated the page. `writeAll` loops until the whole slice is out.
+fn emit(bytes: []const u8) void {
+    writer.writeAll(bytes) catch |err| fatal("writing output", err);
+}
+
 pub fn generate(root: *UINode, new_writer: *std.Io.Writer, style_path: []const u8) void {
     var threaded: std.Io.Threaded = .init_single_threaded;
     const io = threaded.io();
@@ -32,31 +57,35 @@ pub fn generate(root: *UINode, new_writer: *std.Io.Writer, style_path: []const u
     writer = new_writer;
 
     // template.html lives in the source tree, not the release dir
-    const html_template = cwd.readFileAlloc(io, "template.html", allocator, .unlimited) catch unreachable;
+    const html_template = cwd.readFileAlloc(io, "template.html", allocator, .unlimited) catch |err|
+        fatal("reading template.html from the project root", err);
 
     // Write everything before </head>
     const head_target = "</head>";
-    const start = std.mem.indexOf(u8, html_template, head_target) orelse unreachable;
-    writer.writeAll(html_template[0..start]) catch unreachable;
+    const start = std.mem.indexOf(u8, html_template, head_target) orelse
+        fatalMsg("template.html has no </head>");
+    emit(html_template[0..start]);
 
     // CSS links point to /static/ for the browser
-    const style_link = std.fmt.allocPrint(allocator, "  <link rel=\"stylesheet\" href=\"{s}\" />", .{style_path}) catch unreachable;
-    writer.writeAll(style_link) catch unreachable;
-    writer.writeAll("\n  <link rel=\"stylesheet\" href=\"/static/style_variables.css\" />") catch unreachable;
+    const style_link = std.fmt.allocPrint(allocator, "  <link rel=\"stylesheet\" href=\"{s}\" />", .{style_path}) catch |err|
+        fatal("building the stylesheet link", err);
+    emit(style_link);
+    emit("\n  <link rel=\"stylesheet\" href=\"/static/style_variables.css\" />");
 
     // Find the contents div
     const target = "<main id=\"contents\" style=\"display: contents\">";
-    var end = std.mem.indexOf(u8, html_template, target) orelse unreachable;
+    var end = std.mem.indexOf(u8, html_template, target) orelse
+        fatalMsg("template.html has no <main id=\"contents\" style=\"display: contents\"> element");
     end += target.len;
 
     // Write from </head> through the contents div
-    writer.writeAll(html_template[start..end]) catch unreachable;
+    emit(html_template[start..end]);
 
     var children = root.children();
     while (children.next()) |child| {
         createHtmlTree(child);
     }
-    writer.writeAll("</main>\n</body>\n</html>") catch unreachable;
+    emit("</main>\n</body>\n</html>");
 }
 
 /// Writes `text` with the HTML metacharacters replaced by entities.
@@ -81,11 +110,11 @@ fn writeEscaped(text: []const u8) void {
             '\'' => "&#39;",
             else => continue,
         };
-        if (i > start) writer.writeAll(text[start..i]) catch unreachable;
-        writer.writeAll(entity) catch unreachable;
+        if (i > start) emit(text[start..i]);
+        emit(entity);
         start = i + 1;
     }
-    if (start < text.len) writer.writeAll(text[start..]) catch unreachable;
+    if (start < text.len) emit(text[start..]);
 }
 
 /// Escapes into a caller-supplied writer. Exposed so the escaping rules can be
@@ -100,20 +129,20 @@ pub fn escapeInto(out: *std.Io.Writer, text: []const u8) void {
 /// Writes an optional HTML attribute if the value is not null.
 fn writeOptionalProp(name: []const u8, value: ?[]const u8) void {
     if (value) |v| {
-        _ = writer.write(name) catch unreachable;
-        _ = writer.write("=\"") catch unreachable;
+        emit(name);
+        emit("=\"");
         writeEscaped(v);
-        _ = writer.write("\"") catch unreachable;
+        emit("\"");
     }
 }
 
 /// Writes all common HTML attributes from the UINode.
 fn writeAllProps(ui_node: *UINode) void {
     // Write mandatory ID
-    _ = writer.write(" ") catch unreachable;
-    _ = writer.write(" id=\"") catch unreachable;
+    emit(" ");
+    emit(" id=\"");
     writeEscaped(ui_node.uuid);
-    _ = writer.write("\"") catch unreachable;
+    emit("\"");
     writeOptionalProp(" data-vp", "");
 
     if (ui_node.inlineStyle) |inlineStyle| {
@@ -122,10 +151,24 @@ fn writeAllProps(ui_node: *UINode) void {
 
     // Write optional props
     if (ui_node.type == .Icon) {
-        var buf: [256]u8 = undefined;
+        // An icon's token lives in `href`. Both the missing-token case and a
+        // class list longer than the buffer are reachable from ordinary user
+        // input, so neither may be an assertion.
+        const icon_token = ui_node.href orelse "";
         const class = ui_node.class orelse "";
-        const icon_class = std.fmt.bufPrint(&buf, "{s} {s}", .{ ui_node.href.?, class }) catch unreachable;
-        writeOptionalProp(" class", icon_class);
+        var buf: [256]u8 = undefined;
+        if (std.fmt.bufPrint(&buf, "{s} {s}", .{ icon_token, class })) |icon_class| {
+            writeOptionalProp(" class", icon_class);
+        } else |_| {
+            // Too long for the buffer — emit the parts separately rather than
+            // dropping the class, and without returning early, since the
+            // attributes below still need writing.
+            emit(" class=\"");
+            writeEscaped(icon_token);
+            emit(" ");
+            writeEscaped(class);
+            emit("\"");
+        }
     } else {
         writeOptionalProp(" class", ui_node.class);
     }
@@ -151,36 +194,36 @@ fn writeAllProps(ui_node: *UINode) void {
 }
 
 pub fn createDivOpen(ui_node: *UINode) void {
-    _ = writer.write("<div") catch unreachable;
+    emit("<div");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 
 pub fn createDivClose() void {
-    _ = writer.write("</div>") catch unreachable;
+    emit("</div>");
 }
 
 pub fn createButtonOpen(ui_node: *UINode) void {
-    _ = writer.write("<button") catch unreachable;
+    emit("<button");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 
 pub fn createButtonClose() void {
-    _ = writer.write("</button>") catch unreachable;
+    emit("</button>");
 }
 
 pub fn createParagraphOpen(ui_node: *UINode) void {
-    _ = writer.write("<p") catch unreachable;
+    emit("<p");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
     if (ui_node.text) |text| {
         writeEscaped(text);
     }
 }
 
 pub fn createParagraphClose() void {
-    _ = writer.write("</p>") catch unreachable;
+    emit("</p>");
 }
 
 /// Writes `Vapor.Html(...)` content verbatim.
@@ -190,30 +233,34 @@ pub fn createParagraphClose() void {
 /// that must not be escaped. Anything reaching it is trusted by the caller, the
 /// same contract as React's `dangerouslySetInnerHTML`.
 pub fn createRawHtml(ui_node: *UINode) void {
-    _ = writer.write("<p") catch unreachable;
+    emit("<p");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
     if (ui_node.text) |text| {
-        writer.writeAll(text) catch unreachable;
+        emit(text);
     }
-    _ = writer.write("</p>") catch unreachable;
+    emit("</p>");
 }
 
 pub fn createField(ui_node: *UINode) void {
-    _ = writer.write("<p") catch unreachable;
+    emit("<p");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
     if (ui_node.text) |text| {
         writeEscaped(text);
     }
-    _ = writer.write("</p>") catch unreachable;
+    emit("</p>");
 }
 
 pub fn createInput(ui_node: *UINode) void {
-    _ = writer.write("<input") catch unreachable;
+    emit("<input");
     writeAllProps(ui_node);
     writeOptionalProp("name", ui_node.name);
-    const params = ui_node.text_field_params.?;
+    // Optional on the node: configuration skips it if its allocation failed.
+    const params = ui_node.text_field_params orelse {
+        emit(">");
+        return;
+    };
     switch (params.*) {
         // .string => |string| {
         //     var value: []const u8 = "";
@@ -261,15 +308,19 @@ pub fn createInput(ui_node: *UINode) void {
         // },
         else => {},
     }
-    _ = writer.write("/>") catch unreachable;
-    // _ = writer.write("</input>") catch unreachable;
+    emit("/>");
+    // emit("</input>");
 }
 
 pub fn createTextArea(ui_node: *UINode) void {
-    _ = writer.write("<textarea") catch unreachable;
+    emit("<textarea");
     writeAllProps(ui_node);
     writeOptionalProp("name", ui_node.name);
-    const params = ui_node.text_field_params.?;
+    // Optional on the node: configuration skips it if its allocation failed.
+    const params = ui_node.text_field_params orelse {
+        emit(">");
+        return;
+    };
     var default_value: []const u8 = "";
     const string = params.string;
     if (string.default_ptr) |ptr| {
@@ -277,137 +328,137 @@ pub fn createTextArea(ui_node: *UINode) void {
     }
     writeOptionalProp("type", "email");
     writeOptionalProp("placeholder", default_value);
-    _ = writer.write(">") catch unreachable;
-    _ = writer.write("</textarea>") catch unreachable;
+    emit(">");
+    emit("</textarea>");
 }
 
 pub fn createLabel(ui_node: *UINode) void {
-    _ = writer.write("<label ") catch unreachable;
+    emit("<label ");
     writeOptionalProp("for", ui_node.name);
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
     if (ui_node.text) |text| {
         writeEscaped(text);
     }
-    _ = writer.write("</label>") catch unreachable;
+    emit("</label>");
 }
 
 pub fn createLinkOpen(ui_node: *UINode) void {
-    _ = writer.write("<a") catch unreachable;
+    emit("<a");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 pub fn createLinkClose() void {
-    _ = writer.write("</a>") catch unreachable;
+    emit("</a>");
 }
 
 pub fn createIconOpen(ui_node: *UINode) void {
-    _ = writer.write("<i") catch unreachable;
+    emit("<i");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 pub fn createIconClose() void {
-    _ = writer.write("</i>") catch unreachable;
+    emit("</i>");
 }
 
 pub fn createImageOpen(ui_node: *UINode) void {
-    _ = writer.write("<img") catch unreachable;
+    emit("<img");
     writeAllProps(ui_node);
     writeOptionalProp("alt", ui_node.alt);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 pub fn createImageClose() void {
-    _ = writer.write("</img>") catch unreachable;
+    emit("</img>");
 }
 
 pub fn createGraphicOpen(ui_node: *UINode) void {
     if (mode_options.static_mode) {
-        _ = writer.write("<div") catch unreachable;
+        emit("<div");
         writeAllProps(ui_node);
-        _ = writer.write(">") catch unreachable;
+        emit(">");
     } else {
-        _ = writer.write("<div") catch unreachable;
+        emit("<div");
         writeAllProps(ui_node);
-        _ = writer.write(">") catch unreachable;
+        emit(">");
     }
 }
 pub fn createGraphicClose() void {
     if (mode_options.static_mode) {
-        _ = writer.write("</div>") catch unreachable;
+        emit("</div>");
     } else {
-        _ = writer.write("</div>") catch unreachable;
+        emit("</div>");
     }
 }
 
 pub fn createListOpen(ui_node: *UINode) void {
-    _ = writer.write("<ul") catch unreachable;
+    emit("<ul");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 
 pub fn createListItemClose() void {
-    _ = writer.write("</li>") catch unreachable;
+    emit("</li>");
 }
 
 pub fn createListItemOpen(ui_node: *UINode) void {
-    _ = writer.write("<li") catch unreachable;
+    emit("<li");
     writeAllProps(ui_node);
-    _ = writer.write("\">") catch unreachable;
+    emit("\">");
 }
 pub fn createListClose() void {
-    _ = writer.write("</ul>") catch unreachable;
+    emit("</ul>");
 }
 
 pub fn createSectionOpen(ui_node: *UINode) void {
-    _ = writer.write("<section") catch unreachable;
+    emit("<section");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
 }
 pub fn createSectionClose() void {
-    _ = writer.write("</section>") catch unreachable;
+    emit("</section>");
 }
 
 pub fn createCodeOpen(ui_node: *UINode) void {
-    _ = writer.write("<code") catch unreachable;
+    emit("<code");
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
     if (ui_node.text) |text| {
         writeEscaped(text);
     }
 }
 pub fn createCodeClose() void {
-    _ = writer.write("</code>") catch unreachable;
+    emit("</code>");
 }
 
 pub fn createHeadingOpen(ui_node: *UINode) void {
-    _ = writer.write("<h") catch unreachable;
+    emit("<h");
     if (ui_node.level) |level| {
         // Write the slice to the file
-        _ = writer.print("{any}", .{level}) catch unreachable;
+        writer.print("{any}", .{level}) catch |err| fatal("writing heading level", err);
     }
     writeAllProps(ui_node);
-    _ = writer.write(">") catch unreachable;
+    emit(">");
     if (ui_node.text) |text| {
         writeEscaped(text);
     }
 }
 pub fn createHeadingClose() void {
-    _ = writer.write("</h>") catch unreachable;
+    emit("</h>");
 }
 
 pub fn createSvgOpen(ui_node: *UINode) void {
     const start = std.mem.find(u8, ui_node.text.?, ">") orelse return;
     const end = std.mem.indexOf(u8, ui_node.text.?, "</svg>") orelse return;
 
-    _ = writer.write(ui_node.text.?[0..start]) catch unreachable;
-    _ = writer.writeByte(' ') catch unreachable;
+    emit(ui_node.text.?[0..start]);
+    writer.writeByte(' ') catch |err| fatal("writing output", err);
     writeAllProps(ui_node);
-    _ = writer.write(">\n") catch unreachable;
-    _ = writer.write(ui_node.text.?[start + 1 .. end]) catch unreachable;
+    emit(">\n");
+    emit(ui_node.text.?[start + 1 .. end]);
 }
 
 pub fn createSvgClose() void {
-    _ = writer.write("</svg>") catch unreachable;
+    emit("</svg>");
 }
 
 pub fn createElementOpen(ui_node: *UINode) void {
@@ -568,7 +619,7 @@ pub fn createHtmlTree(node: *UINode) void {
     // If node type is NOT .Text (which handles its own text)
     // and it HAS text, write it as content.
     // This is for <button>Text</button> or <a>Text</a>
-    _ = writer.write("\n") catch unreachable;
+    emit("\n");
     var children = node.children();
     while (children.next()) |child| {
         createHtmlTree(child);
@@ -577,6 +628,6 @@ pub fn createHtmlTree(node: *UINode) void {
     // Only call close for non-atomic elements
     if (node.type != .Text and node.type != .HtmlText) {
         createElementClose(node);
-        _ = writer.write("\n") catch unreachable;
+        emit("\n");
     }
 }

@@ -669,7 +669,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
         pub fn onScroll(self: *const Self, callback: anytype, args: anytype) Self {
             var new_self = self.*;
-            new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .scroll, callback, args) catch unreachable;
+            new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .scroll, callback, args) catch |err| {
+                Vapor.printlnErr("onScroll: could not allocate callback, handler not attached: {any}", .{err});
+                return new_self;
+            };
             return new_self;
         }
 
@@ -722,7 +725,10 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
 
         pub fn onChange(self: *const Self, func: anytype, args: anytype) Self {
             var new_self = self.*;
-            new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .input, func, args) catch unreachable;
+            new_self._on_change_cb = Vapor.ErasedEventCallback.make(Vapor.arena(.frame), .input, func, args) catch |err| {
+                Vapor.printlnErr("onChange: could not allocate callback, handler not attached: {any}", .{err});
+                return new_self;
+            };
             return new_self;
         }
 
@@ -964,7 +970,9 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
             new_self._element = element;
 
             const uuid = ui_node.uuid;
-            Vapor.element_registry.put(hashKey(uuid), element) catch unreachable;
+            Vapor.element_registry.put(hashKey(uuid), element) catch |err| {
+                Vapor.printlnErr("bind: could not register element: {any}", .{err});
+            };
             return new_self;
         }
 
@@ -1459,7 +1467,9 @@ pub fn BuilderClose(comptime state_type: types.StateType) type {
                     .bind_ptr = self._bind_ptr,
                     .bind_fn = self._bind_update_fn,
                     .user_cb = self._on_change_cb,
-                }}) catch unreachable;
+                }}) catch |err| {
+                    Vapor.printlnErr("text field: could not attach change handler: {any}", .{err});
+                };
             }
 
             _ = Vapor.current_ctx.configureByNode(self._ui_node, elem_decl);

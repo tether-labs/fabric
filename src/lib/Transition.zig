@@ -50,12 +50,12 @@ pub const PackedTransition = packed struct {
     delay: u32 = 0,
 
     pub fn set(packed_transition: *PackedTransition, transition: *const Transition) void {
-        var slice: []TransitionProperty = Vapor.arena(.frame).alloc(TransitionProperty, transition.properties.len) catch unreachable;
+        var slice: []TransitionProperty = Vapor.arena(.frame).alloc(TransitionProperty, transition.properties.len) catch return;
         for (transition.properties, 0..) |property, i| {
             slice[i] = property;
         }
         const count = Vapor.packed_transitions.count() + 1;
-        Vapor.packed_transitions.put(count, slice) catch unreachable;
+        Vapor.packed_transitions.put(count, slice) catch return;
         packed_transition.properties_ptr = count;
         packed_transition.properties_len = @intCast(slice.len);
         packed_transition.duration = transition.duration;

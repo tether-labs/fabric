@@ -375,13 +375,19 @@ pub const Fetch = struct {
         const f = if (fetch_registry.get(key)) |existing|
             existing
         else blk: {
-            const new = Vapor.arena(.persist).create(Fetch) catch unreachable;
-            const owned_key = RequestKey{
-                .url = persist.dupe(u8, url) catch unreachable,
-                .method = http_req.method,
-                .tag = persist.dupe(u8, tag) catch unreachable,
+            const new = Vapor.arena(.persist).create(Fetch) catch |err| {
+                Vapor.printlnErr("fetch: allocation failed: {any}", .{err});
+                @panic("vapor: out of memory creating a Fetch");
             };
-            fetch_registry.put(owned_key, new) catch unreachable;
+            const owned_key = RequestKey{
+                .url = persist.dupe(u8, url) catch "",
+                .method = http_req.method,
+                .tag = persist.dupe(u8, tag) catch "",
+            };
+            // Not registering only costs coalescing; the request still runs.
+            fetch_registry.put(owned_key, new) catch |err| {
+                Vapor.printlnErr("fetch: could not register for coalescing: {any}", .{err});
+            };
             break :blk new;
         };
 
@@ -414,9 +420,15 @@ pub const Fetch = struct {
         // recycled). This can only leak under > POOL_SIZE concurrent in-flight
         // mutations, which a UI realistically never hits. TODO: bound or grow.
         const persist = Vapor.allocator_global;
-        const entry = persist.create(RequestEntry) catch unreachable;
+        const entry = persist.create(RequestEntry) catch |err| {
+            Vapor.printlnErr("fetch: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a request entry");
+        };
         entry.* = .{ .arena = std.heap.ArenaAllocator.init(persist) };
-        const f = persist.create(Fetch) catch unreachable;
+        const f = persist.create(Fetch) catch |err| {
+            Vapor.printlnErr("fetch: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a Fetch");
+        };
         f.* = .{
             .http_req = http_req,
             .url = url,
@@ -429,16 +441,21 @@ pub const Fetch = struct {
     fn getOrCreateEntry(key: RequestKey) *RequestEntry {
         if (request_registry.get(key)) |existing| return existing;
 
-        const entry = Vapor.allocator_global.create(RequestEntry) catch unreachable;
+        const entry = Vapor.allocator_global.create(RequestEntry) catch |err| {
+            Vapor.printlnErr("fetch: allocation failed: {any}", .{err});
+            @panic("vapor: out of memory creating a request entry");
+        };
         entry.* = .{
             .arena = std.heap.ArenaAllocator.init(Vapor.allocator_global),
         };
         const owned_key = RequestKey{
-            .url = Vapor.allocator_global.dupe(u8, key.url) catch unreachable,
+            .url = Vapor.allocator_global.dupe(u8, key.url) catch "",
             .method = key.method,
-            .tag = Vapor.allocator_global.dupe(u8, key.tag) catch unreachable,
+            .tag = Vapor.allocator_global.dupe(u8, key.tag) catch "",
         };
-        request_registry.put(owned_key, entry) catch unreachable;
+        request_registry.put(owned_key, entry) catch |err| {
+            Vapor.printlnErr("fetch: could not register request: {any}", .{err});
+        };
         return entry;
     }
 
